@@ -1,0 +1,511 @@
+PHẦN 6 – MODULE KPI
+Mục tiêu
+Module KPI là một module độc lập, không tính lương trực tiếp.
+Nó có nhiệm vụ:
+1.	Tạo và quản lý mẫu KPI theo từng vị trí 
+2.	Thu thập dữ liệu KPI từ: 
+o	hệ thống tự động 
+o	quản lý nhập tay 
+3.	Tính ra điểm KPI cuối cùng theo tháng cho từng nhân sự 
+4.	Xếp loại KPI 
+5.	Tính ra: 
+o	thưởng KPI 
+o	phạt KPI 
+o	hệ số hoa hồng theo KPI 
+6.	Sau khi chốt tháng, đẩy kết quả cuối cùng sang bảng lương 
+👉 Nguyên tắc rất quan trọng:
+Bảng lương không tính lại KPI
+Bảng lương chỉ lấy kết quả KPI đã chốt.
+________________________________________
+I. CẤU TRÚC NGHIỆP VỤ CỦA MODULE KPI
+Module KPI gồm 5 phần lớn:
+1.	Chính sách KPI / Mẫu KPI 
+2.	Chỉ tiêu KPI 
+3.	Nguồn dữ liệu KPI 
+4.	Kết quả KPI tháng 
+5.	Khoá kỳ KPI và đồng bộ sang bảng lương 
+________________________________________
+II. MENU CON TRONG MODULE KPI
+Trong menu Bảng KPI, nên có các tab con:
+1.	Chính sách KPI 
+2.	Chỉ tiêu KPI 
+3.	KPI tháng 
+4.	Vi phạm / phạt KPI 
+5.	Bảng xếp hạng KPI 
+6.	Thiết lập KPI 
+Nếu muốn gọn hơn:
+•	Chính sách KPI 
+•	KPI tháng 
+•	Vi phạm / phạt KPI 
+•	Xếp hạng 
+Nhưng backend vẫn phải đủ các lớp như trên.
+________________________________________
+III. 1) CHÍNH SÁCH KPI
+Đây là nơi tạo các bộ KPI cho từng vai trò.
+A. Mỗi chính sách KPI cần có:
+•	Mã chính sách 
+•	Tên chính sách 
+•	Áp dụng cho vai trò nào 
+•	Mô tả 
+•	Trạng thái: đang dùng / ngừng dùng 
+•	Ngày hiệu lực 
+•	Ngày kết thúc nếu có 
+B. Ví dụ chính sách:
+•	KPI_SALE_PARTTIME 
+•	KPI_SALE_FULLTIME 
+•	KPI_TEAMLEAD_SALE 
+•	KPI_KYTHUAT_PARTTIME 
+•	KPI_KYTHUAT_CHINH 
+•	KPI_LEAD_KYTHUAT 
+•	KPI_MARKETING 
+C. Một nhân sự chỉ nên gắn 1 chính sách KPI chính tại một thời điểm.
+________________________________________
+IV. 2) CHỈ TIÊU KPI
+Mỗi chính sách KPI sẽ có nhiều chỉ tiêu.
+A. Mỗi chỉ tiêu KPI phải có các field sau:
+Thông tin cơ bản
+•	metric_code – mã chỉ tiêu 
+•	metric_name – tên chỉ tiêu 
+•	metric_group – nhóm chỉ tiêu 
+•	description – mô tả ngắn 
+Cấu hình điểm
+•	weight – trọng số điểm tối đa 
+•	score_type – loại tính điểm 
+•	target_type – kiểu mục tiêu 
+•	target_value – giá trị mục tiêu 
+Nguồn dữ liệu
+•	source_type – auto / hybrid / manual 
+•	source_key – key dữ liệu dùng để tính 
+•	manual_input_allowed – có cho phép sửa tay không 
+•	manager_review_required – có cần quản lý duyệt không 
+Hiệu lực
+•	sort_order 
+•	is_active 
+________________________________________
+B. Các nhóm chỉ tiêu nên có
+1. Output – Kết quả
+Ví dụ:
+•	doanh thu 
+•	số đơn chốt 
+•	tỷ lệ chốt 
+•	khách quay lại 
+•	số đơn kỹ thuật hoàn thành 
+2. Process – Quy trình
+Ví dụ:
+•	đúng SLA 
+•	đúng hạn before sale 
+•	đúng hạn aftersale 
+•	kỹ thuật đúng deadline 
+•	cập nhật đủ trạng thái 
+3. Discipline – Kỷ luật / tác phong
+Ví dụ:
+•	bị thu hồi lead 
+•	đi muộn 
+•	lỗi nội quy 
+•	không chụp ảnh 
+•	không vệ sinh 
+4. Quality – Chất lượng
+Ví dụ:
+•	feedback không hài lòng 
+•	phải làm lại 
+•	complaint 
+•	sai quy trình 
+👉 Không nhất thiết tất cả role đều có đủ 4 nhóm, nhưng cấu trúc nên cho phép như vậy.
+________________________________________
+V. 3) CÁCH TÍNH ĐIỂM CHỈ TIÊU
+Mỗi chỉ tiêu có thể được tính theo 1 trong các kiểu sau:
+1. Threshold / bậc thang
+Ví dụ:
+•	doanh thu đạt 100% → 35 điểm 
+•	90–99% → 30 điểm 
+•	80–89% → 24 điểm 
+2. Linear / tuyến tính
+Ví dụ:
+•	đạt 80% target → 80% của trọng số 
+3. Per event / theo số lần
+Ví dụ:
+•	mỗi lần bị thu hồi lead trừ 0.5 điểm 
+4. Boolean / có-không
+Ví dụ:
+•	đã gửi HD bảo quản = có / không 
+5. Manual score / nhập tay
+Ví dụ:
+•	quản lý chấm 0–10 điểm 
+👉 Em khuyên phần lớn KPI sale và kỹ thuật nên dùng:
+•	threshold 
+•	per event 
+•	boolean 
+•	manual score rất ít thôi 
+________________________________________
+VI. 4) NGUỒN DỮ LIỆU KPI
+Đây là phần quan trọng nhất anh hỏi.
+KPI có 3 loại nguồn:
+A. AUTO
+Hệ thống tự biết 100%, không cần nhập tay
+B. HYBRID
+Hệ thống biết một phần, quản lý xác nhận / bổ sung
+C. MANUAL
+Hệ thống không tự biết, quản lý phải ghi nhận
+________________________________________
+A. KPI SALE – DANH SÁCH CHỈ TIÊU CỤ THỂ
+1. Doanh thu cá nhân
+•	source_type: auto 
+•	source_key: order_revenue_by_sale 
+•	scoring: threshold 
+•	output: điểm KPI 
+2. Tỷ lệ chốt
+•	source_type: auto 
+•	source_key: closed_leads / qualified_leads 
+•	scoring: threshold 
+3. Lead bị thu hồi
+•	source_type: auto 
+•	source_key: lead_reclaimed_count 
+•	scoring: per_event 
+•	ví dụ: mỗi lead bị thu hồi = -0.5 điểm 
+4. Rep quá SLA
+•	source_type: auto 
+•	source_key: sla_missed_count 
+•	scoring: per_event hoặc threshold 
+5. Follow đúng mốc before sale
+•	source_type: auto hoặc hybrid 
+•	source_key: before_sale_task_completed_on_time_rate 
+6. Follow đúng mốc aftersale
+•	source_type: auto hoặc hybrid 
+•	source_key: after_sale_task_completed_on_time_rate 
+7. Khách quay lại
+•	source_type: auto 
+•	source_key: return_customer_count 
+8. Khách mới tự tìm
+•	source_type: auto hoặc hybrid 
+•	source_key: new_customer_self_source_count 
+9. Không mặc đồng phục
+•	source_type: manual 
+•	source_key: employee_violation_logs 
+10. Quên chụp ảnh trước / sau
+•	source_type: manual 
+•	source_key: employee_violation_logs 
+11. Không xin feedback
+•	source_type: hybrid nếu có nút log; nếu chưa thì manual 
+12. Không nhắn HD bảo quản
+•	source_type: hybrid hoặc manual 
+________________________________________
+B. KPI KỸ THUẬT – DANH SÁCH CHỈ TIÊU CỤ THỂ
+1. Số đơn hoàn thành
+•	source_type: auto 
+•	source_key: completed_jobs_count 
+2. Tỷ lệ đúng hạn
+•	source_type: auto 
+•	source_key: on_time_completion_rate 
+3. Số đơn trễ
+•	source_type: auto 
+•	source_key: late_jobs_count 
+4. Tỷ lệ feedback không hài lòng
+•	source_type: auto hoặc hybrid 
+•	source_key: bad_feedback_count 
+5. Tỷ lệ làm lại / bảo hành
+•	source_type: auto 
+•	source_key: rework_count 
+6. Không vệ sinh khu làm việc
+•	source_type: manual 
+7. Không đúng quy trình
+•	source_type: manual 
+8. Không cập nhật trạng thái đầy đủ
+•	source_type: auto hoặc hybrid 
+9. Không phối hợp đúng với sale / quản lý
+•	source_type: manual 
+________________________________________
+VII. 5) VI PHẠM / PHẠT KPI
+Phần này liên kết chặt với KPI nhưng nên có màn riêng để quản lý thao tác nhanh.
+A. Mỗi log vi phạm cần có:
+•	employee_id 
+•	month_key 
+•	violation_type 
+•	rule_code 
+•	rule_name 
+•	source_type – auto / manual 
+•	deduct_kpi_point 
+•	deduct_amount 
+•	related_lead_id 
+•	related_order_id 
+•	note 
+•	created_by 
+•	created_at 
+•	status – pending / approved / rejected 
+B. Nguồn tạo vi phạm
+1. Tự động từ hệ thống
+Ví dụ:
+•	lead bị thu hồi 
+•	quá SLA 
+•	job kỹ thuật trễ 
+•	đơn reopen 
+2. Quản lý nhập tay
+Ví dụ:
+•	không mặc đồng phục 
+•	không chụp ảnh 
+•	không vệ sinh 
+•	thái độ không tốt 
+•	sai quy trình 
+C. Quick form cho quản lý
+Nên có popup nhập nhanh:
+•	nhân sự 
+•	tháng 
+•	loại vi phạm 
+•	điểm trừ 
+•	tiền phạt 
+•	ghi chú 
+•	ảnh đính kèm nếu có 
+👉 Đây là nơi quản lý bắt lỗi thủ công.
+________________________________________
+VIII. 6) KẾT QUẢ KPI THÁNG
+Đây là bảng tổng hợp cuối tháng cho mỗi nhân sự.
+A. Mỗi record KPI tháng cần có:
+•	employee_id 
+•	month_key 
+•	kpi_policy_id 
+•	total_score 
+•	rank 
+•	kpi_bonus_amount 
+•	kpi_penalty_amount 
+•	kpi_commission_factor 
+•	manual_adjustment_score 
+•	status – draft / pending / locked 
+•	reviewed_by 
+•	reviewed_at 
+•	note 
+B. Chi tiết từng chỉ tiêu
+Bảng kpi_monthly_items cần có:
+•	monthly_kpi_id 
+•	metric_code 
+•	metric_name 
+•	weight 
+•	target_value 
+•	actual_value 
+•	raw_score 
+•	manual_adjustment 
+•	final_score 
+•	source_type 
+•	source_ref 
+•	note 
+________________________________________
+IX. 7) XẾP LOẠI KPI
+KPI tháng phải ra được xếp loại cuối.
+Ví dụ cấu hình:
+•	A+: 95–100 
+•	A: 85–94 
+•	B: 75–84 
+•	C: 65–74 
+•	D: <65 
+Mỗi xếp loại có thể map sang:
+•	kpi_bonus_amount 
+•	kpi_penalty_amount 
+•	kpi_commission_factor 
+Ví dụ:
+•	A+ → thưởng 500k, factor 1.1 
+•	A → thưởng 300k, factor 1.0 
+•	B → thưởng 100k, factor 1.0 
+•	C → 0 thưởng, factor 0.8 
+•	D → phạt 200k, factor 0.5 
+👉 Đây là chỗ kết nối KPI với lương và hoa hồng.
+________________________________________
+X. 8) QUY TRÌNH XỬ LÝ KPI THÁNG
+Bước 1. Tạo kỳ KPI tháng
+Ví dụ:
+•	KPI tháng 04/2026 
+Bước 2. Hệ thống tự gom dữ liệu auto
+•	doanh thu 
+•	số lead 
+•	SLA 
+•	số đơn kỹ thuật 
+•	feedback 
+•	tiến độ 
+Bước 3. Quản lý nhập dữ liệu manual
+•	đồng phục 
+•	ảnh trước / sau 
+•	vệ sinh 
+•	quy trình 
+•	thái độ 
+Bước 4. Hệ thống tính điểm từng chỉ tiêu
+Bước 5. Quản lý review
+•	chỉnh tay nếu cần 
+•	duyệt vi phạm pending 
+•	thêm note 
+Bước 6. Khoá KPI tháng
+Sau khi khoá:
+•	không sửa trực tiếp 
+•	nếu cần chỉnh thì phải tạo adjustment log 
+Bước 7. Đồng bộ sang bảng lương
+Chỉ đẩy 5 field sang payroll:
+•	kpi_score_final 
+•	kpi_rank_final 
+•	kpi_bonus_amount 
+•	kpi_penalty_amount 
+•	kpi_commission_factor 
+________________________________________
+XI. 9) MÀN HÌNH UI KPI DEV CẦN LÀM
+1. Danh sách chính sách KPI
+•	mã 
+•	tên 
+•	role 
+•	trạng thái 
+•	số chỉ tiêu 
+•	hành động 
+2. Chi tiết 1 chính sách KPI
+•	danh sách các chỉ tiêu 
+•	trọng số 
+•	nguồn dữ liệu 
+•	rule tính điểm 
+3. Danh sách KPI tháng
+•	tháng 
+•	trạng thái 
+•	số nhân sự 
+•	đã khoá / chưa khoá 
+4. Bảng KPI tháng theo nhân sự
+Columns:
+•	nhân sự 
+•	role 
+•	total_score 
+•	rank 
+•	bonus 
+•	penalty 
+•	factor 
+•	status 
+•	action 
+5. Chi tiết KPI của 1 nhân sự trong tháng
+•	từng chỉ tiêu 
+•	target 
+•	actual 
+•	raw score 
+•	manual adjust 
+•	final score 
+•	source type 
+•	source ref 
+•	note 
+6. Màn hình vi phạm / phạt KPI
+•	danh sách log vi phạm 
+•	thêm mới 
+•	duyệt / từ chối 
+7. Bảng xếp hạng KPI
+•	top nhân sự theo tháng 
+•	filter theo role / bộ phận 
+________________________________________
+XII. 10) DATABASE SCHEMA TỐI THIỂU CHO KPI
+kpi_policies
+•	id 
+•	code 
+•	name 
+•	role 
+•	description 
+•	effective_from 
+•	effective_to 
+•	is_active 
+•	created_at 
+•	updated_at 
+kpi_policy_metrics
+•	id 
+•	policy_id 
+•	metric_code 
+•	metric_name 
+•	metric_group 
+•	description 
+•	weight 
+•	score_type 
+•	target_type 
+•	target_value 
+•	source_type 
+•	source_key 
+•	manual_input_allowed 
+•	manager_review_required 
+•	sort_order 
+•	is_active 
+kpi_monthly
+•	id 
+•	employee_id 
+•	month_key 
+•	policy_id 
+•	total_score 
+•	rank 
+•	kpi_bonus_amount 
+•	kpi_penalty_amount 
+•	kpi_commission_factor 
+•	manual_adjustment_score 
+•	status 
+•	reviewed_by 
+•	reviewed_at 
+•	note 
+•	created_at 
+•	updated_at 
+kpi_monthly_items
+•	id 
+•	monthly_kpi_id 
+•	metric_code 
+•	metric_name 
+•	weight 
+•	target_value 
+•	actual_value 
+•	raw_score 
+•	manual_adjustment 
+•	final_score 
+•	source_type 
+•	source_ref 
+•	note 
+kpi_violation_logs
+•	id 
+•	employee_id 
+•	month_key 
+•	violation_type 
+•	rule_code 
+•	rule_name 
+•	source_type 
+•	deduct_kpi_point 
+•	deduct_amount 
+•	related_lead_id 
+•	related_order_id 
+•	note 
+•	created_by 
+•	created_at 
+•	status 
+kpi_adjustment_logs
+•	id 
+•	monthly_kpi_id 
+•	action_type 
+•	field_name 
+•	old_value 
+•	new_value 
+•	reason 
+•	created_by 
+•	created_at 
+________________________________________
+XIII. 11) API DEV CẦN LÀM
+Chính sách KPI
+•	GET /kpi/policies 
+•	POST /kpi/policies 
+•	PATCH /kpi/policies/:id 
+•	GET /kpi/policies/:id 
+Chỉ tiêu KPI
+•	POST /kpi/policies/:id/metrics 
+•	PATCH /kpi/metrics/:id 
+•	DELETE /kpi/metrics/:id 
+KPI tháng
+•	GET /kpi/monthly?month=... 
+•	POST /kpi/monthly/generate 
+•	GET /kpi/monthly/:id 
+•	POST /kpi/monthly/:id/recalculate 
+•	POST /kpi/monthly/:id/lock 
+Vi phạm KPI
+•	GET /kpi/violations?month=... 
+•	POST /kpi/violations 
+•	PATCH /kpi/violations/:id 
+•	POST /kpi/violations/:id/approve 
+•	POST /kpi/violations/:id/reject 
+Đồng bộ sang payroll
+•	POST /kpi/monthly/:id/push-to-payroll 
+________________________________________
+XIV. 12) NGUYÊN TẮC KỸ THUẬT BẮT BUỘC
+1.	KPI phải tách module riêng 
+2.	KPI phải có trạng thái draft → reviewed → locked 
+3.	KPI locked rồi thì payroll chỉ lấy kết quả cuối 
+4.	Các nguồn auto phải lấy từ log/event, không hard-code 
+5.	Manual violation phải có audit log 
+6.	Không cho sửa bừa KPI đã locked 
+7.	Nếu sửa sau lock phải qua adjustment log
+

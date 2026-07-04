@@ -1,0 +1,332 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  /* Colors */
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-primary-light: #dbeafe;
+  --color-primary-dark: #1d4ed8;
+  
+  --color-secondary: #64748b;
+  --color-secondary-hover: #475569;
+  
+  --color-success: #10b981;
+  --color-success-light: #d1fae5;
+  --color-danger: #ef4444;
+  --color-danger-light: #fee2e2;
+  --color-warning: #f59e0b;
+  --color-warning-light: #fef3c7;
+  --color-info: #3b82f6;
+  --color-info-light: #dbeafe;
+  --color-purple: #8b5cf6;
+  --color-purple-light: #ede9fe;
+  
+  /* Background */
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-hover: #f1f5f9;
+  --color-muted: #f1f5f9;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+  
+  /* Border */
+  --color-border: #e2e8f0;
+  --color-border-hover: #cbd5e1;
+  
+  /* Input */
+  --color-input: #e2e8f0;
+  --color-ring: #3b82f6;
+  
+  /* Radius */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  
+  /* Font */
+  --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-muted);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-hover);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-secondary);
+}
+
+/* Employees page — Kanban phòng ban (cuộn ngang) */
+.employees-kanban-h-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #64748b #e2e8f0;
+}
+
+.employees-kanban-h-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.employees-kanban-h-scroll::-webkit-scrollbar-track {
+  background: #e2e8f0;
+  border-radius: 6px;
+  margin: 0 8px 4px;
+}
+
+.employees-kanban-h-scroll::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border-radius: 6px;
+}
+
+.employees-kanban-h-scroll::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Custom utilities */
+.glass-effect {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Animation keyframes */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.25s ease-out;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* Bottom sheet animation */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.mobile-bottom-sheet {
+  animation: slide-up 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Kanban specific */
+.kanban-column {
+  min-height: calc(100vh - 250px);
+}
+
+.kanban-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.kanban-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Drag styles */
+[data-rbd-draggable-context-id] {
+  transition: transform 0.1s ease !important;
+}
+
+/* ===== Mobile Kanban Styles ===== */
+@media (max-width: 767px) {
+  .kanban-column {
+    min-height: calc(100vh - 320px);
+  }
+
+  /* Horizontal snap scroll container */
+  .kanban-scroll-container {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: visible;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    gap: 12px;
+    padding-bottom: 12px;
+    touch-action: pan-x pan-y;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+  }
+
+  .kanban-scroll-container.no-scrollbar {
+    touch-action: pan-x pan-y;
+    overscroll-behavior-y: auto;
+  }
+
+  .kanban-scroll-container::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .kanban-scroll-container > div {
+    scroll-snap-align: start;
+    flex: 0 0 min(100%, calc(100vw - 28px));
+    min-width: min(100%, calc(100vw - 28px));
+    max-width: min(100%, calc(100vw - 28px));
+  }
+
+  /* Touch-friendly cards: always show action buttons */
+  .kanban-card .group-hover\:opacity-100 {
+    opacity: 1 !important;
+  }
+
+  .kanban-card:hover {
+    transform: none;
+  }
+
+  .kanban-card:active {
+    transform: scale(0.98);
+    box-shadow: var(--shadow-md);
+  }
+}
+
+/* Horizontal scroll strips (mobile kanban tabs, order detail sub-tabs) */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile column tab bar */
+.mobile-kanban-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+}
+
+.mobile-kanban-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-kanban-tab {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1.5px solid transparent;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-kanban-tab.active {
+  border-color: currentColor;
+  box-shadow: 0 2px 8px -2px currentColor;
+}
+
+/* Product detail dialog — layout + touch scroll */
+.product-detail-info-panel {
+  -webkit-overflow-scrolling: touch;
+}
+
+.product-detail-form-panel {
+  min-height: 0;
+}
+
+.product-detail-scroll-area {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Let vertical pan reach the scroll container even when touching form controls */
+.product-detail-scroll-area input,
+.product-detail-scroll-area textarea,
+.product-detail-scroll-area select,
+.product-detail-scroll-area [role="combobox"],
+.product-detail-scroll-area [data-radix-select-trigger],
+.product-detail-scroll-area label,
+.product-detail-scroll-area button:not([type="submit"]),
+.product-detail-scroll-area [data-radix-scroll-area-viewport],
+.product-detail-scroll-area .product-detail-form-card {
+  touch-action: pan-y;
+}
+
+@media (max-width: 767px) {
+  .product-detail-info-panel {
+    flex: none;
+    max-height: 26vh;
+    min-height: 0;
+  }
+
+  .product-detail-form-panel {
+    flex: 1 1 0%;
+    min-height: 0;
+  }
+}
+

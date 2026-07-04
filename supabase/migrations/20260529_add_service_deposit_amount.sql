@@ -1,0 +1,1 @@
+Lỗi khi tạo thanh toán: Could not find a relationship between 'payment_records' and 'customers' in the schema cache
