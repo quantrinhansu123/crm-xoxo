@@ -8,13 +8,15 @@ const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || '';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 const CRM_MASTER_WEBHOOK_URL = process.env.CRM_MASTER_WEBHOOK_URL || 'https://dhsywwqoi.datadex.vn/webhook/crm-master-xoxo';
 
+type FetchResponse = Awaited<ReturnType<typeof fetch>>;
+
 function createWebhookEventId(): string {
     const cryptoApi = (globalThis as any).crypto;
     if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
     return `evt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function readResponsePreview(response: Response): Promise<string | null> {
+async function readResponsePreview(response: FetchResponse): Promise<string | null> {
     try {
         const text = await response.text();
         return text ? text.slice(0, 500) : null;
