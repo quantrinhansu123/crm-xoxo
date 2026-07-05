@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import dotenv from 'dotenv';
 
 import { config } from './config/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -48,8 +47,6 @@ import { violationsRouter } from './routes/violations.js';
 import { salaryConfigsRouter } from './routes/salary-configs.js';
 import { commissionTablesRouter } from './routes/commission-tables.js';
 import { checkAllSLA } from './utils/slaManager.js';
-
-dotenv.config();
 
 const app = express();
 
@@ -141,7 +138,7 @@ const host = '0.0.0.0';
 app.listen(port, host, () => {
     console.log(`🚀 Server running on http://${host}:${port}`);
     console.log(`📊 Environment: ${config.nodeEnv}`);
-    console.log(`🕒 Last Reload: ${new Date().toLocaleString()}`);
+    console.log(`🕒 Last Reload: ${new Date().toLocaleString()} (delete-fix-v4)`);
     
     // Start SLA Manager
     console.log(`⏱️ Starting SLA Manager cron job`);

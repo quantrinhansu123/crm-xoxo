@@ -11,9 +11,20 @@ import {
     logPartnerStatusChange,
 } from '../utils/workflowRequestLog.js';
 import { assertManagerQueueApproval } from '../utils/approvalPermissions.js';
+import {
+    canAccessAnyViewFromProfile,
+    canPerformViewActionFromProfile,
+    getUserViewPermissionProfile,
+} from '../utils/employeeViewPermissions.js';
+import {
+    findRequestRowForDelete,
+    parseRequestLookupHints,
+    type RequestLookupHints,
+    type RequestLookupTable,
+} from '../utils/requestRowLookup.js';
 
 const router = Router();
-console.log('🚀 Requests Router Loaded');
+console.log('🚀 Requests Router Loaded (delete-fix-v4)');
 
 router.use(authenticate);
 
@@ -88,6 +99,94 @@ const ACCESSORY_FIELD_LABELS: Record<string, string> = {
     photos_item: 'Ảnh chụp ảnh hàng',
     photos_storage: 'Ảnh chụp chỗ để'
 };
+
+const REQUEST_DELETE_FALLBACK_ROLES = ['admin', 'manager', 'sale', 'technician'];
+
+async function assertCanDeleteRequest(req: AuthenticatedRequest) {
+    if (!req.user) {
+        throw new ApiError('Chưa đăng nhập', 401);
+    }
+
+    const role = (req.user.role || '').toLowerCase();
+    const roleAllowed = REQUEST_DELETE_FALLBACK_ROLES.includes(role);
+    const profile = await getUserViewPermissionProfile(req.user.id, req.user.role);
+    const canRead = canAccessAnyViewFromProfile(profile, req.user.role, ['requests'], roleAllowed);
+
+    if (!canRead) {
+        throw new ApiError('Không có quyền truy cập màn hình này', 403);
+    }
+
+    const canDelete = canPerformViewActionFromProfile(
+        profile,
+        req.user.role,
+        'requests',
+        'delete',
+        roleAllowed,
+    );
+
+    if (!canDelete) {
+        throw new ApiError('Không có quyền thực hiện thao tác này', 403);
+    }
+}
+
+async function resolveRequestRecordId(
+    table: RequestLookupTable,
+    rawId: string,
+    hints?: RequestLookupHints,
+): Promise<string | null> {
+    const id = rawId.trim();
+    if (!id) return null;
+
+    const { data: directRows, error: directError } = await supabaseAdmin
+        .from(table)
+        .select('id')
+        .eq('id', id)
+        .limit(1);
+
+    if (directError) {
+        throw new ApiError(`Không thể xóa yêu cầu: ${directError.message}`, 500);
+    }
+
+    if (directRows?.[0]?.id) {
+        return directRows[0].id;
+    }
+
+    const resolved = await findRequestRowForDelete(table, id, hints);
+    return resolved?.id ?? null;
+}
+
+async function deleteRequestRow(
+    table: RequestLookupTable,
+    id: string,
+    notFoundMessage: string,
+    hints?: RequestLookupHints,
+) {
+    const resolvedId = await resolveRequestRecordId(table, id, hints);
+    if (!resolvedId) {
+        throw new ApiError(notFoundMessage, 404);
+    }
+
+    const { error: deleteError } = await supabaseAdmin.from(table).delete().eq('id', resolvedId);
+
+    if (deleteError) {
+        throw new ApiError(`Không thể xóa yêu cầu: ${deleteError.message}`, 500);
+    }
+
+    const { data: remaining, error: verifyError } = await supabaseAdmin
+        .from(table)
+        .select('id')
+        .eq('id', resolvedId)
+        .limit(1);
+
+    if (verifyError) {
+        throw new ApiError(`Không thể xóa yêu cầu: ${verifyError.message}`, 500);
+    }
+    if (remaining?.length) {
+        throw new ApiError('Không thể xóa yêu cầu: bản ghi vẫn còn trong hệ thống', 500);
+    }
+
+    return { id: resolvedId };
+}
 
 router.patch('/accessories/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
     console.log('📝 Handling PATCH /api/requests/accessories/' + req.params.id);
@@ -251,6 +350,30 @@ router.patch('/partners/:id', authenticate, async (req: AuthenticatedRequest, re
     }
 });
 
+router.delete('/accessories/:id', async (req: AuthenticatedRequest, res, next) => {
+    try {
+        await assertCanDeleteRequest(req);
+        const { id } = req.params;
+        const hints = parseRequestLookupHints(req.query as Record<string, unknown>);
+        await deleteRequestRow('order_item_accessories', id, 'Không tìm thấy yêu cầu mua phụ kiện', hints);
+        res.json({ status: 'success', message: 'Đã xóa yêu cầu mua phụ kiện' });
+    } catch (e) {
+        next(e);
+    }
+});
+
+router.delete('/partners/:id', async (req: AuthenticatedRequest, res, next) => {
+    try {
+        await assertCanDeleteRequest(req);
+        const { id } = req.params;
+        const hints = parseRequestLookupHints(req.query as Record<string, unknown>);
+        await deleteRequestRow('order_item_partner', id, 'Không tìm thấy yêu cầu gửi đối tác', hints);
+        res.json({ status: 'success', message: 'Đã xóa yêu cầu gửi đối tác' });
+    } catch (e) {
+        next(e);
+    }
+});
+
 router.get('/test', (req, res) => res.json({ status: 'ok', msg: 'Requests router is working' }));
 
 router.use(
@@ -266,6 +389,7 @@ router.get('/accessories', async (req: AuthenticatedRequest, res: Response, next
             .from('order_item_accessories')
             .select(`
                 id,
+                order_item_id,
                 order_product_id,
                 order_product_service_id,
                 status,
@@ -525,6 +649,18 @@ router.patch('/extensions/:id', authenticate, async (req: AuthenticatedRequest, 
         }
 
         res.json({ status: 'success', data });
+    } catch (e) {
+        next(e);
+    }
+});
+
+router.delete('/extensions/:id', async (req: AuthenticatedRequest, res, next) => {
+    try {
+        await assertCanDeleteRequest(req);
+        const { id } = req.params;
+        const hints = parseRequestLookupHints(req.query as Record<string, unknown>);
+        await deleteRequestRow('order_extension_requests', id, 'Không tìm thấy yêu cầu gia hạn', hints);
+        res.json({ status: 'success', message: 'Đã xóa yêu cầu gia hạn' });
     } catch (e) {
         next(e);
     }

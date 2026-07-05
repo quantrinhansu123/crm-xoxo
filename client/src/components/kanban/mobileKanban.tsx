@@ -42,10 +42,27 @@ export function MobileKanbanColumnTabs({
     hint?: string;
     className?: string;
 }) {
+    const useGrid = columns.length <= 4;
+
     return (
-        <div className={cn('min-w-0 space-y-2', className)}>
-            {hint ? <p className="text-[10px] text-muted-foreground px-0.5">{hint}</p> : null}
-            <div className="mobile-kanban-tabs -mx-1 px-1">
+        <div className={cn('min-w-0 w-full space-y-2', className)}>
+            {hint && !useGrid ? (
+                <p className="text-[10px] text-muted-foreground text-center">{hint}</p>
+            ) : null}
+            <div
+                className={cn(
+                    useGrid
+                        ? cn(
+                              'mobile-kanban-tabs-grid',
+                              columns.length === 4
+                                  ? 'cols-4'
+                                  : columns.length === 3
+                                    ? 'cols-3'
+                                    : 'cols-2',
+                          )
+                        : 'mobile-kanban-tabs',
+                )}
+            >
                 {columns.map((col) => {
                     const isActive = activeId === col.id;
                     const count = getCount?.(col.id);
@@ -58,15 +75,15 @@ export function MobileKanbanColumnTabs({
                                 'mobile-kanban-tab',
                                 isActive
                                     ? 'active border-primary bg-primary text-primary-foreground'
-                                    : 'border-slate-200 bg-white text-foreground'
+                                    : 'border-slate-200 bg-white text-foreground',
                             )}
                         >
-                            <span>{col.title}</span>
+                            <span className="truncate">{col.title}</span>
                             {count != null && (
                                 <span
                                     className={cn(
-                                        'inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold',
-                                        isActive ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700'
+                                        'inline-flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-bold',
+                                        isActive ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-700',
                                     )}
                                 >
                                     {count}

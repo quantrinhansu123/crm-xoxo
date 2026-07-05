@@ -32,7 +32,7 @@ export async function getUserViewPermissionProfile(
     userId: string,
     role: string,
 ): Promise<UserViewPermissionProfile> {
-    if (role === 'admin') {
+    if ((role || '').toLowerCase() === 'admin') {
         return { allowed_views: null, view_actions: null, uses_role_defaults: true };
     }
 
@@ -66,7 +66,8 @@ export function canAccessViewFromProfile(
     viewId: string,
     roleAllowed: boolean,
 ): boolean {
-    if (role === 'admin') return true;
+    const normalizedRole = (role || '').toLowerCase();
+    if (normalizedRole === 'admin') return true;
     if (!profile.uses_role_defaults && profile.allowed_views !== null) {
         return profile.allowed_views.includes(viewId);
     }
@@ -80,7 +81,9 @@ export function canAccessAnyViewFromProfile(
     viewIds: string[],
     roleAllowed: boolean,
 ): boolean {
-    return viewIds.some((viewId) => canAccessViewFromProfile(profile, role, viewId, roleAllowed));
+    const normalizedRole = (role || '').toLowerCase();
+    if (normalizedRole === 'admin') return true;
+    return viewIds.some((viewId) => canAccessViewFromProfile(profile, normalizedRole, viewId, roleAllowed));
 }
 
 export function canPerformViewActionFromProfile(
@@ -90,7 +93,8 @@ export function canPerformViewActionFromProfile(
     action: 'edit' | 'delete',
     roleAllowed: boolean,
 ): boolean {
-    if (role === 'admin' || role === 'manager') return true;
+    const normalizedRole = (role || '').toLowerCase();
+    if (normalizedRole === 'admin' || normalizedRole === 'manager') return true;
 
     if (profile.uses_role_defaults) {
         if (!roleAllowed) return false;

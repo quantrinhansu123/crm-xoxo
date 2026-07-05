@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
     Package,
@@ -20,6 +20,7 @@ import {
     Hash,
     DollarSign,
     Layers,
+    Trash2,
 } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import type { DropResult } from '@hello-pangea/dnd';
@@ -120,7 +121,231 @@ const COLUMN_SLA_LABELS: Record<string, string> = {
     notified_tech: 'Xong trong 1h',
 };
 
+const REQUEST_DIALOG_SHELL =
+    'flex !flex max-h-[85dvh] w-[calc(100%-1rem)] max-w-sm !flex-col !gap-0 overflow-hidden rounded-xl border-none p-0 shadow-2xl top-[4dvh] left-[50%] !translate-x-[-50%] !translate-y-0 sm:top-[50%] sm:max-w-md sm:!translate-y-[-50%]';
+const REQUEST_DIALOG_HEADER = 'shrink-0 border-b bg-white px-4 py-3';
+const REQUEST_DIALOG_BODY = 'min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y p-4 [-webkit-overflow-scrolling:touch]';
+const REQUEST_DIALOG_FOOTER =
+    'shrink-0 !flex-row flex items-center gap-2 border-t bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]';
 
+function RequestDialogStatusBanner({ label }: { label: string }) {
+    return (
+        <div className="flex items-center gap-2.5 rounded-lg border border-amber-100 bg-amber-50/90 px-3 py-2">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white shadow-sm">
+                <RefreshCw className="h-3.5 w-3.5 text-amber-600" />
+            </div>
+            <div className="min-w-0">
+                <p className="text-[9px] font-bold uppercase leading-none text-amber-700">Trạng thái tiếp theo</p>
+                <p className="mt-0.5 truncate text-xs font-bold text-amber-950">{label}</p>
+            </div>
+        </div>
+    );
+}
+
+function RequestDialogMetaCard({ items }: { items: { label: string; value: React.ReactNode }[] }) {
+    return (
+        <div className="rounded-lg border border-slate-100 bg-slate-50/90 p-2.5">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                {items.map((item) => (
+                    <div key={item.label} className="min-w-0">
+                        <p className="text-[9px] font-bold uppercase text-slate-400">{item.label}</p>
+                        <div className="truncate text-xs font-semibold text-slate-800">{item.value}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function RequestDialogFieldLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
+    return (
+        <Label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            {children}
+            {required && <span className="ml-0.5 text-red-500">*</span>}
+        </Label>
+    );
+}
+
+function resolveRequestOrderCode(req: any): string {
+    if (!req) return '—';
+    const code =
+        req.order?.order_code ||
+        req.order_code ||
+        req.metadata?.order_code ||
+        req.order_item?.order?.order_code ||
+        req.order_product?.order?.order_code ||
+        req.order_product_service?.order_product?.order?.order_code;
+    if (!code) return '—';
+    return code.toUpperCase().replace('HD', 'HĐ');
+}
+
+function resolveRequestDeleteHints(row: any) {
+    const hints = {
+        order_item_id: row.order_item_id || row.order_item?.id,
+        order_product_id: row.order_product_id || row.order_product?.id,
+        order_product_service_id: row.order_product_service_id || row.order_product_service?.id,
+    };
+
+    return Object.fromEntries(
+        Object.entries(hints).filter(([, value]) => typeof value === 'string' && value.trim()),
+    ) as {
+        order_item_id?: string;
+        order_product_id?: string;
+        order_product_service_id?: string;
+    };
+}
+
+function getRequestDeleteErrorMessage(error: any, fallback: string) {
+    const data = error?.response?.data;
+    if (typeof data?.message === 'string' && data.message.trim()) {
+        return data.message;
+    }
+    if (typeof data?.error === 'string' && data.error.trim()) {
+        return data.error;
+    }
+
+    const status = error?.response?.status;
+    if (status === 404) return 'Không tìm thấy yêu cầu';
+    if (status === 403) return 'Không có quyền thực hiện thao tác này';
+    if (status === 401) return 'Phiên đăng nhập hết hạn, vui lòng đăng nhập lại';
+    if (!error?.response) return 'Không kết nối được máy chủ, thử lại sau';
+
+    return fallback;
+}
+
+function removeRequestFromList(
+    type: 'accessory' | 'partner' | 'extension',
+    rowId: string,
+    setAccessories: React.Dispatch<React.SetStateAction<any[]>>,
+    setPartners: React.Dispatch<React.SetStateAction<any[]>>,
+    setExtensions: React.Dispatch<React.SetStateAction<any[]>>,
+) {
+    if (type === 'accessory') {
+        setAccessories((prev) => prev.filter((item) => item.id !== rowId));
+    } else if (type === 'partner') {
+        setPartners((prev) => prev.filter((item) => item.id !== rowId));
+    } else {
+        setExtensions((prev) => prev.filter((item) => item.id !== rowId));
+    }
+}
+
+function resolveRequestOrderId(req: any): string {
+    if (!req) return '';
+    return (
+        req.order_id ||
+        req.order?.id ||
+        req.order_item?.order?.id ||
+        req.order_product?.order?.id ||
+        req.order_product_service?.order_product?.order?.id ||
+        req.metadata?.order_id ||
+        ''
+    );
+}
+
+function RequestCardActions({
+    row,
+    onOpenDialog,
+    onDelete,
+    canDelete,
+    isOverdue,
+    overdueLabel = 'Xử lý quá hạn',
+    deleting,
+}: {
+    row: any;
+    onOpenDialog: (row: any) => void;
+    onDelete?: (row: any) => void;
+    canDelete?: boolean;
+    isOverdue?: boolean;
+    overdueLabel?: string;
+    deleting?: boolean;
+}) {
+    return (
+        <div className="mt-2 flex gap-2 sm:mt-2.5">
+            <Button
+                variant={isOverdue ? 'destructive' : 'outline'}
+                size="sm"
+                className="h-7 flex-1 rounded-lg text-[11px] font-semibold sm:h-8 sm:text-xs"
+                onClick={() => onOpenDialog(row)}
+                disabled={deleting}
+            >
+                {isOverdue ? overdueLabel : 'Cập nhật'}
+            </Button>
+            {canDelete && onDelete && (
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 shrink-0 rounded-lg px-3 text-[11px] font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive sm:h-8 sm:text-xs"
+                    onClick={() => onDelete(row)}
+                    disabled={deleting}
+                    title="Xóa yêu cầu"
+                >
+                    {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                </Button>
+            )}
+        </div>
+    );
+}
+
+function RequestCardSummaryLine({
+    row,
+    productCode,
+    getItemName,
+    onNavigateOrder,
+}: {
+    row: any;
+    productCode: string;
+    getItemName: (row: any) => string;
+    onNavigateOrder: (id: string) => void;
+}) {
+    const orderId = resolveRequestOrderId(row);
+    const orderCode = resolveRequestOrderCode(row);
+    const itemName = row.metadata?.item_name || getItemName(row);
+    const quantity = row.metadata?.quantity;
+    const code = productCode !== '—' ? productCode : orderCode !== '—' ? orderCode : '—';
+
+    return (
+        <div
+            className="flex min-w-0 items-center gap-1 text-[11px] leading-snug sm:text-xs"
+            title={[code !== '—' ? code : null, itemName, quantity ? `x${quantity}` : null, orderId && orderCode !== code ? orderCode : null]
+                .filter(Boolean)
+                .join(' · ')}
+        >
+            {code !== '—' && (
+                <>
+                    {orderId ? (
+                        <button
+                            type="button"
+                            onClick={() => onNavigateOrder(orderId)}
+                            className="shrink-0 max-w-[38%] truncate font-mono font-bold text-primary hover:underline"
+                        >
+                            {code}
+                        </button>
+                    ) : (
+                        <span className="shrink-0 max-w-[38%] truncate font-mono font-bold text-primary">{code}</span>
+                    )}
+                    <span className="shrink-0 text-muted-foreground/60">·</span>
+                </>
+            )}
+            <span className="min-w-0 flex-1 truncate font-medium text-slate-900">
+                {itemName}
+                {quantity ? <span className="text-muted-foreground"> x{quantity}</span> : null}
+            </span>
+            {orderId && orderCode !== '—' && orderCode !== code && (
+                <>
+                    <span className="shrink-0 text-muted-foreground/60">·</span>
+                    <button
+                        type="button"
+                        onClick={() => onNavigateOrder(orderId)}
+                        className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-primary hover:underline"
+                    >
+                        <ExternalLink className="h-3 w-3" />
+                        <span className="max-w-[4.5rem] truncate">{orderCode}</span>
+                    </button>
+                </>
+            )}
+        </div>
+    );
+}
 
 function groupByStatus<T extends { status: string }>(items: T[], columnIds: string[]): Record<string, T[]> {
     const map: Record<string, T[]> = {};
@@ -154,12 +379,13 @@ function RequestKanbanBoard({
 
     return (
         <DragDropContext onDragEnd={onDragEnd}>
-            <div className="space-y-3 md:hidden">
+            <div className="min-w-0 w-full space-y-3 md:hidden">
                 <MobileKanbanColumnTabs
                     columns={mobileColumns}
                     activeId={mobileCol}
                     onChange={setMobileCol}
                     getCount={(id) => byStatus[id]?.length ?? 0}
+                    hint=""
                 />
                 {activeCol && (
                     <Droppable droppableId={activeCol.id}>
@@ -168,7 +394,7 @@ function RequestKanbanBoard({
                                 ref={provided.innerRef}
                                 {...provided.droppableProps}
                                 className={cn(
-                                    'min-h-[200px] space-y-2 rounded-xl border bg-muted/30 p-2 transition-colors',
+                                    'min-h-[200px] min-w-0 space-y-2 rounded-xl border bg-muted/30 p-3 transition-colors',
                                     snapshot.isDraggingOver && 'bg-primary/10 border-primary/30'
                                 )}
                             >
@@ -312,7 +538,7 @@ function getRequestProductImage(row: any): string | null {
         null;
 }
 
-function PhotoUpload({ label, value, onChange, disabled }: { label: string; value: string[]; onChange: (urls: string[]) => void; disabled?: boolean }) {
+function PhotoUpload({ label, value, onChange, disabled, compact }: { label: string; value: string[]; onChange: (urls: string[]) => void; disabled?: boolean; compact?: boolean }) {
     const [uploading, setUploading] = useState(false);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -345,26 +571,52 @@ function PhotoUpload({ label, value, onChange, disabled }: { label: string; valu
     };
 
     return (
-        <div className="space-y-2">
-            <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">{label}</Label>
-            <div className="grid grid-cols-2 gap-3">
+        <div className={compact ? 'space-y-1' : 'space-y-2'}>
+            {label ? (
+                <Label className={cn(
+                    'font-semibold uppercase tracking-wide text-slate-500',
+                    compact ? 'text-[10px]' : 'text-[11px] font-bold',
+                )}>
+                    {label}
+                </Label>
+            ) : null}
+            <div className={cn('grid gap-2', compact ? 'grid-cols-1' : 'grid-cols-2 gap-3')}>
                 {value?.map((url, i) => (
-                    <div key={i} className="group relative aspect-square rounded-xl overflow-hidden border bg-white shadow-md transition-transform hover:scale-[1.02]">
-                        <img src={url} alt="" className="w-full h-full object-cover" />
+                    <div
+                        key={i}
+                        className={cn(
+                            'group relative overflow-hidden rounded-lg border bg-white',
+                            compact ? 'aspect-[5/3]' : 'aspect-square rounded-xl shadow-md transition-transform hover:scale-[1.02]',
+                        )}
+                    >
+                        <img src={url} alt="" className="h-full w-full object-cover" />
                         {!disabled && (
                             <button
+                                type="button"
                                 onClick={() => removePhoto(i)}
-                                className="absolute top-1.5 right-1.5 bg-black/60 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                             >
-                                <Plus className="w-4 h-4 rotate-45" />
+                                <Plus className={compact ? 'h-3 w-3 rotate-45' : 'w-4 h-4 rotate-45'} />
                             </button>
                         )}
                     </div>
                 ))}
                 {!disabled && (
-                    <label className={`aspect-square rounded-xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
-                        {uploading ? <Loader2 className="w-8 h-8 animate-spin text-primary" /> : <ImageIcon className="w-10 h-10 text-slate-300" />}
-                        <span className="text-xs font-bold text-slate-400 mt-2">Tải ảnh</span>
+                    <label
+                        className={cn(
+                            'flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 hover:border-primary/40 hover:bg-primary/5 transition-all',
+                            compact ? 'aspect-[5/3]' : 'aspect-square rounded-xl',
+                            uploading ? 'pointer-events-none opacity-50' : '',
+                        )}
+                    >
+                        {uploading ? (
+                            <Loader2 className={cn('animate-spin text-primary', compact ? 'h-5 w-5' : 'w-8 h-8')} />
+                        ) : (
+                            <ImageIcon className={cn('text-slate-300', compact ? 'h-6 w-6' : 'w-10 h-10')} />
+                        )}
+                        <span className={cn('font-medium text-slate-400', compact ? 'mt-1 text-[10px]' : 'mt-2 text-xs font-bold')}>
+                            Tải ảnh
+                        </span>
                         <input type="file" multiple accept="image/*" className="hidden" onChange={handleFileChange} />
                     </label>
                 )}
@@ -493,15 +745,16 @@ type KanbanCardProps = {
     row: any;
     onOpenDialog: (row: any) => void;
     onNavigateOrder: (id: string) => void;
-    getOrder: (row: any) => { id?: string; order_code?: string };
+    onDelete?: (row: any) => void;
+    canDelete?: boolean;
+    deleting?: boolean;
     getProductCode?: (row: any) => string;
     getItemName: (row: any) => string;
     getProductImage?: (row: any) => string | null;
     extra?: React.ReactNode;
 };
 
-function AccessoryKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
-    const order = getOrder(row);
+function AccessoryKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
     const productCode = getProductCode?.(row) ?? '—';
     const productImage = getProductImage?.(row) ?? null;
 
@@ -526,28 +779,12 @@ function AccessoryKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, get
                 )}
             </div>
             <div className="p-2.5 sm:p-3">
-                <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className="text-[10px] font-bold text-muted-foreground/70 uppercase tracking-wider">{productCode.includes('.') ? 'Mã SP' : 'Mã ĐH'}:</span>
-                            <span className="font-mono font-bold text-primary truncate" title={productCode}>{productCode}</span>
-                        </div>
-                        <p className="mt-1 truncate text-[13px] font-medium text-slate-900 sm:text-sm" title={getItemName(row)}>
-                            {row.metadata?.item_name || getItemName(row)}
-                            {row.metadata?.quantity && <span className="text-muted-foreground ml-1">x{row.metadata.quantity}</span>}
-                        </p>
-                    </div>
-                    {order.order_code && (
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary hover:bg-primary/5"
-                            onClick={() => order.id && onNavigateOrder(order.id)}
-                        >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                        </Button>
-                    )}
-                </div>
+                <RequestCardSummaryLine
+                    row={row}
+                    productCode={productCode}
+                    getItemName={getItemName}
+                    onNavigateOrder={onNavigateOrder}
+                />
 
                 {row.notes && (
                     <div className="mt-2 text-xs text-muted-foreground bg-muted/40 p-1.5 rounded-md line-clamp-2 italic" title={row.notes}>
@@ -557,21 +794,20 @@ function AccessoryKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, get
 
                 {extra}
 
-                <Button
-                    variant={isOverdue ? "destructive" : "outline"}
-                    size="sm"
-                    className="mt-2.5 h-7 w-full rounded-lg text-[11px] font-semibold sm:mt-3 sm:h-8 sm:text-xs"
-                    onClick={() => onOpenDialog(row)}
-                >
-                    {isOverdue ? "Xử lý quá hạn" : "Cập nhật"}
-                </Button>
+                <RequestCardActions
+                    row={row}
+                    onOpenDialog={onOpenDialog}
+                    onDelete={onDelete}
+                    canDelete={canDelete}
+                    isOverdue={isOverdue}
+                    deleting={deleting}
+                />
             </div>
         </div>
     );
 }
 
-function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
-    const order = getOrder(row);
+function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
     const productCode = getProductCode?.(row) ?? '—';
     const productImage = getProductImage?.(row) ?? null;
 
@@ -625,27 +861,12 @@ function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, getPr
                 )}
             </div>
             <div className="p-2.5 sm:p-3">
-                <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className="text-[10px] font-bold text-muted-foreground/70 uppercase tracking-wider">{productCode.includes('.') ? 'Mã SP' : 'Mã ĐH'}:</span>
-                            <span className="font-mono font-bold text-primary truncate" title={productCode}>{productCode}</span>
-                        </div>
-                        <p className="mt-1 truncate text-[13px] font-medium text-slate-900 sm:text-sm" title={getItemName(row)}>
-                            {row.metadata?.item_name || getItemName(row)}
-                        </p>
-                    </div>
-                    {order.order_code && (
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary hover:bg-primary/5"
-                            onClick={() => order.id && onNavigateOrder(order.id)}
-                        >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                        </Button>
-                    )}
-                </div>
+                <RequestCardSummaryLine
+                    row={row}
+                    productCode={productCode}
+                    getItemName={(r) => r.metadata?.item_name || getItemName(r)}
+                    onNavigateOrder={onNavigateOrder}
+                />
 
                 {metadata.partner_name && (
                     <div className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-600 bg-slate-50 border border-slate-100 p-1.5 rounded-md">
@@ -677,21 +898,20 @@ function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, getPr
 
                 {extra}
 
-                <Button
-                    variant={finalOverdue ? "destructive" : "outline"}
-                    size="sm"
-                    className="mt-2.5 h-7 w-full rounded-lg text-[11px] font-semibold sm:mt-3 sm:h-8 sm:text-xs"
-                    onClick={() => onOpenDialog(row)}
-                >
-                    {finalOverdue ? "Xử lý quá hạn" : "Cập nhật"}
-                </Button>
+                <RequestCardActions
+                    row={row}
+                    onOpenDialog={onOpenDialog}
+                    onDelete={onDelete}
+                    canDelete={canDelete}
+                    isOverdue={finalOverdue}
+                    deleting={deleting}
+                />
             </div>
         </div>
     );
 }
 
-function ExtensionKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
-    const order = getOrder(row);
+function ExtensionKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
     const productCode = getProductCode?.(row) ?? '—';
     const productImage = getProductImage?.(row) ?? null;
 
@@ -718,27 +938,12 @@ function ExtensionKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, get
             </div>
 
             <div className="p-2.5 sm:p-3">
-                <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className="text-[10px] font-bold text-muted-foreground/70 uppercase tracking-wider">{productCode.includes('.') ? 'Mã SP' : 'Mã ĐH'}:</span>
-                            <span className="font-mono font-bold text-primary truncate" title={productCode}>{productCode}</span>
-                        </div>
-                        <p className="mt-1 truncate text-[13px] font-medium text-slate-900 sm:text-sm" title={getItemName(row)}>
-                            {getItemName(row)}
-                        </p>
-                    </div>
-                    {order.id && (
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary hover:bg-primary/5"
-                            onClick={() => onNavigateOrder(order.id!)}
-                        >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                        </Button>
-                    )}
-                </div>
+                <RequestCardSummaryLine
+                    row={row}
+                    productCode={productCode}
+                    getItemName={getItemName}
+                    onNavigateOrder={onNavigateOrder}
+                />
 
                 <div className="mt-2 space-y-1.5">
                     <div className="flex items-center gap-2 text-[11px] text-slate-600 bg-slate-50 border border-slate-100 p-1.5 rounded-md">
@@ -754,14 +959,14 @@ function ExtensionKanbanCard({ row, onOpenDialog, onNavigateOrder, getOrder, get
 
                 {extra}
 
-                <Button
-                    variant={isOverdue ? "destructive" : "outline"}
-                    size="sm"
-                    className="mt-2.5 h-7 w-full rounded-lg text-[11px] font-semibold sm:mt-3 sm:h-8 sm:text-xs"
-                    onClick={() => onOpenDialog(row)}
-                >
-                    Cập nhật
-                </Button>
+                <RequestCardActions
+                    row={row}
+                    onOpenDialog={onOpenDialog}
+                    onDelete={onDelete}
+                    canDelete={canDelete}
+                    isOverdue={isOverdue}
+                    deleting={deleting}
+                />
             </div>
         </div>
     );
@@ -773,12 +978,16 @@ function AccessoryKanban({
     onDragEnd,
     onOpenDialog,
     onNavigateOrder,
+    onDelete,
+    canDelete,
 }: {
     items: any[];
     updatingId: string | null;
     onDragEnd: (result: DropResult) => void;
     onOpenDialog: (row: any) => void;
     onNavigateOrder: (id: string) => void;
+    onDelete?: (row: any) => void;
+    canDelete?: boolean;
 }) {
     return (
         <RequestKanbanBoard
@@ -786,22 +995,19 @@ function AccessoryKanban({
             items={items}
             updatingId={updatingId}
             onDragEnd={onDragEnd}
-            renderCard={(row) => {
-                const order =
-                    row.order_item?.order ??
-                    row.order_product_service?.order_product?.order ??
-                    row.order_product?.order;
-                return (
+            renderCard={(row) => (
                     <AccessoryKanbanCard
                         row={row}
                         onOpenDialog={onOpenDialog}
                         onNavigateOrder={onNavigateOrder}
-                        getOrder={() => order || {}}
+                        onDelete={onDelete}
+                        canDelete={canDelete}
+                        deleting={updatingId === row.id}
                         getProductCode={(r) =>
                             r.order_item?.item_code ??
                             r.order_product_service?.order_product?.product_code ??
                             r.order_product?.product_code ??
-                            (r.metadata?.order_code ?? '—').toUpperCase().replace('HD', 'HĐ')
+                            resolveRequestOrderCode(r)
                         }
                         getItemName={(r) =>
                             r.order_item?.item_name ??
@@ -811,8 +1017,7 @@ function AccessoryKanban({
                         }
                         getProductImage={getRequestProductImage}
                     />
-                );
-            }}
+                )}
         />
     );
 }
@@ -823,12 +1028,16 @@ function PartnerKanban({
     onDragEnd,
     onOpenDialog,
     onNavigateOrder,
+    onDelete,
+    canDelete,
 }: {
     items: any[];
     updatingId: string | null;
     onDragEnd: (result: DropResult) => void;
     onOpenDialog: (row: any) => void;
     onNavigateOrder: (id: string) => void;
+    onDelete?: (row: any) => void;
+    canDelete?: boolean;
 }) {
     return (
         <RequestKanbanBoard
@@ -836,22 +1045,19 @@ function PartnerKanban({
             items={items}
             updatingId={updatingId}
             onDragEnd={onDragEnd}
-            renderCard={(row) => {
-                const order =
-                    row.order_item?.order ??
-                    row.order_product_service?.order_product?.order ??
-                    row.order_product?.order;
-                return (
+            renderCard={(row) => (
                     <PartnerKanbanCard
                         row={row}
                         onOpenDialog={onOpenDialog}
                         onNavigateOrder={onNavigateOrder}
-                        getOrder={() => order || {}}
+                        onDelete={onDelete}
+                        canDelete={canDelete}
+                        deleting={updatingId === row.id}
                         getProductCode={(r) =>
                             r.order_item?.item_code ??
                             r.order_product_service?.order_product?.product_code ??
                             r.order_product?.product_code ??
-                            (r.metadata?.order_code ?? '—').toUpperCase().replace('HD', 'HĐ')
+                            resolveRequestOrderCode(r)
                         }
                         getItemName={(r) =>
                             r.order_item?.item_name ??
@@ -861,8 +1067,7 @@ function PartnerKanban({
                         }
                         getProductImage={getRequestProductImage}
                     />
-                );
-            }}
+                )}
         />
     );
 }
@@ -873,12 +1078,16 @@ function ExtensionKanban({
     onDragEnd,
     onOpenDialog,
     onNavigateOrder,
+    onDelete,
+    canDelete,
 }: {
     items: any[];
     updatingId: string | null;
     onDragEnd: (result: DropResult) => void;
     onOpenDialog: (row: any) => void;
     onNavigateOrder: (id: string) => void;
+    onDelete?: (row: any) => void;
+    canDelete?: boolean;
 }) {
     return (
         <RequestKanbanBoard
@@ -886,22 +1095,19 @@ function ExtensionKanban({
             items={items}
             updatingId={updatingId}
             onDragEnd={onDragEnd}
-            renderCard={(row) => {
-                const order = row.order as any;
-                return (
+            renderCard={(row) => (
                     <ExtensionKanbanCard
                         row={row}
                         onOpenDialog={onOpenDialog}
                         onNavigateOrder={onNavigateOrder}
-                        getOrder={() => ({
-                            id: order?.id ?? row.order_id,
-                            order_code: order?.order_code || '—',
-                        })}
+                        onDelete={onDelete}
+                        canDelete={canDelete}
+                        deleting={updatingId === row.id}
                         getProductCode={(r) =>
                             r.order_item?.item_code ??
                             r.order_product_service?.order_product?.product_code ??
                             r.order_product?.product_code ??
-                            (order?.order_code ?? '—').toUpperCase().replace('HD', 'HĐ')
+                            resolveRequestOrderCode(r)
                         }
                         getItemName={(r) =>
                             r.order_item?.item_name ??
@@ -911,8 +1117,7 @@ function ExtensionKanban({
                         }
                         getProductImage={getRequestProductImage}
                     />
-                );
-            }}
+                )}
         />
     );
 }
@@ -921,7 +1126,7 @@ export function RequestsPage() {
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
-    const { canEdit: canEditRequests } = useViewActionForRoles('requests', [
+    const { canEdit: canEditRequests, canDelete: canDeleteRequests } = useViewActionForRoles('requests', [
         'admin',
         'manager',
         'sale',
@@ -935,6 +1140,7 @@ export function RequestsPage() {
     const [extensions, setExtensions] = useState<any[]>([]);
     const [activeTab, setActiveTab] = useState((location.state as any)?.defaultTab || 'accessories');
     const [updatingId, setUpdatingId] = useState<string | null>(null);
+    const deleteInFlightRef = useRef<string | null>(null);
     const [users, setUsers] = useState<any[]>([]);
 
     // Dialog Mua phụ kiện / Gửi Đối Tác
@@ -972,26 +1178,8 @@ export function RequestsPage() {
     const [foundOrder, setFoundOrder] = useState<any>(null);
     const [foundItem, setFoundItem] = useState<any>(null);
 
-    const getOrderCode = (req: any) => {
-        if (!req) return '—';
-        return req.order?.order_code ||
-            req.order_code ||
-            req.metadata?.order_code ||
-            req.order_item?.order?.order_code ||
-            req.order_product?.order?.order_code ||
-            req.order_product_service?.order_product?.order?.order_code ||
-            '—';
-    };
-
-    const getOrderId = (req: any) => {
-        if (!req) return '';
-        return req.order_id ||
-            req.order?.id ||
-            req.order_item?.order?.id ||
-            req.order_product?.order?.id ||
-            req.order_product_service?.order_product?.order?.id ||
-            req.metadata?.order_id;
-    };
+    const getOrderCode = resolveRequestOrderCode;
+    const getOrderId = resolveRequestOrderId;
 
     const getOrderProductId = (req: any): string | undefined => {
         if (!req) return undefined;
@@ -1057,6 +1245,63 @@ export function RequestsPage() {
     useEffect(() => {
         loadAll();
     }, []);
+
+    const getRequestDisplayName = (row: any) =>
+        row.metadata?.item_name ||
+        row.order_item?.item_name ||
+        row.order_product_service?.item_name ||
+        row.order_product?.name ||
+        'yêu cầu này';
+
+    const handleDeleteRequest = async (
+        type: 'accessory' | 'partner' | 'extension',
+        row: any,
+    ) => {
+        if (!canDeleteRequests) return;
+        if (!row?.id) {
+            toast.error('Không xác định được yêu cầu cần xóa');
+            return;
+        }
+
+        const typeLabel =
+            type === 'accessory' ? 'mua phụ kiện' : type === 'partner' ? 'gửi đối tác' : 'gia hạn';
+        const name = getRequestDisplayName(row);
+        const orderCode = resolveRequestOrderCode(row);
+        const orderHint = orderCode !== '—' ? ` (${orderCode})` : '';
+
+        if (!window.confirm(`Xác nhận xóa yêu cầu ${typeLabel} "${name}"${orderHint}? Hành động này không thể hoàn tác.`)) {
+            return;
+        }
+
+        if (deleteInFlightRef.current === row.id) return;
+
+        deleteInFlightRef.current = row.id;
+        setUpdatingId(row.id);
+        try {
+            const hints = resolveRequestDeleteHints(row);
+            if (type === 'accessory') {
+                await requestsApi.deleteAccessory(row.id, hints);
+            } else if (type === 'partner') {
+                await requestsApi.deletePartner(row.id, hints);
+            } else {
+                await requestsApi.deleteExtension(row.id, hints);
+            }
+            removeRequestFromList(type, row.id, setAccessories, setPartners, setExtensions);
+            toast.success('Đã xóa yêu cầu');
+        } catch (e: any) {
+            const status = e?.response?.status;
+            if (status === 404) {
+                removeRequestFromList(type, row.id, setAccessories, setPartners, setExtensions);
+                toast.success('Đã xóa yêu cầu');
+            } else {
+                toast.error(getRequestDeleteErrorMessage(e, 'Không thể xóa yêu cầu'));
+                loadAll();
+            }
+        } finally {
+            deleteInFlightRef.current = null;
+            setUpdatingId(null);
+        }
+    };
 
     const handleUpdateAccessory = async (requestId: string, status: string) => {
         setUpdatingId(requestId);
@@ -1615,58 +1860,56 @@ export function RequestsPage() {
     }
 
     return (
-        <div className="space-y-4 sm:space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                    <h1 className="flex items-center gap-2 text-xl font-bold sm:text-2xl">
-                        <FileText className="h-7 w-7 text-primary" />
-                        Quản lý yêu cầu
+        <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden sm:space-y-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                <div className="min-w-0">
+                    <h1 className="flex items-center gap-2 text-lg font-bold sm:text-2xl">
+                        <FileText className="h-6 w-6 shrink-0 text-primary sm:h-7 sm:w-7" />
+                        <span className="truncate">Quản lý yêu cầu</span>
                     </h1>
                     <p className="mt-1 hidden text-sm text-muted-foreground sm:block">
                         Trang dành cho Admin / Quản lý xử lý các phiếu Mua phụ kiện, Gửi Đối Tác và Xin gia hạn do kỹ thuật tạo.
                     </p>
                 </div>
-                <Button variant="outline" size="sm" onClick={loadAll} disabled={loading} className="h-9 w-full sm:w-auto">
+                <Button variant="outline" size="sm" onClick={loadAll} disabled={loading} className="h-9 w-full shrink-0 sm:w-auto">
                     <RefreshCw className={loading ? 'animate-spin h-4 w-4 mr-2' : 'h-4 w-4 mr-2'} />
                     Tải lại
                 </Button>
             </div>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="flex h-12 w-full max-w-2xl items-center justify-start gap-2 overflow-x-auto rounded-xl border bg-slate-50 p-1">
-                    <TabsTrigger value="accessories" className="min-h-[44px] shrink-0 self-center rounded-xl border bg-white px-4 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white sm:text-sm">
-                        <Package className="h-4 w-4" />
-                        Mua phụ kiện ({accessories.length})
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full min-w-0">
+                <TabsList className="grid h-auto w-full grid-cols-3 gap-1 rounded-xl border bg-slate-50 p-1 md:flex md:h-12 md:max-w-2xl md:items-center md:justify-start md:gap-2">
+                    <TabsTrigger value="accessories" className="flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-lg border bg-white px-1 py-2 text-[10px] font-semibold leading-tight data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white md:min-h-[44px] md:flex-row md:gap-1.5 md:rounded-xl md:px-4 md:text-sm">
+                        <Package className="h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
+                        <span className="text-center"><span className="md:hidden">Phụ kiện</span><span className="hidden md:inline">Mua phụ kiện</span> ({accessories.length})</span>
                     </TabsTrigger>
-                    <TabsTrigger value="partners" className="min-h-[44px] shrink-0 self-center rounded-xl border bg-white px-4 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white sm:text-sm">
-                        <Truck className="h-4 w-4" />
-                        Gửi Đối Tác ({partners.length})
+                    <TabsTrigger value="partners" className="flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-lg border bg-white px-1 py-2 text-[10px] font-semibold leading-tight data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white md:min-h-[44px] md:flex-row md:gap-1.5 md:rounded-xl md:px-4 md:text-sm">
+                        <Truck className="h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
+                        <span className="text-center"><span className="md:hidden">Đối tác</span><span className="hidden md:inline">Gửi Đối Tác</span> ({partners.length})</span>
                     </TabsTrigger>
-                    <TabsTrigger value="extensions" className="min-h-[44px] shrink-0 self-center rounded-xl border bg-white px-4 text-sm font-medium data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white sm:text-sm">
-                        <Clock className="h-4 w-4" />
-                        Xin gia hạn ({extensions.length})
+                    <TabsTrigger value="extensions" className="flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-lg border bg-white px-1 py-2 text-[10px] font-semibold leading-tight data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white md:min-h-[44px] md:flex-row md:gap-1.5 md:rounded-xl md:px-4 md:text-sm">
+                        <Clock className="h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
+                        <span className="text-center"><span className="md:hidden">Gia hạn</span><span className="hidden md:inline">Xin gia hạn</span> ({extensions.length})</span>
                     </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="accessories" className="mt-4">
-                    <Card>
-                        <CardHeader className="pb-4">
-                            <div className="flex flex-wrap items-center justify-between gap-4">
-                                <div>
-                                    <CardTitle className="text-lg font-bold">Yêu cầu Mua phụ kiện / VPP</CardTitle>
-                                    <CardDescription>Kéo thả thẻ giữa các cột để chuyển trạng thái.</CardDescription>
+                <TabsContent value="accessories" className="mt-4 min-w-0">
+                    <Card className="min-w-0 overflow-hidden">
+                        <CardHeader className="space-y-3 p-4 pb-3 sm:p-6">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                    <CardTitle className="text-base font-bold leading-snug sm:text-lg">Yêu cầu Mua phụ kiện / VPP</CardTitle>
+                                    <CardDescription className="mt-1 hidden sm:block">Kéo thả thẻ giữa các cột để chuyển trạng thái.</CardDescription>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <Button size="sm" className="h-10 px-4 rounded-xl gap-2 font-bold shadow-lg shadow-primary/20" onClick={() => {
-                                        setShowCreateAccessory(true);
-                                    }}>
-                                        <Plus className="w-4 h-4" />
-                                        Tạo yêu cầu
-                                    </Button>
-                                </div>
+                                <Button size="sm" className="h-10 w-full shrink-0 rounded-xl gap-2 font-bold shadow-md shadow-primary/15 sm:w-auto sm:shadow-lg sm:shadow-primary/20" onClick={() => {
+                                    setShowCreateAccessory(true);
+                                }}>
+                                    <Plus className="w-4 h-4" />
+                                    Tạo yêu cầu
+                                </Button>
                             </div>
                         </CardHeader>
-                        <CardContent className="p-3 pt-0 sm:p-6 sm:pt-0">
+                        <CardContent className="min-w-0 p-3 pt-0 sm:p-6 sm:pt-0">
                             {accessories.length === 0 ? (
                                 <p className="text-sm text-muted-foreground text-center py-8">Chưa có yêu cầu nào.</p>
                             ) : (
@@ -1676,23 +1919,23 @@ export function RequestsPage() {
                                     onDragEnd={handleAccessoryDragEnd}
                                     onOpenDialog={openAccessoryDialog}
                                     onNavigateOrder={(id) => navigate(`/orders/${id}`)}
+                                    onDelete={(row) => handleDeleteRequest('accessory', row)}
+                                    canDelete={canDeleteRequests}
                                 />
                             )}
                         </CardContent>
                     </Card>
                 </TabsContent>
 
-                <TabsContent value="partners" className="mt-4">
-                    <Card>
-                        <CardHeader>
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div>
-                                    <CardTitle className="text-base">Yêu cầu Gửi Đối Tác</CardTitle>
-                                    <p className="text-sm text-muted-foreground">Kéo thả thẻ giữa các cột để chuyển trạng thái.</p>
-                                </div>
+                <TabsContent value="partners" className="mt-4 min-w-0">
+                    <Card className="min-w-0 overflow-hidden">
+                        <CardHeader className="p-4 pb-3 sm:p-6">
+                            <div className="min-w-0">
+                                <CardTitle className="text-base font-bold leading-snug sm:text-base">Yêu cầu Gửi Đối Tác</CardTitle>
+                                <p className="mt-1 hidden text-sm text-muted-foreground sm:block">Kéo thả thẻ giữa các cột để chuyển trạng thái.</p>
                             </div>
                         </CardHeader>
-                        <CardContent className="p-3 pt-0 sm:p-6 sm:pt-0">
+                        <CardContent className="min-w-0 p-3 pt-0 sm:p-6 sm:pt-0">
                             {partners.length === 0 ? (
                                 <p className="text-sm text-muted-foreground text-center py-8">Chưa có yêu cầu nào.</p>
                             ) : (
@@ -1702,23 +1945,23 @@ export function RequestsPage() {
                                     onDragEnd={handlePartnerDragEnd}
                                     onOpenDialog={openPartnerDialog}
                                     onNavigateOrder={(id) => navigate(`/orders/${id}`)}
+                                    onDelete={(row) => handleDeleteRequest('partner', row)}
+                                    canDelete={canDeleteRequests}
                                 />
                             )}
                         </CardContent>
                     </Card>
                 </TabsContent>
 
-                <TabsContent value="extensions" className="mt-4">
-                    <Card>
-                        <CardHeader>
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div>
-                                    <CardTitle className="text-base">Yêu cầu Xin gia hạn</CardTitle>
-                                    <p className="text-sm text-muted-foreground">Kéo thả thẻ giữa các cột để chuyển trạng thái.</p>
-                                </div>
+                <TabsContent value="extensions" className="mt-4 min-w-0">
+                    <Card className="min-w-0 overflow-hidden">
+                        <CardHeader className="p-4 pb-3 sm:p-6">
+                            <div className="min-w-0">
+                                <CardTitle className="text-base font-bold leading-snug sm:text-base">Yêu cầu Xin gia hạn</CardTitle>
+                                <p className="mt-1 hidden text-sm text-muted-foreground sm:block">Kéo thả thẻ giữa các cột để chuyển trạng thái.</p>
                             </div>
                         </CardHeader>
-                        <CardContent className="p-3 pt-0 sm:p-6 sm:pt-0">
+                        <CardContent className="min-w-0 p-3 pt-0 sm:p-6 sm:pt-0">
                             {extensions.length === 0 ? (
                                 <p className="text-sm text-muted-foreground text-center py-8">Chưa có yêu cầu nào.</p>
                             ) : (
@@ -1728,6 +1971,8 @@ export function RequestsPage() {
                                     onDragEnd={handleExtensionDragEnd}
                                     onOpenDialog={openExtensionDialog}
                                     onNavigateOrder={(id) => navigate(`/orders/${id}`)}
+                                    onDelete={(row) => handleDeleteRequest('extension', row)}
+                                    canDelete={canDeleteRequests}
                                 />
                             )}
                         </CardContent>
@@ -1737,111 +1982,96 @@ export function RequestsPage() {
 
             {/* Dialog Cập nhật Mua phụ kiện */}
             <Dialog open={showAccessoryDialog} onOpenChange={setShowAccessoryDialog}>
-                <DialogContent className="max-w-md p-0 overflow-hidden rounded-2xl border-none shadow-2xl">
-                    <DialogHeader className="p-6 pb-4 bg-slate-50/50 border-b">
-                        <DialogTitle className="text-xl font-bold flex items-center gap-2">
-                            <Package className="w-6 h-6 text-primary" />
+                <DialogContent className={REQUEST_DIALOG_SHELL}>
+                    <DialogHeader className={REQUEST_DIALOG_HEADER}>
+                        <DialogTitle className="flex items-center gap-2 text-base font-bold">
+                            <Package className="h-4 w-4 text-primary" />
                             Xử lý yêu cầu
                         </DialogTitle>
                     </DialogHeader>
                     {accessoryRow && (
-                        <div className="p-6 space-y-5">
-                            <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
-                                <div className="h-10 w-10 shrink-0 bg-white rounded-lg border shadow-sm flex items-center justify-center">
-                                    <RefreshCw className="w-5 h-5 text-amber-600" />
-                                </div>
-                                <div>
-                                    <p className="text-xs font-semibold text-amber-800 uppercase tracking-wider">Trạng thái tiếp theo</p>
-                                    <p className="text-sm font-bold text-amber-900 mt-0.5">
-                                        {ACCESSORY_LABELS[accessoryStatus] || accessoryStatus}
-                                    </p>
-                                </div>
-                            </div>
+                        <div className={REQUEST_DIALOG_BODY}>
+                            <RequestDialogStatusBanner label={ACCESSORY_LABELS[accessoryStatus] || accessoryStatus} />
 
-                            <div className="space-y-4">
-                                <div className="bg-slate-50 border rounded-xl p-4 space-y-3">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase">Tên phụ kiện</p>
-                                            <p className="text-sm font-bold text-slate-700">{accessoryRow.metadata?.item_name || 'N/A'}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase">Mã SP/ĐH</p>
-                                            <p className="text-sm font-bold text-slate-700">{accessoryRow.metadata?.order_code || 'N/A'}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase">Số lượng</p>
-                                            <p className="text-sm font-bold text-slate-700">{accessoryRow.metadata?.quantity || '1'}</p>
-                                        </div>
-                                        {showAccessoryPrice ? (
-                                            <div>
-                                                <p className="text-[10px] font-bold text-slate-400 uppercase">Giá</p>
-                                                {accessoryRow.status === 'need_buy' ? (
-                                                    <div className="relative mt-1">
-                                                        <Input
-                                                            type="text"
-                                                            value={String(accessoryMeta.price_estimate || '').replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
-                                                            onChange={(e) => {
-                                                                const val = e.target.value.replace(/\./g, "");
-                                                                if (/^\d*$/.test(val)) {
-                                                                    setAccessoryMeta({ ...accessoryMeta, price_estimate: val });
-                                                                }
-                                                            }}
-                                                            className="h-8 text-sm font-bold text-emerald-600 pr-6 border-emerald-100 bg-emerald-50/30 focus-visible:ring-emerald-500 text-right"
-                                                        />
-                                                        <span className="absolute right-2 top-1.5 text-[10px] font-bold text-emerald-600">₫</span>
-                                                    </div>
-                                                ) : (
-                                                    <p className="text-sm font-bold text-emerald-600">{formatCurrency(Number(String(accessoryMeta.price_estimate || 0).replace(/\D/g, '')))}</p>
-                                                )}
-                                            </div>
+                            <RequestDialogMetaCard
+                                items={[
+                                    { label: 'Tên phụ kiện', value: accessoryRow.metadata?.item_name || '—' },
+                                    { label: 'Mã SP/ĐH', value: accessoryRow.metadata?.order_code || '—' },
+                                    { label: 'Số lượng', value: accessoryRow.metadata?.quantity || '1' },
+                                    {
+                                        label: 'Giá',
+                                        value: showAccessoryPrice ? (
+                                            accessoryRow.status === 'need_buy' ? (
+                                                <div className="relative mt-0.5">
+                                                    <Input
+                                                        type="text"
+                                                        value={String(accessoryMeta.price_estimate || '').replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value.replace(/\./g, '');
+                                                            if (/^\d*$/.test(val)) {
+                                                                setAccessoryMeta({ ...accessoryMeta, price_estimate: val });
+                                                            }
+                                                        }}
+                                                        className="h-7 border-emerald-100 bg-emerald-50/30 pr-5 text-right text-xs font-bold text-emerald-600 focus-visible:ring-emerald-500"
+                                                    />
+                                                    <span className="absolute right-2 top-1.5 text-[9px] font-bold text-emerald-600">₫</span>
+                                                </div>
+                                            ) : (
+                                                <span className="text-emerald-600">
+                                                    {formatCurrency(Number(String(accessoryMeta.price_estimate || 0).replace(/\D/g, '')))}
+                                                </span>
+                                            )
                                         ) : (
-                                            <div>
-                                                <p className="text-[10px] font-bold text-slate-400 uppercase">Giá</p>
-                                                <p className="text-sm font-bold text-slate-400">Không có quyền xem</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                    {accessoryRow.notes && (
-                                        <div className="pt-2 border-t text-left">
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase">Ghi chú KT</p>
-                                            <p className="text-xs text-slate-600 italic">"{accessoryRow.notes}"</p>
-                                        </div>
-                                    )}
-                                </div>
+                                            <span className="text-slate-400">—</span>
+                                        ),
+                                    },
+                                ]}
+                            />
 
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                                    {ACCESSORY_TRANSITIONS[accessoryRow.status]?.fields
-                                        .filter((field) => showAccessoryPrice || !isSensitivePriceField(field.name))
-                                        .map((field) => (
-                                        <div key={field.name} className={`space-y-1.5 text-left ${field.type === 'photo' || field.name === 'payment_by' || field.name === 'payment_type' ? 'col-span-1' : 'col-span-2'}`}>
-                                            <div className="flex items-center justify-between">
-                                                <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">
-                                                    {field.label} {field.required && <span className="text-red-500">*</span>}
-                                                </Label>
-                                            </div>
+                            {accessoryRow.notes && (
+                                <div className="rounded-lg border border-slate-100 bg-white px-2.5 py-2 text-left">
+                                    <p className="text-[9px] font-bold uppercase text-slate-400">Ghi chú KT</p>
+                                    <p className="mt-0.5 line-clamp-2 text-[11px] italic text-slate-600">&ldquo;{accessoryRow.notes}&rdquo;</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+                                {ACCESSORY_TRANSITIONS[accessoryRow.status]?.fields
+                                    .filter((field) => showAccessoryPrice || !isSensitivePriceField(field.name))
+                                    .map((field) => (
+                                        <div
+                                            key={field.name}
+                                            className={cn(
+                                                'space-y-1 text-left',
+                                                field.type === 'photo' || field.name === 'payment_by' || field.name === 'payment_type'
+                                                    ? 'col-span-1'
+                                                    : 'col-span-2',
+                                            )}
+                                        >
+                                            <RequestDialogFieldLabel required={field.required}>{field.label}</RequestDialogFieldLabel>
 
                                             {field.type === 'photo' ? (
                                                 <PhotoUpload
                                                     label=""
+                                                    compact
                                                     value={accessoryMeta[field.name] || []}
-                                                    onChange={(urls) => setAccessoryMeta(m => ({ ...m, [field.name]: urls }))}
+                                                    onChange={(urls) => setAccessoryMeta((m) => ({ ...m, [field.name]: urls }))}
                                                 />
                                             ) : field.type === 'select' ? (
                                                 <Select
                                                     value={accessoryMeta[field.name] || ''}
-                                                    onValueChange={(val) => setAccessoryMeta(m => ({ ...m, [field.name]: val }))}
+                                                    onValueChange={(val) => setAccessoryMeta((m) => ({ ...m, [field.name]: val }))}
                                                 >
-                                                    <SelectTrigger className="h-10 rounded-lg">
-                                                        <SelectValue placeholder={field.placeholder || "Chọn..."} />
+                                                    <SelectTrigger className="h-9 rounded-lg text-xs">
+                                                        <SelectValue placeholder={field.placeholder || 'Chọn...'} />
                                                     </SelectTrigger>
                                                     <SelectContent>
                                                         {field.name.includes('staff') || field.name.includes('_by') ? (
-                                                            users.map(u => (
+                                                            users.map((u) => (
                                                                 <SelectItem key={u.id} value={u.name}>{u.name}</SelectItem>
                                                             ))
                                                         ) : (
-                                                            field.options?.map(opt => (
+                                                            field.options?.map((opt) => (
                                                                 <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                                                             ))
                                                         )}
@@ -1853,40 +2083,49 @@ export function RequestsPage() {
                                                     value={accessoryMeta[field.name] || ''}
                                                     onChange={(e) => {
                                                         let value = e.target.value;
-                                                        if (field.name.toLowerCase().includes('cost') || field.name.toLowerCase().includes('price') || field.name.toLowerCase().includes('amount')) {
+                                                        if (
+                                                            field.name.toLowerCase().includes('cost') ||
+                                                            field.name.toLowerCase().includes('price') ||
+                                                            field.name.toLowerCase().includes('amount')
+                                                        ) {
                                                             const digits = value.replace(/\D/g, '');
-                                                            value = digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".") : '';
+                                                            value = digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.') : '';
                                                         }
-                                                        setAccessoryMeta(m => ({ ...m, [field.name]: value }));
+                                                        setAccessoryMeta((m) => ({ ...m, [field.name]: value }));
                                                     }}
                                                     placeholder={field.placeholder || '...'}
-                                                    className="h-10 rounded-lg text-left"
+                                                    className="h-9 rounded-lg text-xs"
                                                 />
                                             )}
                                         </div>
                                     ))}
 
-                                    <div className="space-y-1.5 pt-2 border-t border-dashed text-left col-span-2">
-                                        <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">Ghi chú xử lý</Label>
-                                        <Textarea
-                                            value={accessoryNotes}
-                                            onChange={(e) => setAccessoryNotes(e.target.value)}
-                                            placeholder="Nhập ghi chú (nếu có)..."
-                                            className="min-h-[100px] rounded-xl resize-none"
-                                        />
-                                    </div>
+                                <div className="col-span-2 space-y-1 border-t border-dashed border-slate-200 pt-2 text-left">
+                                    <RequestDialogFieldLabel>Ghi chú xử lý</RequestDialogFieldLabel>
+                                    <Textarea
+                                        value={accessoryNotes}
+                                        onChange={(e) => setAccessoryNotes(e.target.value)}
+                                        placeholder="Nhập ghi chú (nếu có)..."
+                                        className="min-h-[56px] resize-none rounded-lg text-xs"
+                                    />
                                 </div>
                             </div>
                         </div>
                     )}
-                    <DialogFooter className="p-6 bg-slate-50/50 border-t flex items-center justify-between gap-3">
-                        <Button variant="ghost" onClick={() => setShowAccessoryDialog(false)} className="rounded-xl px-6">Hủy</Button>
+                    <DialogFooter className={REQUEST_DIALOG_FOOTER}>
+                        <Button
+                            variant="outline"
+                            onClick={() => setShowAccessoryDialog(false)}
+                            className="h-9 flex-1 rounded-lg px-3 text-xs"
+                        >
+                            Hủy
+                        </Button>
                         <Button
                             onClick={handleSubmitAccessory}
                             disabled={!!updatingId}
-                            className="rounded-xl px-10 font-bold shadow-lg shadow-primary/20"
+                            className="h-9 flex-1 rounded-lg px-3 text-xs font-semibold shadow-md shadow-primary/15"
                         >
-                            {updatingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                            {updatingId ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
                             Xác nhận
                         </Button>
                     </DialogFooter>
@@ -1895,88 +2134,95 @@ export function RequestsPage() {
 
             {/* Dialog Cập nhật Gửi Đối Tác */}
             <Dialog open={showPartnerDialog} onOpenChange={setShowPartnerDialog}>
-                <DialogContent className="max-w-md p-0 overflow-hidden rounded-2xl border-none shadow-2xl">
-                    <DialogHeader className="p-4 pb-2 bg-slate-50/50 border-b">
-                        <DialogTitle className="text-lg font-bold flex items-center gap-2">
-                            <Truck className="w-5 h-5 text-primary" />
+                <DialogContent className={REQUEST_DIALOG_SHELL}>
+                    <DialogHeader className={REQUEST_DIALOG_HEADER}>
+                        <DialogTitle className="flex items-center gap-2 text-base font-bold">
+                            <Truck className="h-4 w-4 text-primary" />
                             Xử lý gửi đối tác
                         </DialogTitle>
                     </DialogHeader>
                     {partnerRow && (
-                        <div className="p-4 space-y-3">
-                            <div className="bg-amber-50 border border-amber-100 rounded-lg p-2.5 flex items-center gap-3">
-                                <div className="h-8 w-8 shrink-0 bg-white rounded flex items-center justify-center shadow-sm">
-                                    <RefreshCw className="w-4 h-4 text-amber-600" />
-                                </div>
-                                <div>
-                                    <p className="text-[10px] font-bold text-amber-800 uppercase leading-none">Trạng thái tiếp theo</p>
-                                    <p className="text-sm font-bold text-amber-900 mt-1">
-                                        {PARTNER_LABELS[partnerStatus] || partnerStatus}
-                                    </p>
-                                </div>
-                            </div>
+                        <div className={REQUEST_DIALOG_BODY}>
+                            <RequestDialogStatusBanner label={PARTNER_LABELS[partnerStatus] || partnerStatus} />
 
-                            <div className="space-y-4">
-                                <div className="bg-slate-50 border rounded-lg p-2.5 space-y-2">
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">Hạng mục</p>
-                                            <p className="text-xs font-bold text-slate-700 truncate">
-                                                {partnerRow.order_item?.item_name ??
-                                                    partnerRow.order_product_service?.order_product?.name ??
-                                                    partnerRow.order_product?.name ?? '—'}
-                                            </p>
-                                        </div>
-                                        <div>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">Mã SP/ĐH</p>
-                                            <p className="text-xs font-bold text-slate-700 truncate">
-                                                {partnerRow.order_item?.item_code ??
-                                                    partnerRow.order_product_service?.order_product?.product_code ??
-                                                    partnerRow.order_product?.product_code ??
-                                                    (partnerRow.metadata?.order_code ?? '—').toUpperCase()}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    {partnerRow.notes && (
-                                        <div className="pt-1.5 border-t text-left">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">Ghi chú KT</p>
-                                            <p className="text-[11px] text-slate-600 italic line-clamp-1">"{partnerRow.notes}"</p>
-                                        </div>
-                                    )}
-                                </div>
+                            <RequestDialogMetaCard
+                                items={[
+                                    {
+                                        label: 'Hạng mục',
+                                        value:
+                                            partnerRow.order_item?.item_name ??
+                                            partnerRow.order_product_service?.order_product?.name ??
+                                            partnerRow.order_product?.name ??
+                                            '—',
+                                    },
+                                    {
+                                        label: 'Mã SP/ĐH',
+                                        value:
+                                            partnerRow.order_item?.item_code ??
+                                            partnerRow.order_product_service?.order_product?.product_code ??
+                                            partnerRow.order_product?.product_code ??
+                                            (partnerRow.metadata?.order_code ?? '—').toUpperCase(),
+                                    },
+                                ]}
+                            />
 
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                                    {PARTNER_TRANSITIONS[partnerRow.status]?.fields
-                                        .filter((field) => showPartnerPrice || !isSensitivePriceField(field.name))
-                                        .map((field) => (
-                                        <div key={field.name} className={`space-y-1.5 text-left ${['sender_staff', 'shipping_sender_staff', 'shipping_cost_out', 'shipping_payment_type', 'shipping_cost_back', 'shipping_sender_staff_back', 'shipping_payment_type_back', 'partner_fee_amount', 'partner_fee_sender_staff', 'partner_payment_type', 'photos_package_back', 'photos_storage'].includes(field.name) ? 'col-span-1' : 'col-span-2'}`}>
-                                            <div className="flex items-center justify-between">
-                                                <Label className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">
-                                                    {field.label} {field.required && <span className="text-red-500">*</span>}
-                                                </Label>
-                                            </div>
+                            {partnerRow.notes && (
+                                <div className="rounded-lg border border-slate-100 bg-white px-2.5 py-2 text-left">
+                                    <p className="text-[9px] font-bold uppercase text-slate-400">Ghi chú KT</p>
+                                    <p className="mt-0.5 line-clamp-2 text-[11px] italic text-slate-600">&ldquo;{partnerRow.notes}&rdquo;</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+                                {PARTNER_TRANSITIONS[partnerRow.status]?.fields
+                                    .filter((field) => showPartnerPrice || !isSensitivePriceField(field.name))
+                                    .map((field) => (
+                                        <div
+                                            key={field.name}
+                                            className={cn(
+                                                'space-y-1 text-left',
+                                                [
+                                                    'sender_staff',
+                                                    'shipping_sender_staff',
+                                                    'shipping_cost_out',
+                                                    'shipping_payment_type',
+                                                    'shipping_cost_back',
+                                                    'shipping_sender_staff_back',
+                                                    'shipping_payment_type_back',
+                                                    'partner_fee_amount',
+                                                    'partner_fee_sender_staff',
+                                                    'partner_payment_type',
+                                                    'photos_package_back',
+                                                    'photos_storage',
+                                                ].includes(field.name) || field.type === 'photo'
+                                                    ? 'col-span-1'
+                                                    : 'col-span-2',
+                                            )}
+                                        >
+                                            <RequestDialogFieldLabel required={field.required}>{field.label}</RequestDialogFieldLabel>
 
                                             {field.type === 'photo' ? (
                                                 <PhotoUpload
                                                     label=""
+                                                    compact
                                                     value={partnerMeta[field.name] || []}
-                                                    onChange={(urls) => setPartnerMeta(m => ({ ...m, [field.name]: urls }))}
+                                                    onChange={(urls) => setPartnerMeta((m) => ({ ...m, [field.name]: urls }))}
                                                 />
                                             ) : field.type === 'select' ? (
                                                 <Select
                                                     value={partnerMeta[field.name] || ''}
-                                                    onValueChange={(val) => setPartnerMeta(m => ({ ...m, [field.name]: val }))}
+                                                    onValueChange={(val) => setPartnerMeta((m) => ({ ...m, [field.name]: val }))}
                                                 >
-                                                    <SelectTrigger className="h-10 rounded-lg">
-                                                        <SelectValue placeholder={field.placeholder || "Chọn..."} />
+                                                    <SelectTrigger className="h-9 rounded-lg text-xs">
+                                                        <SelectValue placeholder={field.placeholder || 'Chọn...'} />
                                                     </SelectTrigger>
                                                     <SelectContent>
                                                         {field.name.includes('staff') || field.name.includes('_by') ? (
-                                                            users.map(u => (
+                                                            users.map((u) => (
                                                                 <SelectItem key={u.id} value={u.name}>{u.name}</SelectItem>
                                                             ))
                                                         ) : (
-                                                            field.options?.map(opt => (
+                                                            field.options?.map((opt) => (
                                                                 <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                                                             ))
                                                         )}
@@ -1984,44 +2230,49 @@ export function RequestsPage() {
                                                 </Select>
                                             ) : (
                                                 <Input
-                                                    type={field.type === 'datetime-local' ? 'datetime-local' : (field.type === 'number' ? 'number' : 'text')}
+                                                    type={field.type === 'datetime-local' ? 'datetime-local' : field.type === 'number' ? 'number' : 'text'}
                                                     value={partnerMeta[field.name] || ''}
                                                     onChange={(e) => {
                                                         let value = e.target.value;
-                                                        if (field.name.toLowerCase().includes('cost') || field.name.toLowerCase().includes('price') || field.name.toLowerCase().includes('amount')) {
+                                                        if (
+                                                            field.name.toLowerCase().includes('cost') ||
+                                                            field.name.toLowerCase().includes('price') ||
+                                                            field.name.toLowerCase().includes('amount')
+                                                        ) {
                                                             const digits = value.replace(/\D/g, '');
-                                                            value = digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".") : '';
+                                                            value = digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.') : '';
                                                         }
-                                                        setPartnerMeta(m => ({ ...m, [field.name]: value }));
+                                                        setPartnerMeta((m) => ({ ...m, [field.name]: value }));
                                                     }}
                                                     placeholder={field.placeholder || '...'}
-                                                    className="h-10 rounded-lg text-left"
+                                                    className="h-9 rounded-lg text-xs"
                                                 />
                                             )}
                                         </div>
                                     ))}
-                                </div>
 
-                                <div className="space-y-1.5 pt-1.5 border-t border-dashed text-left">
-                                    <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">Ghi chú xử lý</Label>
+                                <div className="col-span-2 space-y-1 border-t border-dashed border-slate-200 pt-2 text-left">
+                                    <RequestDialogFieldLabel>Ghi chú xử lý</RequestDialogFieldLabel>
                                     <Textarea
                                         value={partnerNotes}
                                         onChange={(e) => setPartnerNotes(e.target.value)}
                                         placeholder="Nhập ghi chú..."
-                                        className="min-h-[54px] rounded-lg resize-none text-sm"
+                                        className="min-h-[56px] resize-none rounded-lg text-xs"
                                     />
                                 </div>
                             </div>
                         </div>
                     )}
-                    <DialogFooter className="p-4 bg-slate-50/50 border-t flex items-center justify-between gap-3">
-                        <Button variant="ghost" onClick={() => setShowPartnerDialog(false)} className="rounded-lg px-6 h-9 text-sm">Hủy</Button>
+                    <DialogFooter className={REQUEST_DIALOG_FOOTER}>
+                        <Button variant="outline" onClick={() => setShowPartnerDialog(false)} className="h-9 flex-1 rounded-lg px-3 text-xs">
+                            Hủy
+                        </Button>
                         <Button
                             onClick={handleSubmitPartner}
                             disabled={!!updatingId}
-                            className="rounded-lg px-8 h-9 font-bold shadow-lg shadow-primary/20 text-sm"
+                            className="h-9 flex-1 rounded-lg px-3 text-xs font-semibold shadow-md shadow-primary/15"
                         >
-                            {updatingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                            {updatingId ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
                             Xác nhận
                         </Button>
                     </DialogFooter>
@@ -2031,8 +2282,8 @@ export function RequestsPage() {
 
             {/* Dialog Xin gia hạn */}
             <Dialog open={showExtensionDialog} onOpenChange={setShowExtensionDialog}>
-                <DialogContent className="max-w-md p-0 overflow-hidden rounded-[28px] border-none shadow-2xl bg-white">
-                    <DialogHeader className="px-6 py-5 bg-white border-b border-slate-100">
+                <DialogContent className={cn(REQUEST_DIALOG_SHELL, 'rounded-[28px] bg-white')}>
+                    <DialogHeader className="shrink-0 px-6 py-5 bg-white border-b border-slate-100">
                         <DialogTitle className="text-xl font-bold flex items-center gap-3 text-slate-900">
                             <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center">
                                 <Clock className="w-5 h-5 text-primary" />
@@ -2041,7 +2292,7 @@ export function RequestsPage() {
                         </DialogTitle>
                     </DialogHeader>
 
-                    <div className="max-h-[60vh] overflow-y-auto px-6 py-6 space-y-6">
+                    <div className={REQUEST_DIALOG_BODY}>
                         {extensionRow && (
                             <>
                                 {/* Product Info Card */}
@@ -2177,7 +2428,7 @@ export function RequestsPage() {
                         )}
                     </div>
 
-                    <DialogFooter className="px-6 py-6 bg-slate-50 border-t border-slate-100 flex flex-col gap-3">
+                    <DialogFooter className={cn(REQUEST_DIALOG_FOOTER, 'flex-col sm:!flex-row')}>
                         {extensionStatus === 'rejected' ? (
                             <div className="flex gap-3 w-full">
                                 <Button
@@ -2221,74 +2472,74 @@ export function RequestsPage() {
 
             {/* Dialog Tạo yêu cầu mới */}
             <Dialog open={showCreateAccessory} onOpenChange={setShowCreateAccessory}>
-                <DialogContent className="max-w-md p-0 overflow-hidden rounded-2xl border-none shadow-2xl">
-                    <DialogHeader className="p-6 pb-4 bg-slate-50/50 border-b">
-                        <DialogTitle className="text-xl font-bold flex items-center gap-2">
-                            <Plus className="w-6 h-6 text-primary" />
+                <DialogContent className={REQUEST_DIALOG_SHELL}>
+                    <DialogHeader className={REQUEST_DIALOG_HEADER}>
+                        <DialogTitle className="flex items-center gap-2 text-base font-bold">
+                            <Plus className="h-4 w-4 text-primary" />
                             Tạo yêu cầu mua phụ kiện
                         </DialogTitle>
                     </DialogHeader>
-                    <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
-                        <div className="space-y-1.5">
-                            <Label className="text-xs font-bold text-slate-500">Tên phụ kiện *</Label>
+                    <div className={REQUEST_DIALOG_BODY}>
+                        <div className="space-y-1">
+                            <RequestDialogFieldLabel required>Tên phụ kiện</RequestDialogFieldLabel>
                             <Input
                                 value={newItemName}
                                 onChange={(e) => setNewItemName(e.target.value)}
                                 placeholder=""
-                                className="h-11 rounded-xl"
+                                className="h-9 rounded-lg text-xs"
                             />
                         </div>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-1.5">
-                                <Label className="text-xs font-bold text-slate-500">Số lượng</Label>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <RequestDialogFieldLabel>Số lượng</RequestDialogFieldLabel>
                                 <div className="relative">
                                     <Input
                                         value={newItemQuantity}
                                         onChange={(e) => setNewItemQuantity(e.target.value)}
                                         placeholder="1"
-                                        className="h-11 rounded-xl pl-10"
+                                        className="h-9 rounded-lg pl-8 text-xs"
                                     />
-                                    <Hash className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+                                    <Hash className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
                                 </div>
                             </div>
-                            <div className="space-y-1.5">
-                                <Label className="text-xs font-bold text-slate-500">Giá dự kiến</Label>
+                            <div className="space-y-1">
+                                <RequestDialogFieldLabel>Giá dự kiến</RequestDialogFieldLabel>
                                 <div className="relative">
                                     <Input
                                         value={newItemPrice}
                                         onChange={(e) => {
                                             const digits = e.target.value.replace(/\D/g, '');
                                             if (!digits) setNewItemPrice('');
-                                            else setNewItemPrice(digits.replace(/\B(?=(\d{3})+(?!\d))/g, "."));
+                                            else setNewItemPrice(digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.'));
                                         }}
                                         placeholder="1.500.000"
-                                        className="h-11 rounded-xl pl-10"
+                                        className="h-9 rounded-lg pl-8 text-xs"
                                     />
-                                    <DollarSign className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+                                    <DollarSign className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
                                 </div>
                             </div>
                         </div>
 
-                        <div className="space-y-1.5">
-                            <Label className="text-xs font-bold text-slate-500">Mã đơn hàng liên quan (không bắt buộc)</Label>
+                        <div className="space-y-1">
+                            <RequestDialogFieldLabel>Mã đơn hàng (tùy chọn)</RequestDialogFieldLabel>
                             <div className="flex gap-2">
                                 <div className="relative flex-1">
                                     <Input
                                         value={newItemOrderCode}
                                         onChange={(e) => setNewItemOrderCode(e.target.value)}
                                         placeholder="HĐ.123..."
-                                        className="h-11 rounded-xl pl-10"
+                                        className="h-9 rounded-lg pl-8 text-xs"
                                     />
-                                    <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+                                    <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
                                 </div>
                                 <Button
                                     variant="outline"
-                                    className="h-11 rounded-xl px-4"
+                                    className="h-9 shrink-0 rounded-lg px-3 text-xs"
                                     onClick={handleSearchOrder}
                                     disabled={searchingOrder}
                                 >
-                                    {searchingOrder ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Tìm'}
+                                    {searchingOrder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Tìm'}
                                 </Button>
                             </div>
                             {foundOrder && (
@@ -2301,30 +2552,31 @@ export function RequestsPage() {
                             )}
                         </div>
 
-                        <div className="space-y-1.5">
-                            <Label className="text-xs font-bold text-slate-500">Ghi chú chi tiết</Label>
+                        <div className="space-y-1">
+                            <RequestDialogFieldLabel>Ghi chú chi tiết</RequestDialogFieldLabel>
                             <Textarea
                                 value={newItemNotes}
                                 onChange={(e) => setNewItemNotes(e.target.value)}
                                 placeholder="Mô tả tình trạng, yêu cầu đặc biệt..."
-                                className="min-h-[80px] rounded-xl resize-none"
+                                className="min-h-[56px] resize-none rounded-lg text-xs"
                             />
                         </div>
 
                         <PhotoUpload
                             label="Ảnh phụ kiện mẫu / Link sản phẩm"
+                            compact
                             value={newItemPhotos}
                             onChange={setNewItemPhotos}
                         />
                     </div>
-                    <DialogFooter className="p-6 bg-slate-50/50 border-t flex items-center justify-between gap-3">
-                        <Button variant="ghost" onClick={() => setShowCreateAccessory(false)} className="rounded-xl px-6">Hủy</Button>
+                    <DialogFooter className={REQUEST_DIALOG_FOOTER}>
+                        <Button variant="outline" onClick={() => setShowCreateAccessory(false)} className="h-9 flex-1 rounded-lg px-3 text-xs">Hủy</Button>
                         <Button
                             onClick={handleCreateAccessory}
                             disabled={!!updatingId || !newItemName}
-                            className="rounded-xl px-10 font-bold shadow-lg shadow-primary/20"
+                            className="h-9 flex-1 rounded-lg px-3 text-xs font-semibold shadow-md shadow-primary/15"
                         >
-                            {updatingId === 'creating' ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                            {updatingId === 'creating' ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
                             Gửi yêu cầu
                         </Button>
                     </DialogFooter>

@@ -456,6 +456,30 @@ export const requestsApi = {
         api.patch<ApiResponse<any>>(`/requests/partners/${id}`, data),
     updateExtension: (id: string, data: { status?: string; customer_result?: string; new_due_at?: string; valid_reason?: boolean; kpi_impact?: boolean }) =>
         api.patch<ApiResponse<any>>(`/requests/extensions/${id}`, data),
+    deleteAccessory: (
+        id: string,
+        hints?: {
+            order_item_id?: string;
+            order_product_id?: string;
+            order_product_service_id?: string;
+        },
+    ) => api.delete<ApiResponse<null>>(`/requests/accessories/${id}`, { params: hints }),
+    deletePartner: (
+        id: string,
+        hints?: {
+            order_item_id?: string;
+            order_product_id?: string;
+            order_product_service_id?: string;
+        },
+    ) => api.delete<ApiResponse<null>>(`/requests/partners/${id}`, { params: hints }),
+    deleteExtension: (
+        id: string,
+        hints?: {
+            order_item_id?: string;
+            order_product_id?: string;
+            order_product_service_id?: string;
+        },
+    ) => api.delete<ApiResponse<null>>(`/requests/extensions/${id}`, { params: hints }),
 };
 
 // Upsell Tickets API (admin/manager)

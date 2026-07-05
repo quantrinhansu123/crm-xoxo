@@ -47,7 +47,7 @@ import { SalaryAdvancesPage } from '@/pages/SalaryAdvancesPage';
 import { ViolationsPage } from '@/pages/ViolationsPage';
 import { TrainingPage } from '@/pages/TrainingPage';
 import { RecruitmentPage } from '@/pages/RecruitmentPage';
-import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/contexts/useAuth';
 import type { UserRole, User } from '@/types';
 import { Toaster } from 'sonner';
 import { canAccessView, getDefaultHomePath, resolveViewKeyFromPath } from '@/lib/viewPermissions';
@@ -643,12 +643,10 @@ function AppContent() {
 
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Toaster position="top-right" richColors />
-        <AppContent />
-      </BrowserRouter>
-    </AuthProvider>
+    <BrowserRouter>
+      <Toaster position="top-right" richColors />
+      <AppContent />
+    </BrowserRouter>
   );
 }
 

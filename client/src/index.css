@@ -254,12 +254,33 @@ body {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  padding: 4px 0;
+  padding: 2px 0;
   scrollbar-width: none;
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
   touch-action: pan-x;
+  scroll-snap-type: x proximity;
+}
+
+.mobile-kanban-tabs-grid {
+  display: grid;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  gap: 6px;
+}
+
+.mobile-kanban-tabs-grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mobile-kanban-tabs-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mobile-kanban-tabs-grid.cols-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .mobile-kanban-tabs::-webkit-scrollbar {
@@ -270,22 +291,42 @@ body {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 12px;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 11px;
   font-weight: 600;
+  line-height: 1.2;
   cursor: pointer;
   transition: all 0.2s ease;
   border: 1.5px solid transparent;
   white-space: nowrap;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  min-width: 0;
+  text-align: center;
+}
+
+.mobile-kanban-tabs .mobile-kanban-tab {
+  scroll-snap-align: start;
+}
+
+.mobile-kanban-tabs-grid .mobile-kanban-tab {
+  width: 100%;
+  white-space: normal;
+  min-height: 40px;
+}
+
+.mobile-kanban-tabs-grid.cols-4 .mobile-kanban-tab {
+  padding: 8px 4px;
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .mobile-kanban-tab.active {
-  border-color: currentColor;
-  box-shadow: 0 2px 8px -2px currentColor;
+  border-color: var(--color-primary);
+  box-shadow: 0 1px 4px rgb(59 130 246 / 0.2);
 }
 
 /* Product detail dialog — layout + touch scroll */
