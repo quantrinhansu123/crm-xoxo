@@ -1110,48 +1110,47 @@ router.get('/customers', authenticate, requireManager, async (req: Authenticated
     }
 });
 
-// Get financial report
+// Get financial report — dùng bảng transactions (Số quỹ), cùng nguồn FinancePage
 router.get('/financial', authenticate, requireManager, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { from_date, to_date } = req.query;
 
-        // Thu
         let incomeQuery = supabaseAdmin
-            .from('finance_transactions')
+            .from('transactions')
             .select('amount, category')
             .eq('type', 'income')
             .eq('status', 'approved');
 
-        if (from_date) incomeQuery = incomeQuery.gte('created_at', from_date);
-        if (to_date) incomeQuery = incomeQuery.lte('created_at', to_date);
+        if (from_date) incomeQuery = incomeQuery.gte('date', from_date);
+        if (to_date) incomeQuery = incomeQuery.lte('date', to_date);
 
         const { data: incomeData } = await incomeQuery;
 
-        // Chi
         let expenseQuery = supabaseAdmin
-            .from('finance_transactions')
+            .from('transactions')
             .select('amount, category')
             .eq('type', 'expense')
             .eq('status', 'approved');
 
-        if (from_date) expenseQuery = expenseQuery.gte('created_at', from_date);
-        if (to_date) expenseQuery = expenseQuery.lte('created_at', to_date);
+        if (from_date) expenseQuery = expenseQuery.gte('date', from_date);
+        if (to_date) expenseQuery = expenseQuery.lte('date', to_date);
 
         const { data: expenseData } = await expenseQuery;
 
-        const totalIncome = incomeData?.reduce((sum, t) => sum + t.amount, 0) || 0;
-        const totalExpense = expenseData?.reduce((sum, t) => sum + t.amount, 0) || 0;
+        const totalIncome = incomeData?.reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
+        const totalExpense = expenseData?.reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
         const profit = totalIncome - totalExpense;
 
-        // Group by category
         const incomeByCategory: Record<string, number> = {};
         incomeData?.forEach(t => {
-            incomeByCategory[t.category] = (incomeByCategory[t.category] || 0) + t.amount;
+            const cat = t.category || 'Khác';
+            incomeByCategory[cat] = (incomeByCategory[cat] || 0) + Number(t.amount || 0);
         });
 
         const expenseByCategory: Record<string, number> = {};
         expenseData?.forEach(t => {
-            expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + t.amount;
+            const cat = t.category || 'Khác';
+            expenseByCategory[cat] = (expenseByCategory[cat] || 0) + Number(t.amount || 0);
         });
 
         res.json({
@@ -1249,118 +1248,180 @@ router.get('/hr', authenticate, requireManager, async (req: AuthenticatedRequest
 });
 
 // Get summary report (all-in-one for dashboard)
+// Doanh thu hạch toán = hóa đơn đã thanh toán (paid invoices)
+// Thu/chi hạch toán = phiếu thu-chi đã duyệt (transactions) — cùng nguồn với Số quỹ
 router.get('/summary', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { period = 'month', from_date, to_date } = req.query;
 
-        // Calculate date range based on period
         const now = new Date();
         let fromDate: Date;
+        let toDateBound: Date;
         let previousFromDate: Date;
         let previousToDate: Date;
 
-        // Handle custom date range
         if (period === 'custom' && from_date && to_date) {
-            fromDate = new Date(from_date as string);
-            const toDateObj = new Date(to_date as string);
-            // Calculate duration for previous period comparison
-            const duration = toDateObj.getTime() - fromDate.getTime();
+            fromDate = startOfDay(new Date(from_date as string));
+            toDateBound = endOfDay(new Date(to_date as string));
+            const duration = toDateBound.getTime() - fromDate.getTime();
             previousFromDate = new Date(fromDate.getTime() - duration);
-            previousToDate = new Date(fromDate.getTime());
+            previousToDate = new Date(fromDate.getTime() - 1);
         } else {
+            toDateBound = endOfDay(now);
             switch (period) {
                 case 'week':
-                    fromDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    fromDate = startOfDay(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
                     previousFromDate = new Date(fromDate.getTime() - 7 * 24 * 60 * 60 * 1000);
-                    previousToDate = fromDate;
+                    previousToDate = new Date(fromDate.getTime() - 1);
                     break;
                 case 'quarter':
-                    fromDate = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
-                    previousFromDate = new Date(fromDate.getFullYear(), fromDate.getMonth() - 3, 1);
-                    previousToDate = fromDate;
+                    fromDate = startOfDay(new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1));
+                    previousFromDate = startOfDay(new Date(fromDate.getFullYear(), fromDate.getMonth() - 3, 1));
+                    previousToDate = new Date(fromDate.getTime() - 1);
                     break;
                 case 'year':
-                    fromDate = new Date(now.getFullYear(), 0, 1);
-                    previousFromDate = new Date(now.getFullYear() - 1, 0, 1);
-                    previousToDate = fromDate;
+                    fromDate = startOfDay(new Date(now.getFullYear(), 0, 1));
+                    previousFromDate = startOfDay(new Date(now.getFullYear() - 1, 0, 1));
+                    previousToDate = new Date(fromDate.getTime() - 1);
                     break;
                 default: // month
-                    fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
-                    previousFromDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-                    previousToDate = fromDate;
+                    fromDate = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+                    previousFromDate = startOfDay(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+                    previousToDate = new Date(fromDate.getTime() - 1);
             }
         }
 
-        // Get orders for current period
+        const fromIso = fromDate.toISOString();
+        const toIso = toDateBound.toISOString();
+        const prevFromIso = previousFromDate.toISOString();
+        const prevToIso = endOfDay(previousToDate).toISOString();
+        const fromDateStr = localDateStr(fromDate);
+        const toDateStr = localDateStr(toDateBound);
+        const prevFromDateStr = localDateStr(previousFromDate);
+        const prevToDateStr = localDateStr(previousToDate);
+
+        // Doanh thu hạch toán: invoices đã thanh toán theo paid_at
+        const [{ data: currentInvoices }, { data: previousInvoices }] = await Promise.all([
+            supabaseAdmin
+                .from('invoices')
+                .select('id, total_amount, paid_at, created_at, order_id, status')
+                .eq('status', 'paid')
+                .gte('paid_at', fromIso)
+                .lte('paid_at', toIso),
+            supabaseAdmin
+                .from('invoices')
+                .select('total_amount, paid_at, status')
+                .eq('status', 'paid')
+                .gte('paid_at', prevFromIso)
+                .lte('paid_at', prevToIso),
+        ]);
+
+        const currentRevenue = (currentInvoices || []).reduce((sum, i) => sum + Number(i.total_amount || 0), 0);
+        const previousRevenue = (previousInvoices || []).reduce((sum, i) => sum + Number(i.total_amount || 0), 0);
+        const growth = previousRevenue > 0 ? ((currentRevenue - previousRevenue) / previousRevenue) * 100 : (currentRevenue > 0 ? 100 : 0);
+
+        // Thu/chi hạch toán từ sổ quỹ (transactions đã duyệt) — khớp FinancePage
+        const [{ data: currentTx }, { data: previousTx }] = await Promise.all([
+            supabaseAdmin
+                .from('transactions')
+                .select('amount, type, category, date')
+                .eq('status', 'approved')
+                .gte('date', fromDateStr)
+                .lte('date', toDateStr),
+            supabaseAdmin
+                .from('transactions')
+                .select('amount, type')
+                .eq('status', 'approved')
+                .gte('date', prevFromDateStr)
+                .lte('date', prevToDateStr),
+        ]);
+
+        let totalIncome = 0;
+        let totalExpense = 0;
+        const incomeByCategory: Record<string, number> = {};
+        const expenseByCategory: Record<string, number> = {};
+        (currentTx || []).forEach((t) => {
+            const amount = Number(t.amount || 0);
+            const cat = t.category || 'Khác';
+            if (t.type === 'income') {
+                totalIncome += amount;
+                incomeByCategory[cat] = (incomeByCategory[cat] || 0) + amount;
+            } else if (t.type === 'expense') {
+                totalExpense += amount;
+                expenseByCategory[cat] = (expenseByCategory[cat] || 0) + amount;
+            }
+        });
+
+        let prevIncome = 0;
+        let prevExpense = 0;
+        (previousTx || []).forEach((t) => {
+            const amount = Number(t.amount || 0);
+            if (t.type === 'income') prevIncome += amount;
+            else if (t.type === 'expense') prevExpense += amount;
+        });
+
+        // Đơn hàng trong kỳ (bán hàng / breakdown)
         const { data: currentOrders } = await supabaseAdmin
             .from('orders')
             .select(`
-                id, total_amount, status, created_at, customer_id,
-                sales_user:users!orders_sales_id_fkey(id, name),
-                items:order_items(item_type, item_name, total_price)
+                id, total_amount, status, created_at, customer_id, sales_id,
+                sales_user:users!orders_sales_id_fkey(id, name, commission),
+                items:order_items(item_type, item_name, total_price, quantity)
             `)
-            .gte('created_at', fromDate.toISOString());
+            .gte('created_at', fromIso)
+            .lte('created_at', toIso);
 
-        // Get orders for previous period
-        const { data: previousOrders } = await supabaseAdmin
-            .from('orders')
-            .select('id, total_amount, status')
-            .gte('created_at', previousFromDate.toISOString())
-            .lt('created_at', previousToDate.toISOString());
+        const isCompleted = (status: string) => COMPLETED_ORDER_STATUSES.includes(status);
+        const completedOrders = (currentOrders || []).filter((o) => isCompleted(o.status));
 
-        // Calculate revenue stats
-        const currentRevenue = currentOrders?.filter(o => o.status === 'done' || o.status === 'completed' || o.status === 'after_sale')
-            .reduce((sum, o) => sum + o.total_amount, 0) || 0;
-        const previousRevenue = previousOrders?.filter(o => o.status === 'done' || o.status === 'completed' || o.status === 'after_sale')
-            .reduce((sum, o) => sum + o.total_amount, 0) || 0;
-        const growth = previousRevenue > 0 ? ((currentRevenue - previousRevenue) / previousRevenue) * 100 : 0;
-
-        // Revenue by source (item type)
+        // Nguồn doanh thu theo dòng hàng của đơn đã hoàn thành trong kỳ
         const bySource: Record<string, number> = {};
-        currentOrders?.forEach(order => {
+        completedOrders.forEach((order) => {
             (order.items as any[])?.forEach((item: any) => {
                 const source = item.item_type === 'product' ? 'Sản phẩm' :
                     item.item_type === 'service' ? 'Dịch vụ' :
                         item.item_type === 'package' ? 'Gói combo' : 'Khác';
-                bySource[source] = (bySource[source] || 0) + (item.total_price || 0);
+                bySource[source] = (bySource[source] || 0) + Number(item.total_price || 0);
             });
         });
 
-        // Revenue by month (for year view)
+        // Doanh thu theo tháng từ hóa đơn đã thanh toán
         const byMonth: Record<string, number> = {};
-        currentOrders?.filter(o => o.status === 'done' || o.status === 'completed' || o.status === 'after_sale').forEach(order => {
-            const date = new Date(order.created_at);
+        (currentInvoices || []).forEach((invoice) => {
+            const date = new Date(invoice.paid_at || invoice.created_at);
             const monthKey = `T${date.getMonth() + 1}`;
-            byMonth[monthKey] = (byMonth[monthKey] || 0) + order.total_amount;
+            byMonth[monthKey] = (byMonth[monthKey] || 0) + Number(invoice.total_amount || 0);
         });
 
-        // Unique customers
-        const uniqueCustomers = new Set(currentOrders?.map(o => o.customer_id)).size;
+        const uniqueCustomers = new Set((currentOrders || []).map((o) => o.customer_id).filter(Boolean)).size;
 
-        // Sales by person
-        const bySalesperson: Record<string, { name: string; orders: number; revenue: number }> = {};
-        currentOrders?.forEach(order => {
+        // Doanh thu / hoa hồng theo NV — dùng commission trên user
+        const bySalesperson: Record<string, { name: string; orders: number; revenue: number; commissionRate: number }> = {};
+        completedOrders.forEach((order) => {
             const sales = order.sales_user as any;
             if (sales?.id) {
                 if (!bySalesperson[sales.id]) {
-                    bySalesperson[sales.id] = { name: sales.name, orders: 0, revenue: 0 };
+                    bySalesperson[sales.id] = {
+                        name: sales.name,
+                        orders: 0,
+                        revenue: 0,
+                        commissionRate: Number(sales.commission ?? 5),
+                    };
                 }
                 bySalesperson[sales.id].orders += 1;
-                if (order.status === 'done' || order.status === 'completed' || order.status === 'after_sale') {
-                    bySalesperson[sales.id].revenue += order.total_amount;
-                }
+                bySalesperson[sales.id].revenue += Number(order.total_amount || 0);
             }
         });
 
-        // Top products/services
         const productRevenue: Record<string, { name: string; quantity: number; revenue: number }> = {};
-        currentOrders?.forEach(order => {
+        completedOrders.forEach((order) => {
             (order.items as any[])?.forEach((item: any) => {
-                if (!productRevenue[item.item_name]) {
-                    productRevenue[item.item_name] = { name: item.item_name, quantity: 0, revenue: 0 };
+                const name = item.item_name || 'Không tên';
+                if (!productRevenue[name]) {
+                    productRevenue[name] = { name, quantity: 0, revenue: 0 };
                 }
-                productRevenue[item.item_name].quantity += 1;
-                productRevenue[item.item_name].revenue += item.total_price || 0;
+                productRevenue[name].quantity += Number(item.quantity || 1);
+                productRevenue[name].revenue += Number(item.total_price || 0);
             });
         });
 
@@ -1368,10 +1429,9 @@ router.get('/summary', authenticate, async (req: AuthenticatedRequest, res, next
             .sort((a, b) => b.revenue - a.revenue)
             .slice(0, 5);
 
-        // Get HR data
         const { data: users } = await supabaseAdmin
             .from('users')
-            .select('id, name, role, salary, status, department')
+            .select('id, name, role, salary, commission, status, department')
             .eq('status', 'active')
             .neq('role', 'customer');
 
@@ -1379,10 +1439,10 @@ router.get('/summary', authenticate, async (req: AuthenticatedRequest, res, next
             .from('departments')
             .select('id, name');
 
-        const deptMap = new Map(departments?.map(d => [d.id, d.name]) || []);
+        const deptMap = new Map(departments?.map((d) => [d.id, d.name]) || []);
 
         const hrByDepartment: Record<string, { name: string; count: number; salary: number }> = {};
-        users?.forEach(user => {
+        users?.forEach((user) => {
             const deptId = user.department || 'unknown';
             const deptName = deptMap.get(deptId) || 'Chưa phân bổ';
             if (!hrByDepartment[deptId]) {
@@ -1392,6 +1452,10 @@ router.get('/summary', authenticate, async (req: AuthenticatedRequest, res, next
             hrByDepartment[deptId].salary += user.salary || 0;
         });
 
+        const sourceTotal = Object.values(bySource).reduce((s, v) => s + v, 0);
+        const activeOrders = (currentOrders || []).filter((o) => o.status !== 'cancelled');
+        const completedCount = completedOrders.length;
+
         res.json({
             status: 'success',
             data: {
@@ -1399,25 +1463,56 @@ router.get('/summary', authenticate, async (req: AuthenticatedRequest, res, next
                     total: currentRevenue,
                     previousPeriod: previousRevenue,
                     growth: Number(growth.toFixed(1)),
-                    byMonth: Object.entries(byMonth).map(([month, value]) => ({ month, value })),
-                    bySource: Object.entries(bySource).map(([source, value]) => {
-                        const total = Object.values(bySource).reduce((s, v) => s + v, 0);
-                        return { source, value, percent: total > 0 ? Math.round((value / total) * 100) : 0 };
-                    }),
+                    invoiceCount: (currentInvoices || []).length,
+                    byMonth: Object.entries(byMonth)
+                        .map(([month, value]) => ({ month, value }))
+                        .sort((a, b) => Number(a.month.slice(1)) - Number(b.month.slice(1))),
+                    bySource: Object.entries(bySource).map(([source, value]) => ({
+                        source,
+                        value,
+                        percent: sourceTotal > 0 ? Math.round((value / sourceTotal) * 100) : 0,
+                    })),
+                },
+                accounting: {
+                    totalIncome,
+                    totalExpense,
+                    balance: totalIncome - totalExpense,
+                    previousIncome: prevIncome,
+                    previousExpense: prevExpense,
+                    previousBalance: prevIncome - prevExpense,
+                    incomeByCategory: Object.entries(incomeByCategory)
+                        .map(([category, amount]) => ({ category, amount }))
+                        .sort((a, b) => b.amount - a.amount),
+                    expenseByCategory: Object.entries(expenseByCategory)
+                        .map(([category, amount]) => ({ category, amount }))
+                        .sort((a, b) => b.amount - a.amount),
                 },
                 sales: {
-                    totalOrders: currentOrders?.filter(o => o.status !== 'cancelled').length || 0,
+                    totalOrders: activeOrders.length,
                     totalCustomers: uniqueCustomers,
-                    avgOrderValue: currentOrders?.length ? Math.round(currentRevenue / currentOrders.length) : 0,
+                    avgOrderValue: completedCount > 0
+                        ? Math.round(completedOrders.reduce((s, o) => s + Number(o.total_amount || 0), 0) / completedCount)
+                        : 0,
                     topProducts,
                     bySalesperson: Object.entries(bySalesperson)
-                        .map(([id, data]) => ({ id, ...data, commission: Math.round(data.revenue * 0.05) }))
+                        .map(([id, data]) => ({
+                            id,
+                            name: data.name,
+                            orders: data.orders,
+                            revenue: data.revenue,
+                            commission: Math.round(data.revenue * (data.commissionRate / 100)),
+                        }))
                         .sort((a, b) => b.revenue - a.revenue),
                 },
                 hr: {
                     totalEmployees: users?.length || 0,
                     totalSalary: users?.reduce((sum, u) => sum + (u.salary || 0), 0) || 0,
-                    byDepartment: Object.entries(hrByDepartment).map(([id, data]) => ({ id, dept: data.name, count: data.count, salary: data.salary })),
+                    byDepartment: Object.entries(hrByDepartment).map(([id, data]) => ({
+                        id,
+                        dept: data.name,
+                        count: data.count,
+                        salary: data.salary,
+                    })),
                 },
             },
         });
