@@ -238,7 +238,9 @@ body {
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  touch-action: pan-x;
+  /* Cho phép vuốt dọc trang khi bắt đầu gesture trên thanh cuộn ngang */
+  touch-action: pan-x pan-y;
+  overscroll-behavior-y: auto;
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -259,7 +261,8 @@ body {
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-y: auto;
   scroll-snap-type: x proximity;
 }
 

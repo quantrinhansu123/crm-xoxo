@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
     Dialog,
     DialogContent,
@@ -110,7 +110,85 @@ interface ProductDetailDialogProps {
     onRoomChange?: (roomId: string) => void;
 }
 
-export function MultiMediaUpload({ value, onChange, disabled, bucket = 'orders', folder = 'step1' }: { value: string[]; onChange: (urls: string[]) => void; disabled?: boolean; bucket?: string; folder?: string }) {
+function isMediaVideoUrl(url: string): boolean {
+    return !!(
+        url.match(/\.(mp4|webm|ogg|mov|m4v)(\?|$|#|&)/i) ||
+        url.startsWith('data:video') ||
+        url.includes('/video/')
+    );
+}
+
+function MediaThumb({ url, className }: { url: string; className?: string }) {
+    if (isMediaVideoUrl(url)) {
+        return (
+            <video
+                src={url}
+                className={className}
+                preload="metadata"
+                muted
+                playsInline
+                disablePictureInPicture
+            />
+        );
+    }
+    return <img src={url} alt="" className={className} loading="lazy" decoding="async" />;
+}
+
+const noopMediaChange = (_urls: string[]) => undefined;
+
+/** Isolated countdown so 1s ticks do not re-render the whole ProductDetailDialog. */
+function DueCountdownBadge({ dueAt }: { dueAt: string }) {
+    const [timeLeft, setTimeLeft] = useState('');
+
+    useEffect(() => {
+        if (!dueAt) return;
+
+        const updateCountdown = () => {
+            const diff = new Date(dueAt).getTime() - Date.now();
+            if (diff <= 0) {
+                setTimeLeft('ĐÃ QUÁ HẠN');
+                return;
+            }
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+            setTimeLeft(
+                `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+            );
+        };
+
+        updateCountdown();
+        const timer = setInterval(updateCountdown, 1000);
+        return () => clearInterval(timer);
+    }, [dueAt]);
+
+    if (!timeLeft) return null;
+
+    return (
+        <Badge
+            className={cn(
+                'font-mono text-sm px-2 py-0.5',
+                timeLeft === 'ĐÃ QUÁ HẠN' ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'
+            )}
+        >
+            {timeLeft}
+        </Badge>
+    );
+}
+
+export const MultiMediaUpload = React.memo(function MultiMediaUpload({
+    value,
+    onChange,
+    disabled,
+    bucket = 'orders',
+    folder = 'step1',
+}: {
+    value: string[];
+    onChange: (urls: string[]) => void;
+    disabled?: boolean;
+    bucket?: string;
+    folder?: string;
+}) {
     const [uploading, setUploading] = useState(false);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
@@ -151,42 +229,56 @@ export function MultiMediaUpload({ value, onChange, disabled, bucket = 'orders',
     return (
         <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 mt-2">
             {value?.map((url, i) => {
-                const isVideo = url.match(/\.(mp4|webm|ogg|mov|m4v)$|^data:video/i) || url.includes('/video/');
+                const isVideo = isMediaVideoUrl(url);
                 return (
-                    <div 
-                        key={i} 
-                        className="group relative aspect-square rounded-xl overflow-hidden border bg-white shadow-sm ring-1 ring-gray-100 cursor-zoom-in group"
+                    <div
+                        key={`${url}-${i}`}
+                        className="group relative aspect-square rounded-xl overflow-hidden border bg-white shadow-sm ring-1 ring-gray-100 cursor-zoom-in"
                         onClick={() => setPreviewUrl(url)}
                     >
                         {isVideo ? (
-                            <video src={url} className="w-full h-full object-cover" />
+                            <video
+                                src={url}
+                                className="w-full h-full object-cover"
+                                preload="metadata"
+                                muted
+                                playsInline
+                                disablePictureInPicture
+                            />
                         ) : (
-                            <img src={url} alt="" className="w-full h-full object-cover" />
+                            <img src={url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                         )}
-                        
+
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                             <Maximize2 className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md" />
                         </div>
 
                         {!disabled && (
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); removeFile(i); }} 
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeFile(i);
+                                }}
                                 className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity z-10"
                             >
                                 <XCircle className="w-3.5 h-3.5" />
                             </button>
                         )}
                         {isVideo && (
-                            <div className="absolute bottom-1 left-1 bg-black/40 px-1 rounded text-[8px] text-white font-bold uppercase">Video</div>
+                            <div className="absolute bottom-1 left-1 bg-black/40 px-1 rounded text-[8px] text-white font-bold uppercase">
+                                Video
+                            </div>
                         )}
                     </div>
                 );
             })}
             {!disabled && (
-                <label className={cn(
-                    "aspect-square rounded-xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all shadow-sm",
-                    uploading ? "opacity-50 pointer-events-none" : ""
-                )}>
+                <label
+                    className={cn(
+                        'aspect-square rounded-xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all shadow-sm',
+                        uploading ? 'opacity-50 pointer-events-none' : ''
+                    )}
+                >
                     {uploading ? <Loader2 className="w-5 h-5 animate-spin text-primary" /> : <Camera className="w-6 h-6 text-slate-300" />}
                     <span className="text-[9px] font-bold text-slate-400 mt-1 uppercase">Tải lên</span>
                     <input type="file" multiple accept="image/*,video/*" className="hidden" onChange={handleFileChange} />
@@ -196,18 +288,27 @@ export function MultiMediaUpload({ value, onChange, disabled, bucket = 'orders',
             <Dialog open={!!previewUrl} onOpenChange={(open) => !open && setPreviewUrl(null)}>
                 <DialogContent className="max-w-4xl p-0 overflow-hidden bg-transparent border-none shadow-none flex items-center justify-center">
                     <DialogTitle className="sr-only">Xem phương tiện</DialogTitle>
-                    {previewUrl && (
-                        previewUrl.match(/\.(mp4|webm|ogg|mov|m4v)$|^data:video/i) || previewUrl.includes('/video/') ? (
-                            <video src={previewUrl} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl bg-black" />
+                    {previewUrl &&
+                        (isMediaVideoUrl(previewUrl) ? (
+                            <video
+                                src={previewUrl}
+                                controls
+                                autoPlay
+                                playsInline
+                                className="max-w-full max-h-[90vh] rounded-lg shadow-2xl bg-black"
+                            />
                         ) : (
-                            <img src={previewUrl} alt="" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl bg-white" />
-                        )
-                    )}
+                            <img
+                                src={previewUrl}
+                                alt=""
+                                className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl bg-white"
+                            />
+                        ))}
                 </DialogContent>
             </Dialog>
         </div>
     );
-}
+});
 
 export function ProductDetailDialog({
     open,
@@ -239,6 +340,8 @@ export function ProductDetailDialog({
     const [saving, setSaving] = useState(false);
     const [showUpsellDialog, setShowUpsellDialog] = useState(false);
     const [optimisticAfterSaleStages, setOptimisticAfterSaleStages] = useState<Record<string, string>>({});
+    /** Theo dõi số tiền thu auto để không ghi đè khi user chỉnh tay */
+    const lastAutoCollectAmountRef = useRef(0);
     const { users, fetchUsers, fetchSales, fetchTechnicians } = useUsers();
     const { user } = useAuth();
 
@@ -324,6 +427,7 @@ export function ProductDetailDialog({
             
             setActiveImageIdx(0);
             setOptimisticAfterSaleStages({});
+            lastAutoCollectAmountRef.current = 0;
         }
     }, [open, order?.id, group?.product?.id, group?.services?.[0]?.id]); // Only re-init when dialog opens or identity changes
 
@@ -736,29 +840,7 @@ export function ProductDetailDialog({
                 });
             }
 
-            // Nếu có pending move (drag-and-drop yêu cầu thông tin), tự động chuyển trạng thái trước khi tạo phiếu thu
-            if (onConfirmAndMove) {
-                await onConfirmAndMove();
-                onOpenChange(false);
-            }
-            
-            // Nếu có phí ship và đang ở các bước liên quan đến giao hàng thì tạo phiếu thu
-            if (formData.delivery_fee && formData.delivery_fee > 0 && order && (roomId.startsWith('after2') || roomId.startsWith('after4'))) {
-                const { ordersApi } = await import('@/lib/api');
-                try {
-                    await ordersApi.createPayment(order.id, {
-                        content: 'Phí giao hàng',
-                        amount: formData.delivery_fee,
-                        notes: `Phí ship giao đồ cho đơn ${order.order_code || order.id}${formData.delivery_carrier ? `. Đơn vị VC: ${formData.delivery_carrier}` : ''}`,
-                        payment_method: (formData as any).delivery_payment_method || 'cash',
-                    });
-                    toast.success('Đã tạo phiếu thu cho phí ship');
-                } catch (error) {
-                    console.error('Lỗi tạo phiếu thu ship:', error);
-                }
-            }
-
-            // Tạo phiếu thu khi có số tiền thu ở bất kỳ bước hậu mãi nào
+            // Tạo phiếu thu nợ TRƯỚC khi chuyển bước / đóng dialog
             if ((formData as any).debt_collect_amount && (formData as any).debt_collect_amount > 0 && order && isAftersale) {
                 const { ordersApi } = await import('@/lib/api');
                 try {
@@ -777,6 +859,28 @@ export function ProductDetailDialog({
                     toast.error('Lỗi khi tạo phiếu thu nợ. Vui lòng thử lại trước khi chuyển bước.');
                     return;
                 }
+            }
+
+            // Nếu có phí ship và đang ở các bước liên quan đến giao hàng thì tạo phiếu thu
+            if (formData.delivery_fee && formData.delivery_fee > 0 && order && (roomId.startsWith('after2') || roomId.startsWith('after4'))) {
+                const { ordersApi } = await import('@/lib/api');
+                try {
+                    await ordersApi.createPayment(order.id, {
+                        content: 'Phí giao hàng',
+                        amount: formData.delivery_fee,
+                        notes: `Phí ship giao đồ cho đơn ${order.order_code || order.id}${formData.delivery_carrier ? `. Đơn vị VC: ${formData.delivery_carrier}` : ''}`,
+                        payment_method: (formData as any).delivery_payment_method || 'cash',
+                    });
+                    toast.success('Đã tạo phiếu thu cho phí ship');
+                } catch (error) {
+                    console.error('Lỗi tạo phiếu thu ship:', error);
+                }
+            }
+
+            // Chuyển bước sau khi đã thu nợ thành công
+            if (onConfirmAndMove) {
+                await onConfirmAndMove();
+                onOpenChange(false);
             }
 
             toast.success('Đã cập nhật thông tin thành công');
@@ -1130,33 +1234,6 @@ export function ProductDetailDialog({
         );
     };
 
-    const [timeLeft, setTimeLeft] = useState<string>('');
-
-    useEffect(() => {
-        if (!open || !dueAt) return;
-
-        const updateCountdown = () => {
-            const now = new Date().getTime();
-            const target = new Date(dueAt).getTime();
-            const diff = target - now;
-
-            if (diff <= 0) {
-                setTimeLeft('ĐÃ QUÁ HẠN');
-                return;
-            }
-
-            const hours = Math.floor(diff / (1000 * 60 * 60));
-            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
-            setTimeLeft(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
-        };
-
-        updateCountdown();
-        const timer = setInterval(updateCountdown, 1000);
-        return () => clearInterval(timer);
-    }, [open, dueAt]);
-
     const getStageInstructions = () => {
         if (roomId === 'step1') return "Kiểm tra kỹ tình trạng đồ của khách, chụp ảnh các vết trầy xước hoặc hư hỏng trước khi nhận.";
         if (roomId === 'step2') return "Gắn Tag định danh cho từng sản phẩm. Đảm bảo Tag không làm hỏng chất liệu sản phẩm.";
@@ -1167,7 +1244,7 @@ export function ProductDetailDialog({
         return "Hoàn thành các nhiệm vụ trong giai đoạn này và cập nhật trạng thái.";
     };
 
-    const getAllUniqueItems = () => {
+    const uniqueItems = useMemo(() => {
         if (!order) return [];
         const allItems = [
             ...(order.customer_items || []),
@@ -1175,9 +1252,11 @@ export function ProductDetailDialog({
             ...(order.items || [])
         ];
         return Array.from(new Map(allItems.map(item => [item.id, item])).values());
-    };
+    }, [order?.customer_items, order?.sale_items, order?.items]);
 
-    const uniqueItems = getAllUniqueItems();
+    const handleCompletionPhotosChange = useCallback((urls: string[]) => {
+        setFormData(prev => ({ ...prev, completion_photos: urls }));
+    }, []);
 
     const getItemAfterSaleStage = (item: any) =>
         optimisticAfterSaleStages[item.id] ?? resolveItemAfterSaleStage(item);
@@ -1260,9 +1339,19 @@ export function ProductDetailDialog({
         return invoiceProductDetails.filter((detail) => ['after2', 'after3', 'after4'].includes(detail.afterSaleStage)).length;
     }, [invoiceProductDetails]);
 
+    /** Chỉ auto-điền số tiền thu khi user chưa chỉnh tay (vẫn = lần auto trước hoặc 0). */
     useEffect(() => {
         if (!open || (!roomId.startsWith('after1_debt') && roomId !== 'after4')) return;
-        setFormData((prev) => ({ ...prev, debt_collect_amount: handoffCollectAmount } as any));
+        setFormData((prev) => {
+            const current = Number((prev as any).debt_collect_amount || 0);
+            const lastAuto = lastAutoCollectAmountRef.current;
+            const userEdited = current !== 0 && current !== lastAuto;
+            if (userEdited || current === handoffCollectAmount) {
+                return prev;
+            }
+            lastAutoCollectAmountRef.current = handoffCollectAmount;
+            return { ...prev, debt_collect_amount: handoffCollectAmount } as any;
+        });
     }, [open, roomId, handoffCollectAmount]);
 
     const getRemainingItemsCount = () => {
@@ -1306,12 +1395,7 @@ export function ProductDetailDialog({
                                         <Badge variant="outline" className="font-mono text-sm border-orange-200 text-orange-700 bg-orange-50 px-2 py-0.5">
                                             {formatDate(dueAt)}
                                         </Badge>
-                                        <Badge className={cn(
-                                            "font-mono text-sm px-2 py-0.5",
-                                            timeLeft === 'ĐÃ QUÁ HẠN' ? "bg-red-500 hover:bg-red-600" : "bg-blue-600 hover:bg-blue-700"
-                                        )}>
-                                            {timeLeft}
-                                        </Badge>
+                                        <DueCountdownBadge dueAt={dueAt} />
                                     </div>
                                 </div>
                             )}
@@ -1342,7 +1426,7 @@ export function ProductDetailDialog({
                                                 activeImageIdx === idx ? "border-primary ring-2 ring-primary/20" : "border-gray-100 opacity-70"
                                             )}
                                         >
-                                            <img src={img} alt="" className="w-full h-full object-cover" />
+                                            <MediaThumb url={img} className="w-full h-full object-cover" />
                                         </button>
                                     ))}
                                 </div>
@@ -1352,9 +1436,8 @@ export function ProductDetailDialog({
                                         className="flex-[3] rounded-2xl overflow-hidden border-4 border-white shadow-xl bg-gray-50 max-h-[220px] lg:max-h-[280px] aspect-video relative group shrink-0 cursor-zoom-in"
                                         onClick={() => setMainPreviewUrl(allImages[activeImageIdx])}
                                     >
-                                        <img
-                                            src={allImages[activeImageIdx]}
-                                            alt={`${productName}-${activeImageIdx}`}
+                                        <MediaThumb
+                                            url={allImages[activeImageIdx]}
                                             className="w-full h-full object-contain transition-transform group-hover:scale-105 duration-700"
                                         />
                                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
@@ -1382,7 +1465,7 @@ export function ProductDetailDialog({
                                                                     activeImageIdx === globalIdx ? "border-primary ring-2 ring-primary/20 scale-95" : "border-gray-100 opacity-60 hover:opacity-100"
                                                                 )}
                                                             >
-                                                                <img src={img} alt="" className="w-full h-full object-cover" />
+                                                                <MediaThumb url={img} className="w-full h-full object-cover" />
                                                             </button>
                                                         );
                                                     })}
@@ -1408,7 +1491,7 @@ export function ProductDetailDialog({
                                                                     activeImageIdx === globalIdx ? "border-purple-500 ring-2 ring-purple-500/20 scale-95" : "border-purple-50 opacity-60 hover:opacity-100"
                                                                 )}
                                                             >
-                                                                <img src={img} alt="" className="w-full h-full object-cover" />
+                                                                <MediaThumb url={img} className="w-full h-full object-cover" />
                                                             </button>
                                                         );
                                                     })}
@@ -1434,7 +1517,7 @@ export function ProductDetailDialog({
                                                                     activeImageIdx === globalIdx ? "border-blue-500 ring-2 ring-blue-500/20 scale-95" : "border-blue-50 opacity-60 hover:opacity-100"
                                                                 )}
                                                             >
-                                                                <img src={img} alt="" className="w-full h-full object-cover" />
+                                                                <MediaThumb url={img} className="w-full h-full object-cover" />
                                                             </button>
                                                         );
                                                     })}
@@ -1672,7 +1755,7 @@ export function ProductDetailDialog({
                                                 {originalImages.length > 0 ? (
                                                     <MultiMediaUpload
                                                         value={originalImages}
-                                                        onChange={() => undefined}
+                                                        onChange={noopMediaChange}
                                                         disabled
                                                         bucket="orders"
                                                         folder="received"
@@ -1703,7 +1786,7 @@ export function ProductDetailDialog({
 
                                                 <MultiMediaUpload
                                                     value={Array.isArray(formData.completion_photos) ? formData.completion_photos : []}
-                                                    onChange={(urls) => setFormData(prev => ({ ...prev, completion_photos: urls }))}
+                                                    onChange={handleCompletionPhotosChange}
                                                     bucket="orders"
                                                     folder="completion"
                                                 />
@@ -1873,7 +1956,7 @@ export function ProductDetailDialog({
                                                                                         await onUpdateOrder(
                                                                                             pickOrderLevelAfterSalePatch({
                                                                                                 debt_checked: formData.debt_checked,
-                                                                                                debt_checked_notes: formData.debt_checked_notes,
+                                                                                                debt_checked_notes: currentNotes,
                                                                                                 debt_checked_by_name: formData.debt_checked_by_name,
                                                                                             }),
                                                                                         );
@@ -1927,7 +2010,10 @@ export function ProductDetailDialog({
                                                                         onChange={(e) => {
                                                                             const val = e.target.value.replace(/\./g, "");
                                                                             if (/^\d*$/.test(val)) {
-                                                                                setFormData(prev => ({ ...prev, debt_collect_amount: val ? parseInt(val, 10) : 0 } as any));
+                                                                                const amount = val ? parseInt(val, 10) : 0;
+                                                                                // Đánh dấu đã chỉnh tay để không bị auto-overwrite
+                                                                                lastAutoCollectAmountRef.current = -1;
+                                                                                setFormData(prev => ({ ...prev, debt_collect_amount: amount } as any));
                                                                             }
                                                                         }}
                                                                     />
@@ -1962,7 +2048,10 @@ export function ProductDetailDialog({
                                                         <div className="space-y-1.5 pt-2">
                                                             <Label className="text-[10px] font-black text-purple-900 uppercase flex items-center gap-1.5">
                                                                 <Camera className="h-3.5 w-3.5 text-purple-500" />
-                                                                ẢNH THU TIỀN <span className="text-rose-500">*</span>
+                                                                ẢNH THU TIỀN
+                                                                {Number((formData as any).debt_collect_amount || 0) > 0 && (
+                                                                    <span className="text-rose-500">*</span>
+                                                                )}
                                                             </Label>
                                                             <p className="text-[9px] text-purple-500 font-medium italic leading-tight">
                                                                 Chụp ảnh khách đã chuyển khoản hoặc chụp tiền mặt làm bằng chứng
@@ -2356,7 +2445,7 @@ export function ProductDetailDialog({
                                                             <Badge variant="outline" className="bg-green-50 text-green-700">{order.hd_sent ? 'Đã gửi' : 'Chưa gửi'}</Badge>
                                                         </div>
                                                         {!!formData.hd_sent_photos?.length && (
-                                                            <MultiMediaUpload value={formData.hd_sent_photos} onChange={() => {}} disabled bucket="orders" folder="hd-feedback" />
+                                                            <MultiMediaUpload value={formData.hd_sent_photos} onChange={noopMediaChange} disabled bucket="orders" folder="hd-feedback" />
                                                         )}
                                                     </div>
                                                 )}
@@ -2398,7 +2487,7 @@ export function ProductDetailDialog({
                                                             <Badge variant="outline" className="bg-green-50 text-green-700">{order.feedback_requested ? 'Đã gửi' : 'Chưa gửi'}</Badge>
                                                         </div>
                                                         {!!formData.feedback_requested_photos?.length && (
-                                                            <MultiMediaUpload value={formData.feedback_requested_photos} onChange={() => {}} disabled bucket="orders" folder="hd-feedback" />
+                                                            <MultiMediaUpload value={formData.feedback_requested_photos} onChange={noopMediaChange} disabled bucket="orders" folder="hd-feedback" />
                                                         )}
                                                     </div>
                                                 )}
@@ -3072,8 +3161,8 @@ export function ProductDetailDialog({
                 <DialogContent className="max-w-5xl p-0 overflow-hidden bg-transparent border-none shadow-none flex items-center justify-center">
                     <DialogTitle className="sr-only">Xem phương tiện</DialogTitle>
                     {mainPreviewUrl && (
-                        mainPreviewUrl.match(/\.(mp4|webm|ogg|mov|m4v)$|^data:video/i) || mainPreviewUrl.includes('/video/') ? (
-                            <video src={mainPreviewUrl} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl bg-black" />
+                        isMediaVideoUrl(mainPreviewUrl) ? (
+                            <video src={mainPreviewUrl} controls autoPlay playsInline className="max-w-full max-h-[90vh] rounded-lg shadow-2xl bg-black" />
                         ) : (
                             <img src={mainPreviewUrl} alt="" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl bg-white" />
                         )

@@ -33,7 +33,6 @@ import {
     DialogFooter,
     DialogDescription
 } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -533,60 +532,63 @@ export function UpsellManagementPage() {
         return null;
     }
 
+    const tabTriggerClass =
+        'shrink-0 gap-1.5 rounded-lg px-3 text-xs data-[state=active]:bg-white data-[state=active]:shadow-sm sm:gap-2 sm:px-6 sm:text-sm';
+
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold flex items-center gap-2">
-                        <CheckCircle2 className="h-7 w-7 text-indigo-600" />
-                        Mục phê duyệt
+        <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden touch-pan-y sm:space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+                <div className="min-w-0">
+                    <h1 className="text-xl font-bold flex items-center gap-2 sm:text-2xl">
+                        <CheckCircle2 className="h-6 w-6 shrink-0 text-indigo-600 sm:h-7 sm:w-7" />
+                        <span className="truncate">Mục phê duyệt</span>
                     </h1>
-                    <p className="text-muted-foreground text-sm mt-1">
-                        Trung tâm phê duyệt tập trung cho các yêu cầu Upsell, Sửa đơn, Phụ kiện, Đối tác, Gia hạn và Nghỉ/Muộn.
+                    <p className="text-muted-foreground text-xs mt-1 sm:text-sm">
+                        Trung tâm phê duyệt Upsell, Sửa đơn, Phụ kiện, Đối tác, Gia hạn và Nghỉ/Muộn.
                     </p>
                 </div>
-                <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
+                <Button variant="outline" size="sm" onClick={loadData} disabled={loading} className="shrink-0 self-start sm:self-auto">
                     <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                     Tải lại ({totalPendingCount})
                 </Button>
             </div>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="bg-slate-100 p-1 h-12 w-full justify-start overflow-x-auto no-scrollbar md:w-auto md:overflow-visible rounded-xl mb-4">
-                    <TabsTrigger value="upsell" className="gap-2 px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                        <Sparkles className="h-4 w-4" />
-                        Duyệt Upsell
-                        {upsellOnlyTickets.length > 0 && <Badge variant="secondary" className="ml-1 bg-indigo-100 text-indigo-700">{upsellOnlyTickets.length}</Badge>}
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full min-w-0">
+                <TabsList className="mb-4 flex h-auto w-full min-w-0 items-stretch justify-start gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain touch-pan-x touch-pan-y no-scrollbar rounded-xl bg-slate-100 p-1 md:w-auto md:overflow-visible">
+                    <TabsTrigger value="upsell" className={tabTriggerClass}>
+                        <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="whitespace-nowrap">Upsell</span>
+                        {upsellOnlyTickets.length > 0 && <Badge variant="secondary" className="ml-0.5 bg-indigo-100 text-indigo-700">{upsellOnlyTickets.length}</Badge>}
                     </TabsTrigger>
-                    <TabsTrigger value="order-edit" className="gap-2 px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                        <Pencil className="h-4 w-4" />
-                        Sửa đơn
-                        {orderEditTickets.length > 0 && <Badge variant="secondary" className="ml-1 bg-fuchsia-100 text-fuchsia-700">{orderEditTickets.length}</Badge>}
+                    <TabsTrigger value="order-edit" className={tabTriggerClass}>
+                        <Pencil className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="whitespace-nowrap">Sửa đơn</span>
+                        {orderEditTickets.length > 0 && <Badge variant="secondary" className="ml-0.5 bg-fuchsia-100 text-fuchsia-700">{orderEditTickets.length}</Badge>}
                     </TabsTrigger>
-                    <TabsTrigger value="accessory" className="gap-2 px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                        <Package className="h-4 w-4" />
-                        Phụ kiện
-                        {accessoryRequests.length > 0 && <Badge variant="secondary" className="ml-1 bg-blue-100 text-blue-700">{accessoryRequests.length}</Badge>}
+                    <TabsTrigger value="accessory" className={tabTriggerClass}>
+                        <Package className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="whitespace-nowrap">Phụ kiện</span>
+                        {accessoryRequests.length > 0 && <Badge variant="secondary" className="ml-0.5 bg-blue-100 text-blue-700">{accessoryRequests.length}</Badge>}
                     </TabsTrigger>
-                    <TabsTrigger value="partner" className="gap-2 px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                        <Truck className="h-4 w-4" />
-                        Đối tác
-                        {partnerRequests.length > 0 && <Badge variant="secondary" className="ml-1 bg-amber-100 text-amber-700">{partnerRequests.length}</Badge>}
+                    <TabsTrigger value="partner" className={tabTriggerClass}>
+                        <Truck className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="whitespace-nowrap">Đối tác</span>
+                        {partnerRequests.length > 0 && <Badge variant="secondary" className="ml-0.5 bg-amber-100 text-amber-700">{partnerRequests.length}</Badge>}
                     </TabsTrigger>
-                    <TabsTrigger value="extension" className="gap-2 px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                        <Clock className="h-4 w-4" />
-                        Gia hạn
-                        {extensionRequests.length > 0 && <Badge variant="secondary" className="ml-1 bg-purple-100 text-purple-700">{extensionRequests.length}</Badge>}
+                    <TabsTrigger value="extension" className={tabTriggerClass}>
+                        <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="whitespace-nowrap">Gia hạn</span>
+                        {extensionRequests.length > 0 && <Badge variant="secondary" className="ml-0.5 bg-purple-100 text-purple-700">{extensionRequests.length}</Badge>}
                     </TabsTrigger>
-                    <TabsTrigger value="leave" className="gap-2 px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                        <Calendar className="h-4 w-4" />
-                        Nghỉ/Muộn
-                        {leaveRequests.length > 0 && <Badge variant="secondary" className="ml-1 bg-rose-100 text-rose-700">{leaveRequests.length}</Badge>}
+                    <TabsTrigger value="leave" className={tabTriggerClass}>
+                        <Calendar className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="whitespace-nowrap">Nghỉ</span>
+                        {leaveRequests.length > 0 && <Badge variant="secondary" className="ml-0.5 bg-rose-100 text-rose-700">{leaveRequests.length}</Badge>}
                     </TabsTrigger>
-                    <TabsTrigger value="voucher" className="gap-2 px-6 rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                        <Banknote className="h-4 w-4" />
-                        Thu Chi
-                        {pendingVouchers.length > 0 && <Badge variant="secondary" className="ml-1 bg-green-100 text-green-700">{pendingVouchers.length}</Badge>}
+                    <TabsTrigger value="voucher" className={tabTriggerClass}>
+                        <Banknote className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        <span className="whitespace-nowrap">Thu chi</span>
+                        {pendingVouchers.length > 0 && <Badge variant="secondary" className="ml-0.5 bg-green-100 text-green-700">{pendingVouchers.length}</Badge>}
                     </TabsTrigger>
                 </TabsList>
 
@@ -1017,20 +1019,24 @@ export function UpsellManagementPage() {
 
             {/* Upsell / Order Edit Detail Dialog */}
             <Dialog open={!!selectedTicket} onOpenChange={(open) => !open && closeDetailDialog()}>
-                <DialogContent className={cn("max-h-[85vh] flex flex-col p-0 overflow-hidden border-none shadow-2xl", isOrderEditTicket(selectedTicket) ? "max-w-5xl" : "max-w-2xl")}>
-                    <DialogHeader className={cn("px-6 py-4 text-white", isOrderEditTicket(selectedTicket) ? "bg-fuchsia-600" : "bg-indigo-600")}>
-                        <DialogTitle className="flex items-center gap-2">
+                <DialogContent className={cn(
+                    "flex max-h-[85dvh] w-[calc(100%-1rem)] max-w-2xl !flex-col gap-0 overflow-hidden border-none p-0 shadow-2xl",
+                    "top-[4dvh] left-[50%] !translate-x-[-50%] !translate-y-0 sm:top-[50%] sm:!translate-y-[-50%]",
+                    isOrderEditTicket(selectedTicket) && "sm:max-w-5xl",
+                )}>
+                    <DialogHeader className={cn("shrink-0 px-4 py-3 text-white sm:px-6 sm:py-4", isOrderEditTicket(selectedTicket) ? "bg-fuchsia-600" : "bg-indigo-600")}>
+                        <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
                             <Eye className="h-5 w-5" />
                             {isOrderEditTicket(selectedTicket) ? 'Duyệt yêu cầu Sửa đơn' : 'Chi tiết hạng mục Upsell'}
                         </DialogTitle>
-                        <DialogDescription className={isOrderEditTicket(selectedTicket) ? "text-fuchsia-100" : "text-indigo-100"}>
+                        <DialogDescription className={cn("text-xs sm:text-sm", isOrderEditTicket(selectedTicket) ? "text-fuchsia-100" : "text-indigo-100")}>
                             {isOrderEditTicket(selectedTicket)
                                 ? `Xem thông tin đơn trước và sau khi sửa trước khi phê duyệt ${getOrderCode(selectedTicket)}`
                                 : `Chi tiết các thay đổi được yêu cầu cho đơn hàng ${getOrderCode(selectedTicket)}`}
                         </DialogDescription>
                     </DialogHeader>
 
-                    <ScrollArea className="flex-1 p-6 bg-slate-50">
+                    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y p-4 sm:p-6 bg-slate-50 [-webkit-overflow-scrolling:touch]">
                         {isOrderEditTicket(selectedTicket) ? (() => {
                             const payload = getOrderEditPayload(selectedTicket);
                             const beforeCustomerItems = selectedOrderBefore?.customer_items || [];
@@ -1150,12 +1156,12 @@ export function UpsellManagementPage() {
                             </div>
                         </div>
                         )}
-                    </ScrollArea>
+                    </div>
 
-                    <DialogFooter className="px-6 py-4 bg-white border-t gap-3 flex sm:justify-end">
-                        <Button variant="outline" onClick={closeDetailDialog}>Đóng</Button>
-                        <Button variant="outline" className="text-red-600 border-red-200" onClick={() => onRejectClick(selectedTicket.id, isOrderEditTicket(selectedTicket) ? 'order_edit' : 'upsell')} disabled={processing}>Từ chối</Button>
-                        <Button className="bg-emerald-600 hover:bg-emerald-700 font-bold" onClick={() => isOrderEditTicket(selectedTicket) ? handleApproveOrderEdit(selectedTicket.id) : handleApproveUpsell(selectedTicket.id)} disabled={processing || loadingOrderBefore}>
+                    <DialogFooter className="shrink-0 flex flex-col gap-2 border-t bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:flex-row sm:justify-end sm:px-6 sm:py-4">
+                        <Button variant="outline" onClick={closeDetailDialog} className="w-full sm:w-auto">Đóng</Button>
+                        <Button variant="outline" className="w-full text-red-600 border-red-200 sm:w-auto" onClick={() => onRejectClick(selectedTicket.id, isOrderEditTicket(selectedTicket) ? 'order_edit' : 'upsell')} disabled={processing}>Từ chối</Button>
+                        <Button className="w-full bg-emerald-600 hover:bg-emerald-700 font-bold sm:w-auto" onClick={() => isOrderEditTicket(selectedTicket) ? handleApproveOrderEdit(selectedTicket.id) : handleApproveUpsell(selectedTicket.id)} disabled={processing || loadingOrderBefore}>
                             {isOrderEditTicket(selectedTicket) ? 'Phê duyệt & Áp dụng sửa đơn' : 'Phê duyệt & Cập nhật đơn hàng'}
                         </Button>
                     </DialogFooter>
