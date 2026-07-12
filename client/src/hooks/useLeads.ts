@@ -11,10 +11,10 @@ export interface Lead {
     address?: string;
 
     // Channel & Source
-    source?: string;           // Legacy field
-    channel?: string;          // New: facebook, zalo, website, referral, etc.
-    lead_id?: string;          // External lead ID
-    lead_type?: string;        // individual, company, etc.
+    source?: string;
+    channel?: string;
+    lead_id?: string;
+    lead_type?: string;
 
     // Status & Pipeline
     status: string;
@@ -23,10 +23,10 @@ export interface Lead {
     round_index?: number;
 
     // Assignment
-    assigned_to?: string;      // Legacy UUID field
+    assigned_to?: string;
     assigned_user?: { id: string; name: string; email: string };
-    sale_token?: string;       // New: Token/ID of assigned salesperson
-    owner_sale?: string;       // New: Token/ID of lead owner
+    sale_token?: string;
+    owner_sale?: string;
 
     // FB Messenger Integration
     fb_thread_id?: string;
@@ -36,9 +36,9 @@ export interface Lead {
     last_message_mid?: string;
     last_message_text?: string;
     last_message_time?: string;
-    last_actor?: string;       // 'lead' or 'sale'
+    last_actor?: string;
 
-    // Delivery & Appointment (new)
+    // Delivery & Appointment
     delivery_method?: 'direct' | 'ship';
     tracking_code?: string;
     shipping_fee?: number;
@@ -46,32 +46,32 @@ export interface Lead {
     t_due?: string;
     t_last_inbound?: string;
     t_last_outbound?: string;
-    sla_state?: string;        // 'ok', 'warning', 'overdue'
+    sla_state?: string;
 
     // Notes & Metadata
-    notes?: string;            // Legacy
-    note?: string;             // New
+    notes?: string;
+    note?: string;
     last_contact?: string;
     created_at: string;
     updated_at?: string;
 
-    // Facebook Profile (new)
+    // Facebook Profile
     fb_profile_name?: string;
     fb_profile_pic?: string | null;
     fb_link?: string;
 
-    // AI Analysis (new)
+    // AI Analysis
     lead_score?: number;
     loss_risk?: string;
     next_action?: string;
     customer_insight?: string;
 
-    // Follow-up (new)
+    // Follow-up
     next_followup_time?: string;
     care_note?: string;
     avatar_url?: string | null;
 
-    // Sale Memory (new from n8n)
+    // Sale Memory
     sale_memory?: string;
     quoted_price_last?: string;
     quoted_service?: string;
@@ -79,6 +79,19 @@ export interface Lead {
     deposit_info?: string;
     eta_note?: string;
 }
+
+type FetchParams = {
+    status?: string;
+    source?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+};
+
+type FetchOptions = {
+    /** Không bật full-page loading (dùng cho poll nền) */
+    silent?: boolean;
+};
 
 export interface UseLeadsReturn {
     leads: Lead[];
@@ -90,13 +103,7 @@ export interface UseLeadsReturn {
         total: number;
         totalPages: number;
     };
-    fetchLeads: (params?: {
-        status?: string;
-        source?: string;
-        search?: string;
-        page?: number;
-        limit?: number;
-    }) => Promise<void>;
+    fetchLeads: (params?: FetchParams, options?: FetchOptions) => Promise<void>;
     createLead: (data: Partial<Lead>) => Promise<Lead>;
     updateLead: (id: string, data: Partial<Lead>) => Promise<Lead>;
     deleteLead: (id: string) => Promise<void>;
@@ -105,7 +112,7 @@ export interface UseLeadsReturn {
 
 export function useLeads(): UseLeadsReturn {
     const [leads, setLeads] = useState<Lead[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [pagination, setPagination] = useState({
         page: 1,
@@ -114,32 +121,48 @@ export function useLeads(): UseLeadsReturn {
         totalPages: 0,
     });
 
-    const fetchLeads = useCallback(async (params?: {
-        status?: string;
-        source?: string;
-        search?: string;
-        page?: number;
-        limit?: number;
-    }) => {
-        setLoading(true);
+    const lastParamsRef = useRef<FetchParams>({ limit: 500 });
+    const fetchSeqRef = useRef(0);
+
+    const fetchLeads = useCallback(async (params?: FetchParams, options?: FetchOptions) => {
+        const silent = !!options?.silent;
+        const seq = ++fetchSeqRef.current;
+        if (params) {
+            lastParamsRef.current = params;
+        }
+
+        if (!silent) setLoading(true);
         setError(null);
         try {
-            const response = await leadsApi.getAll(params);
-            const data = response.data.data;
-            setLeads(data.leads || []);
-            if (data.pagination) {
+            const response = await leadsApi.getAll(lastParamsRef.current);
+            // Bỏ qua response cũ nếu đã có request mới hơn
+            if (seq !== fetchSeqRef.current) return;
+
+            const data = response.data?.data;
+            const nextLeads = Array.isArray(data?.leads) ? data.leads : [];
+            setLeads(nextLeads);
+            if (data?.pagination) {
                 setPagination({
                     page: data.pagination.page,
                     limit: data.pagination.limit,
                     total: data.pagination.total,
-                    totalPages: data.pagination.totalPages || Math.ceil(data.pagination.total / data.pagination.limit)
+                    totalPages:
+                        data.pagination.totalPages ||
+                        Math.ceil(data.pagination.total / data.pagination.limit),
                 });
             }
         } catch (err: any) {
+            if (seq !== fetchSeqRef.current) return;
             const message = err.response?.data?.message || 'Lỗi khi tải danh sách leads';
             setError(message);
         } finally {
-            setLoading(false);
+            if (seq === fetchSeqRef.current && !silent) {
+                setLoading(false);
+            }
+            // Silent request vẫn tắt loading nếu đây là request mới nhất và đang loading từ lần đầu
+            if (seq === fetchSeqRef.current && silent) {
+                setLoading((prev) => (prev ? false : prev));
+            }
         }
     }, []);
 
@@ -173,7 +196,7 @@ export function useLeads(): UseLeadsReturn {
 
             const response = await leadsApi.create(payload);
             const newLead = response.data.data!.lead;
-            await fetchLeads({ limit: 500 });
+            await fetchLeads(lastParamsRef.current);
             return newLead;
         } catch (err: any) {
             const message = err.response?.data?.message || 'Lỗi khi tạo lead';
@@ -185,65 +208,49 @@ export function useLeads(): UseLeadsReturn {
     }, [fetchLeads]);
 
     const updateLead = useCallback(async (id: string, data: Partial<Lead>): Promise<Lead> => {
-        setLoading(true);
         setError(null);
         try {
             const response = await leadsApi.update(id, data);
             const updatedLead = response.data.data!.lead;
-            setLeads(prev => prev.map(l => l.id === id ? updatedLead : l));
+            setLeads((prev) => prev.map((l) => (l.id === id ? updatedLead : l)));
             return updatedLead;
         } catch (err: any) {
             const message = err.response?.data?.message || 'Lỗi khi cập nhật lead';
             setError(message);
             throw new Error(message);
-        } finally {
-            setLoading(false);
         }
     }, []);
 
     const deleteLead = useCallback(async (id: string): Promise<void> => {
-        setLoading(true);
         setError(null);
         try {
             await leadsApi.delete(id);
-            await fetchLeads({ limit: 500 });
+            setLeads((prev) => prev.filter((l) => l.id !== id));
         } catch (err: any) {
             const message = err.response?.data?.message || 'Lỗi khi xóa lead';
             setError(message);
             throw new Error(message);
-        } finally {
-            setLoading(false);
         }
-    }, [fetchLeads]);
+    }, []);
 
     const convertLead = useCallback(async (id: string): Promise<any> => {
-        setLoading(true);
         setError(null);
         try {
             const response = await leadsApi.convert(id);
-            // Update lead status in local state
-            setLeads(prev => prev.map(l => l.id === id ? { ...l, status: 'converted' } : l));
+            setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, status: 'converted' } : l)));
             return response.data.data!.customer;
         } catch (err: any) {
             const message = err.response?.data?.message || 'Lỗi khi chuyển đổi lead';
             setError(message);
             throw new Error(message);
-        } finally {
-            setLoading(false);
         }
     }, []);
 
-    const lastParamsRef = useRef<{status?: string; source?: string; search?: string; page?: number; limit?: number}>({});
-    
-    const fetchLeadsWithParams = useCallback(async (params?: {status?: string; source?: string; search?: string; page?: number; limit?: number}) => {
-        lastParamsRef.current = params || {};
-        await fetchLeads(params);
-    }, [fetchLeads]);
-
+    // Poll nền im lặng — không bật lại full-page loading
     useEffect(() => {
         const interval = setInterval(() => {
-            fetchLeads(lastParamsRef.current);
-        }, 5000);
+            fetchLeads(undefined, { silent: true });
+        }, 15000);
         return () => clearInterval(interval);
     }, [fetchLeads]);
 
@@ -252,7 +259,7 @@ export function useLeads(): UseLeadsReturn {
         loading,
         error,
         pagination,
-        fetchLeads: fetchLeadsWithParams,
+        fetchLeads,
         createLead,
         updateLead,
         deleteLead,
