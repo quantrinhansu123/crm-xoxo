@@ -841,7 +841,7 @@ function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDe
         appointmentTime &&
         appointmentTime.getTime() < Date.now();
     
-    const finalOverdue = isOverdue || isAppointmentOverdue || isAppointmentToday;
+    const finalOverdue = !!(isOverdue || isAppointmentOverdue || isAppointmentToday);
 
     return (
         <div
