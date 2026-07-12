@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import api from '@/lib/api';
+import { buildDriveMediaUrl } from '@/lib/driveMedia';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -57,12 +58,7 @@ export async function uploadFile(
         }
 
         const driveId = drive?.driveFileId;
-        const playUrl =
-            drive?.playUrl ||
-            (driveId ? `https://drive.google.com/uc?export=download&id=${driveId}` : null) ||
-            drive?.driveLink;
-
-        if (!playUrl) {
+        if (!driveId && !drive?.playUrl && !drive?.driveLink) {
             throw new Error('Drive không trả về link file');
         }
 
@@ -70,7 +66,12 @@ export async function uploadFile(
         await supabase.storage.from(bucket).remove([tempPath]);
         tempPath = null;
 
-        return { url: `${playUrl}#${fileName}`, error: null };
+        // Dùng /preview để bấm xem được trong CRM (iframe)
+        const url = driveId
+            ? buildDriveMediaUrl(driveId, fileName)
+            : `${drive?.playUrl || drive?.driveLink}#${fileName}`;
+
+        return { url, error: null };
     } catch (error: any) {
         if (tempPath) {
             try {

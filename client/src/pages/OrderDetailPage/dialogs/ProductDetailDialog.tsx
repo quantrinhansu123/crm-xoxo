@@ -51,6 +51,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { canOperateWorkflow } from '@/lib/sensitivePermissions';
 import { getAssignedSaleNames, getAssignedTechnicianNames } from '../utils/staff';
 import { StaffNameSelect } from '@/components/common/StaffNameSelect';
+import {
+    getDrivePreviewUrl,
+    getDriveThumbnailUrl,
+    getDriveViewUrl,
+    isDriveUrl,
+} from '@/lib/driveMedia';
 
 function parsePhotoUrls(photos: unknown): string[] {
     if (Array.isArray(photos)) {
@@ -114,11 +120,32 @@ function isMediaVideoUrl(url: string): boolean {
     return !!(
         url.match(/\.(mp4|webm|ogg|mov|m4v)(\?|$|#|&)/i) ||
         url.startsWith('data:video') ||
-        url.includes('/video/')
+        url.includes('/video/') ||
+        (isDriveUrl(url) && /\.(mp4|webm|ogg|mov|m4v)(#|$)/i.test(url))
     );
 }
 
 function MediaThumb({ url, className }: { url: string; className?: string }) {
+    if (isDriveUrl(url)) {
+        const thumb = getDriveThumbnailUrl(url);
+        const isVideo = isMediaVideoUrl(url);
+        return (
+            <div className={cn('relative w-full h-full bg-slate-900', className?.includes('object-') ? '' : '')}>
+                {thumb ? (
+                    <img src={thumb} alt="" className={className || 'w-full h-full object-cover'} loading="lazy" />
+                ) : (
+                    <div className={cn('w-full h-full bg-slate-800', className)} />
+                )}
+                {isVideo && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="rounded-full bg-black/55 p-2">
+                            <Maximize2 className="w-4 h-4 text-white" />
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
     if (isMediaVideoUrl(url)) {
         return (
             <video
@@ -132,6 +159,53 @@ function MediaThumb({ url, className }: { url: string; className?: string }) {
         );
     }
     return <img src={url} alt="" className={className} loading="lazy" decoding="async" />;
+}
+
+function MediaPreviewDialog({
+    url,
+    open,
+    onOpenChange,
+}: {
+    url: string | null;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+}) {
+    if (!url) return null;
+    const drivePreview = getDrivePreviewUrl(url);
+    const driveView = getDriveViewUrl(url);
+    const isVideo = isMediaVideoUrl(url);
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-w-4xl p-0 overflow-hidden bg-transparent border-none shadow-none flex flex-col items-center justify-center gap-3">
+                <DialogTitle className="sr-only">Xem phương tiện</DialogTitle>
+                {drivePreview ? (
+                    <>
+                        <iframe
+                            src={drivePreview}
+                            title="Google Drive preview"
+                            className="w-[min(90vw,900px)] h-[min(80vh,640px)] rounded-lg bg-black border-0"
+                            allow="autoplay"
+                        />
+                        {driveView && (
+                            <a
+                                href={driveView}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm text-white underline underline-offset-2"
+                            >
+                                Mở trên Google Drive
+                            </a>
+                        )}
+                    </>
+                ) : isVideo ? (
+                    <video src={url} controls autoPlay playsInline className="max-w-full max-h-[90vh] rounded-lg shadow-2xl bg-black" />
+                ) : (
+                    <img src={url} alt="" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl bg-white" />
+                )}
+            </DialogContent>
+        </Dialog>
+    );
 }
 
 const noopMediaChange = (_urls: string[]) => undefined;
@@ -236,18 +310,7 @@ export const MultiMediaUpload = React.memo(function MultiMediaUpload({
                         className="group relative aspect-square rounded-xl overflow-hidden border bg-white shadow-sm ring-1 ring-gray-100 cursor-zoom-in"
                         onClick={() => setPreviewUrl(url)}
                     >
-                        {isVideo ? (
-                            <video
-                                src={url}
-                                className="w-full h-full object-cover"
-                                preload="metadata"
-                                muted
-                                playsInline
-                                disablePictureInPicture
-                            />
-                        ) : (
-                            <img src={url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
-                        )}
+                        <MediaThumb url={url} className="w-full h-full object-cover" />
 
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                             <Maximize2 className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md" />
@@ -285,27 +348,11 @@ export const MultiMediaUpload = React.memo(function MultiMediaUpload({
                 </label>
             )}
 
-            <Dialog open={!!previewUrl} onOpenChange={(open) => !open && setPreviewUrl(null)}>
-                <DialogContent className="max-w-4xl p-0 overflow-hidden bg-transparent border-none shadow-none flex items-center justify-center">
-                    <DialogTitle className="sr-only">Xem phương tiện</DialogTitle>
-                    {previewUrl &&
-                        (isMediaVideoUrl(previewUrl) ? (
-                            <video
-                                src={previewUrl}
-                                controls
-                                autoPlay
-                                playsInline
-                                className="max-w-full max-h-[90vh] rounded-lg shadow-2xl bg-black"
-                            />
-                        ) : (
-                            <img
-                                src={previewUrl}
-                                alt=""
-                                className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl bg-white"
-                            />
-                        ))}
-                </DialogContent>
-            </Dialog>
+            <MediaPreviewDialog
+                url={previewUrl}
+                open={!!previewUrl}
+                onOpenChange={(open) => !open && setPreviewUrl(null)}
+            />
         </div>
     );
 });
@@ -3157,18 +3204,11 @@ export function ProductDetailDialog({
                 }}
             />
 
-            <Dialog open={!!mainPreviewUrl} onOpenChange={(open) => !open && setMainPreviewUrl(null)}>
-                <DialogContent className="max-w-5xl p-0 overflow-hidden bg-transparent border-none shadow-none flex items-center justify-center">
-                    <DialogTitle className="sr-only">Xem phương tiện</DialogTitle>
-                    {mainPreviewUrl && (
-                        isMediaVideoUrl(mainPreviewUrl) ? (
-                            <video src={mainPreviewUrl} controls autoPlay playsInline className="max-w-full max-h-[90vh] rounded-lg shadow-2xl bg-black" />
-                        ) : (
-                            <img src={mainPreviewUrl} alt="" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl bg-white" />
-                        )
-                    )}
-                </DialogContent>
-            </Dialog>
+            <MediaPreviewDialog
+                url={mainPreviewUrl}
+                open={!!mainPreviewUrl}
+                onOpenChange={(open) => !open && setMainPreviewUrl(null)}
+            />
 
             {/* Cảnh báo chưa xác nhận trả phụ kiện */}
             <Dialog open={showAccessoriesReturnWarning} onOpenChange={setShowAccessoriesReturnWarning}>

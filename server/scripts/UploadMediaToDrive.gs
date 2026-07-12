@@ -87,7 +87,7 @@ function fileResult_(file) {
     id: file.getId(),
     name: file.getName(),
     link: file.getUrl(),
-    playUrl: 'https://drive.google.com/uc?export=download&id=' + file.getId()
+    playUrl: 'https://drive.google.com/file/d/' + file.getId() + '/preview'
   };
 }
 

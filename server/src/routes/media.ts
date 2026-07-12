@@ -34,7 +34,8 @@ async function callAppsScript(payload: Record<string, unknown>) {
         skipped: false as const,
         driveFileId: data.id as string,
         driveLink: data.link as string,
-        playUrl: (data.playUrl || data.link) as string,
+        playUrl: (data.playUrl ||
+            (data.id ? `https://drive.google.com/file/d/${data.id}/preview` : data.link)) as string,
         fileName: data.name as string,
     };
 }
