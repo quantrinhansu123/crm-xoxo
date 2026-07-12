@@ -126,7 +126,8 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
                 assigned_to_user: users!leads_assigned_to_fkey(name, telegram_chat_id)
             `)
             .eq('sla_state', 'ACTIVE')
-            .not('assigned_to', 'is', null);
+            .not('assigned_to', 'is', null)
+            .not('pipeline_stage', 'in', '("chot_don","huy","fail")');
 
         if (error) {
             throw new ApiError('Lỗi truy vấn Leads SLA: ' + error.message, 500);
@@ -134,23 +135,24 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
 
         const now = new Date();
 
-        // Format data và tính toán hành động using getVirtualTimeLeft
+        // Format data — cùng ngưỡng WARN/RECLAIM với checkSlaCron (Rule 1+2)
         const leads = data.map((lead: any) => {
             const deadline = lead.current_deadline_at ? new Date(lead.current_deadline_at) : now;
             const createdAt = lead.created_at ? new Date(lead.created_at) : now;
             const ruleIndex = lead.current_rule_index || 0;
             const slaMinutes = SLA_CYCLES[ruleIndex] || 3;
-            const warnMinutes = Math.floor(slaMinutes * 0.7); // Warn at 70% of SLA
+            const warnMinutes = slaMinutes <= 3 ? 1.5 : 45;
 
-            // Use getVirtualTimeLeft to account for night pause
             const timeLeftMins = getVirtualTimeLeft(now, deadline, createdAt);
-            const timeUsed = slaMinutes - timeLeftMins;
 
             let action_type = 'NONE';
 
-            if (timeLeftMins <= 0) {
+            // RECLAIM chỉ khi mốc 3 phút (index 0) thủng — mốc dài chỉ WARN (cron sẽ chuyển mốc)
+            if (timeLeftMins <= 0 && ruleIndex === 0) {
                 action_type = 'RECLAIM';
-            } else if (timeLeftMins <= warnMinutes) {
+            } else if (timeLeftMins <= 0 && ruleIndex > 0) {
+                action_type = 'WARN';
+            } else if (timeLeftMins > 0 && timeLeftMins <= warnMinutes) {
                 action_type = 'WARN';
             }
 
@@ -805,7 +807,7 @@ async function handleLeadUpdate(data: any) {
     // 1. Tìm leadId
     let leadId = id;
     let currentLead: any = null;
-    const leadSlaSelect = 'id, assigned_to, name, facebook_name, created_at, round_index, t_last_inbound, t_last_outbound, current_deadline_at, current_rule_index, sla_state, owner_sale';
+    const leadSlaSelect = 'id, assigned_to, name, facebook_name, created_at, round_index, t_last_inbound, t_last_outbound, current_deadline_at, current_rule_index, sla_state, owner_sale, pipeline_stage';
 
     if (!leadId) {
         // Search by fb_thread_id first

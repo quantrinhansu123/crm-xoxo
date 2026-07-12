@@ -4,6 +4,7 @@ import { ApiError } from '../middleware/errorHandler.js';
 import { authenticate, AuthenticatedRequest, requireSale } from '../middleware/auth.js';
 import { autoLogKpiViolation } from '../utils/kpiViolationLogger.js';
 import { notifyCrmMaster } from '../utils/webhookNotifier.js';
+import { on_lead_assigned, isSlaEndStage } from '../utils/slaManager.js';
 
 const router = Router();
 
@@ -210,6 +211,13 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
         if (notes !== undefined) updateData.notes = notes;
         if (status) updateData.status = status;
         if (pipeline_stage) updateData.pipeline_stage = pipeline_stage;
+
+        // Sang Chốt đơn / Hủy / Fail → dừng Rule SLA
+        const nextStage = pipeline_stage || status;
+        if (nextStage && isSlaEndStage(String(nextStage))) {
+            updateData.sla_state = 'STOPPED';
+            updateData.current_deadline_at = null;
+        }
         if (assigned_to) updateData.assigned_to = assigned_to;
         if (dob !== undefined) updateData.dob = dob;
         if (req.body.fb_link !== undefined) updateData.fb_link = req.body.fb_link;
@@ -281,6 +289,11 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                 deductPoint: 0,
                 note: `Lead được chuyển từ sale cũ bởi ${(req as any).user?.name || (req as any).user?.id || 'unknown'}`
             });
+        }
+
+        // Rule: gán/chuyển sale → khởi động lại SLA mốc 3 phút
+        if (assigned_to && assigned_to !== oldAssignedTo) {
+            await on_lead_assigned(id, assigned_to);
         }
 
         notifyCrmMaster('lead.updated', { lead });

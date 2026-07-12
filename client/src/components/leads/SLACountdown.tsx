@@ -106,19 +106,18 @@ export function SLACountdown({ lead, size = 'md', className }: SLACountdownProps
             colorClass = 'bg-red-600 text-white';
             isBlinking = true;
         } else {
-            const ratio = remainingSec / totalSec;
-            if (ratio <= 0.5) {
-                // Warning phase
-                colorClass = 'bg-amber-500 text-white';
-                
-                // Alert threshold phase (bắt đầu nhấp nháy đỏ)
-                let warnThresholdSec = 45 * 60; // 45 phút = 2700 giây cho tất cả mốc dài
-                if (currentMilestone <= 3) warnThresholdSec = 90; // 90 giây cho mốc 3 phút
+            // Đỏ chớp: 90s cuối (mốc 3p) hoặc 45p cuối (mốc dài) — ưu tiên trước ngưỡng 50%
+            let warnThresholdSec = 45 * 60;
+            if (currentMilestone <= 3) warnThresholdSec = 90;
 
-                if (remainingSec <= warnThresholdSec) {
-                    colorClass = 'bg-red-500 text-white';
-                    isBlinking = true;
-                }
+            const ratio = remainingSec / totalSec;
+            if (remainingSec <= warnThresholdSec) {
+                colorClass = 'bg-red-500 text-white';
+                isBlinking = true;
+            } else if (ratio <= 0.5) {
+                colorClass = 'bg-amber-500 text-white';
+            } else {
+                colorClass = 'bg-emerald-500 text-white';
             }
         }
 
