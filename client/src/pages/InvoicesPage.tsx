@@ -270,14 +270,46 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
 
     const { canEdit, canDelete } = useViewActionForRoles('invoices', ['manager', 'admin', 'accountant', 'sale']);
 
+    const applyStatsFromRows = useCallback((rows: Invoice[]) => {
+        let draft = 0;
+        let pending = 0;
+        let paid = 0;
+        let cancelled = 0;
+        let salesAmount = 0;
+        let paidAmount = 0;
+
+        for (const inv of rows) {
+            const amount = Number(inv.total_amount || 0) || 0;
+            const status = String(inv.status || '');
+            if (status === 'draft') draft += 1;
+            else if (status === 'pending') pending += 1;
+            else if (status === 'paid') paid += 1;
+            else if (status === 'cancelled') cancelled += 1;
+
+            if (status !== 'cancelled') salesAmount += amount;
+            if (status === 'paid') paidAmount += amount;
+        }
+
+        setStats({
+            total: rows.length,
+            draft,
+            pending,
+            paid,
+            cancelled,
+            salesAmount,
+            paidAmount,
+        });
+    }, []);
+
     const fetchInvoiceStats = useCallback(async () => {
+        const dateParams: { from_date?: string; to_date?: string } = {};
+        if (fromDate) dateParams.from_date = fromDate;
+        if (toDate) dateParams.to_date = toDate;
+
         try {
-            const params: Record<string, string> = {};
-            if (fromDate) params.from_date = fromDate;
-            if (toDate) params.to_date = toDate;
-            const response = await invoicesApi.getStats(params);
-            const data = response.data.data;
-            if (data) {
+            const response = await invoicesApi.getStats(dateParams);
+            const data = response.data?.data;
+            if (data && typeof data.total === 'number') {
                 setStats({
                     total: data.total || 0,
                     draft: data.draft || 0,
@@ -287,11 +319,20 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                     salesAmount: Number(data.salesAmount || data.totalAmount || 0),
                     paidAmount: Number(data.paidAmount || 0),
                 });
+                return;
             }
         } catch (err) {
-            console.error('Failed to load invoice stats', err);
+            console.warn('Invoice stats API unavailable, falling back to list aggregate', err);
         }
-    }, [fromDate, toDate]);
+
+        // Fallback khi Render chưa có /invoices/stats (hoặc route bị /:id nuốt)
+        try {
+            const response = await invoicesApi.getAll({ ...dateParams, limit: 500 });
+            applyStatsFromRows(response.data.data?.invoices || []);
+        } catch (err) {
+            console.error('Failed to load invoice stats fallback', err);
+        }
+    }, [fromDate, toDate, applyStatsFromRows]);
 
     const fetchInvoices = useCallback(async () => {
         try {
@@ -300,7 +341,8 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             if (fromDate) params.from_date = fromDate;
             if (toDate) params.to_date = toDate;
             const response = await invoicesApi.getAll(params);
-            setInvoices(response.data.data?.invoices || []);
+            const list = response.data.data?.invoices || [];
+            setInvoices(list);
         } catch (err: any) {
             setError(err.response?.data?.message || 'Lỗi khi tải danh sách hóa đơn');
         }
