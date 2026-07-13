@@ -4,25 +4,19 @@ import { ApiError } from '../middleware/errorHandler.js';
 
 const router = Router();
 
-/** Tránh đụng Express.Response khi tsc resolve type `Response` sai trên CI */
-interface HttpFetchResponse {
-    ok: boolean;
-    status: number;
-    text(): Promise<string>;
-}
-
 async function callAppsScript(payload: Record<string, unknown>) {
     const appsScriptUrl = process.env.GOOGLE_DRIVE_APPSCRIPT_URL || '';
     if (!appsScriptUrl) {
         return { skipped: true as const };
     }
 
-    const response = (await fetch(appsScriptUrl, {
+    // `any` — CI lẫn Fetch Response với Express.Response
+    const response: any = await (globalThis as any).fetch(appsScriptUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         redirect: 'follow',
-    })) as unknown as HttpFetchResponse;
+    });
 
     const text = await response.text();
     let data: any = null;
