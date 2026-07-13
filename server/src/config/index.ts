@@ -1,9 +1,8 @@
 import dotenv from 'dotenv';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const configDir = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(configDir, '../../.env') });
+// Load server/.env regardless of ESM/CJS emit (CI builds CommonJS via NodeNext).
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 export const config = {
     port: parseInt(process.env.PORT || '3005', 10),
@@ -21,8 +20,8 @@ export const config = {
     },
 
     cors: {
-        origin: process.env.CORS_ORIGIN 
-            ? process.env.CORS_ORIGIN.split(',') 
+        origin: process.env.CORS_ORIGIN
+            ? process.env.CORS_ORIGIN.split(',')
             : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176'],
     },
 };
