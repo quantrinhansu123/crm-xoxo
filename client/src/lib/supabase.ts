@@ -45,15 +45,30 @@ export async function uploadFile(
         const { data } = supabase.storage.from(bucket).getPublicUrl(tempPath);
         const publicUrl = data.publicUrl;
 
-        const driveRes = await api.post('/media/to-drive', {
-            url: publicUrl,
-            fileName,
-            folder: path || 'media',
-        });
+        let driveRes;
+        try {
+            driveRes = await api.post('/media/to-drive', {
+                url: publicUrl,
+                fileName,
+                folder: path || 'media',
+            });
+        } catch (driveErr: any) {
+            const status = driveErr?.response?.status;
+            // Server chưa deploy /api/media hoặc Apps Script lỗi → giữ file trên Supabase
+            if (status === 404 || status === 502 || status === 503) {
+                console.warn(
+                    `[uploadFile] /media/to-drive trả ${status} — giữ URL Supabase. Cần deploy backend + GOOGLE_DRIVE_APPSCRIPT_URL.`
+                );
+                tempPath = null; // giữ file trên Supabase
+                return { url: publicUrl, error: null };
+            }
+            throw driveErr;
+        }
 
         const drive = driveRes.data?.data;
         if (driveRes.data?.status === 'skipped') {
             // Chưa cấu hình Apps Script → giữ URL Supabase
+            tempPath = null;
             return { url: publicUrl, error: null };
         }
 
