@@ -553,12 +553,12 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                         <span className="font-bold text-primary">{formatCurrency(stats.salesAmount)}</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between text-[11px]">
-                        <span className="text-muted-foreground">Đã thu (HĐ đã TT)</span>
-                        <span className="font-semibold text-green-700">{formatCurrency(stats.paidAmount)}</span>
+                        <span className="font-medium text-muted-foreground">Doanh thu</span>
+                        <span className="font-bold text-green-700">{formatCurrency(stats.paidAmount)}</span>
                     </div>
                 </div>
 
-                <div className="hidden grid-cols-2 gap-3 sm:grid-cols-4 lg:grid lg:grid-cols-5 sm:gap-4">
+                <div className="hidden grid-cols-2 gap-3 sm:grid-cols-3 lg:grid lg:grid-cols-6 sm:gap-4">
                     <Card className="bg-gradient-to-br from-blue-50 to-blue-100/50 border-blue-200">
                         <CardContent className="p-4 flex items-center justify-between">
                             <div>
@@ -597,11 +597,16 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                     </Card>
                     <Card className="bg-gradient-to-br from-primary/5 to-primary/15 border-primary/20">
                         <CardContent className="p-4">
-                                <p className="text-sm text-primary font-medium truncate">Doanh số</p>
-                                <p className="text-lg font-bold text-primary truncate">{formatCurrency(stats.salesAmount)}</p>
-                                <p className="text-[10px] text-muted-foreground mt-0.5">
-                                    Đã thu: {formatCurrency(stats.paidAmount)}
-                                </p>
+                            <p className="text-sm text-primary font-medium truncate">Doanh số</p>
+                            <p className="text-lg font-bold text-primary truncate">{formatCurrency(stats.salesAmount)}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">HĐ chưa hủy</p>
+                        </CardContent>
+                    </Card>
+                    <Card className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 border-emerald-200">
+                        <CardContent className="p-4">
+                            <p className="text-sm text-emerald-700 font-medium truncate">Doanh thu</p>
+                            <p className="text-lg font-bold text-emerald-800 truncate">{formatCurrency(stats.paidAmount)}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">Số tiền đã thu</p>
                         </CardContent>
                     </Card>
                 </div>
@@ -674,6 +679,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                                 <thead className="bg-muted/50">
                                     <tr className="border-b">
                                         <th className="p-4 text-left font-medium">Mã hóa đơn</th>
+                                        <th className="p-4 text-left font-medium">Ngày tạo</th>
                                         <th className="p-4 text-left font-medium">Khách hàng</th>
                                         <th className="p-4 text-left font-medium">Đơn hàng</th>
                                         <th className="p-4 text-right font-medium">Tổng tiền</th>
@@ -684,7 +690,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                                 <tbody>
                                     {filteredInvoices.length === 0 ? (
                                         <tr>
-                                            <td colSpan={6} className="p-8 text-center text-muted-foreground italic">
+                                            <td colSpan={7} className="p-8 text-center text-muted-foreground italic">
                                                 Không có hóa đơn nào
                                             </td>
                                         </tr>
@@ -692,6 +698,9 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                                         filteredInvoices.map((inv) => (
                                             <tr key={inv.id} className="border-b hover:bg-muted/30 transition-colors">
                                                 <td className="p-4 font-medium">{inv.invoice_code}</td>
+                                                <td className="p-4 text-muted-foreground whitespace-nowrap">
+                                                    {inv.created_at ? formatDate(inv.created_at) : '—'}
+                                                </td>
                                                 <td className="p-4">
                                                     <div>
                                                         <p className="font-medium">{inv.customer?.name}</p>
