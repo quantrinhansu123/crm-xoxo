@@ -70,6 +70,19 @@ app.get('/api/health', (req, res) => {
         status: 'ok',
         timestamp: new Date().toISOString(),
         environment: config.nodeEnv,
+        features: {
+            mediaToDrive: true,
+            googleDriveConfigured: Boolean(process.env.GOOGLE_DRIVE_APPSCRIPT_URL),
+        },
+    });
+});
+
+/** Smoke-check route mount (no auth) — dùng để xác nhận deploy có /api/media */
+app.get('/api/media/health', (_req, res) => {
+    res.json({
+        status: 'ok',
+        route: '/api/media',
+        googleDriveConfigured: Boolean(process.env.GOOGLE_DRIVE_APPSCRIPT_URL),
     });
 });
 
