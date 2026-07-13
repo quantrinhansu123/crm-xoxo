@@ -11,7 +11,7 @@ import {
     ShoppingBag, Tag, FileText, Package, Truck, Wrench, Camera,
     User as UserIcon, MessageSquare, BookOpen,
     History, Save, Loader2, Heart, ShieldCheck, ClipboardList, Sparkles,
-    ThumbsUp, ThumbsDown, Calendar, XCircle, Maximize2, Clock
+    ThumbsUp, ThumbsDown, Calendar, XCircle, Maximize2, Clock, ChevronDown
 } from 'lucide-react';
 import { WorkflowLogDetailDialog } from '@/components/orders/workflow/WorkflowLogDetailDialog';
 import { BackwardMoveDialog } from '@/components/orders/BackwardMoveDialog';
@@ -395,17 +395,31 @@ export function ProductDetailDialog({
     const [mentionSearch, setMentionSearch] = useState('');
     const [showMentionList, setShowMentionList] = useState(false);
     const [mentionInputType, setMentionInputType] = useState<'step3_technician_name' | null>(null);
+    /** Chat mặc định đóng — tránh load chat kéo scroll xuống dưới form */
+    const [internalChatOpen, setInternalChatOpen] = useState(false);
+    const formScrollRef = useRef<HTMLDivElement>(null);
+
+    const pinFormScrollTop = useCallback(() => {
+        const viewport = formScrollRef.current
+            || document.querySelector('.product-detail-scroll-area');
+        if (viewport) (viewport as HTMLElement).scrollTop = 0;
+    }, []);
 
     useEffect(() => {
         if (open) {
             fetchUsers();
             fetchSales();
             fetchTechnicians();
-            // Reset scroll position to top when dialog opens or room changes
-            const viewport = document.querySelector('.product-detail-scroll-area');
-            if (viewport) viewport.scrollTop = 0;
+            setInternalChatOpen(!!highlightMessageId);
+            pinFormScrollTop();
+            const t1 = window.setTimeout(pinFormScrollTop, 100);
+            const t2 = window.setTimeout(pinFormScrollTop, 600);
+            return () => {
+                window.clearTimeout(t1);
+                window.clearTimeout(t2);
+            };
         }
-    }, [open, fetchUsers, fetchSales, fetchTechnicians, roomId]);
+    }, [open, fetchUsers, fetchSales, fetchTechnicians, roomId, pinFormScrollTop, highlightMessageId]);
 
     // Local form state
     const [formData, setFormData] = useState<Partial<Order>>({});
@@ -1417,7 +1431,10 @@ export function ProductDetailDialog({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-none w-screen h-screen p-0 overflow-hidden flex flex-col rounded-none border-none">
+            <DialogContent
+                className="max-w-none w-screen h-screen p-0 overflow-hidden flex flex-col rounded-none border-none"
+                onOpenAutoFocus={(e) => e.preventDefault()}
+            >
                 <DialogHeader className="shrink-0 p-3 md:p-4 border-b">
                     <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 md:gap-3 min-w-0">
@@ -1693,7 +1710,11 @@ export function ProductDetailDialog({
 
                     {/* Form panel — takes remaining height, especially on mobile */}
                     <div className="product-detail-form-panel flex-1 min-h-0 flex flex-col overflow-hidden bg-gray-50/40 md:min-w-0">
-                        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y product-detail-scroll-area">
+                        <div
+                            ref={formScrollRef}
+                            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y product-detail-scroll-area"
+                            style={{ overflowAnchor: 'none' }}
+                        >
                         <div className="p-3 md:p-4 flex flex-col gap-3 md:gap-4 min-h-0 pb-6">
                             {/* Consolidated Due Date / Pickup Block */}
                             <div className={cn(
@@ -2565,41 +2586,8 @@ export function ProductDetailDialog({
                                         </div>
                                     )}
 
-                                    {isAftersale && (
-                                        <div className="flex flex-col min-h-0 gap-4 md:gap-6 pt-4 md:pt-6 border-t mt-2 md:mt-4">
-                                            <div className="flex flex-col min-h-0 max-md:max-h-[200px] md:min-h-[220px]">
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <MessageSquare className="h-3.5 w-3.5 text-gray-400" />
-                                                    <h4 className="font-semibold text-xs uppercase tracking-[0.2em] text-gray-400">Thảo luận nội bộ</h4>
-                                                </div>
-                                                <ProductChat
-                                                    orderId={order?.id || ''}
-                                                    entityId={entityId}
-                                                    entityType={entityType}
-                                                    roomId={roomId}
-                                                    currentUserId={currentUserId}
-                                                    highlightMessageId={highlightMessageId}
-                                                />
-                                            </div>
-
-                                            <div className="flex flex-col min-h-0">
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <History className="h-3.5 w-3.5 text-gray-400" />
-                                                    <h4 className="font-semibold text-xs uppercase tracking-[0.2em] text-gray-400">Lịch sử thay đổi</h4>
-                                                </div>
-                                                <div className="flex-1 min-h-0 max-h-[180px] md:max-h-[240px] overflow-y-auto touch-pan-y overscroll-y-contain bg-white rounded-xl border border-gray-100 p-3">
-                                                    <div className="space-y-3">
-                                                        {roomLogs.length > 0 ? roomLogs.map(renderLogItem) : (
-                                                            <div className="text-center py-8 text-gray-400 italic text-[11px]">Chưa có lịch sử thay đổi</div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
                                     {isAftersale && !roomId.startsWith('after4') && (
-                                        <div className="sticky bottom-0 -mx-4 -mb-4 mt-auto p-4 bg-white/95 backdrop-blur-sm border-t border-gray-200/50 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)] z-50 order-last">
+                                        <div className="sticky bottom-0 -mx-4 -mb-4 mt-auto p-4 bg-white/95 backdrop-blur-sm border-t border-gray-200/50 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)] z-50">
                                             <Button
                                                 className="w-full h-12 rounded-xl font-bold shadow-lg shadow-primary/20"
                                                 onClick={handleSave}
@@ -2612,6 +2600,49 @@ export function ProductDetailDialog({
                                                     ? 'Xác nhận trả phụ kiện & Lưu'
                                                     : 'Cập nhật thông tin'}
                                             </Button>
+                                        </div>
+                                    )}
+
+                                    {isAftersale && (
+                                        <div className="flex flex-col min-h-0 gap-3 pt-4 md:pt-6 border-t mt-2 md:mt-4" style={{ overflowAnchor: 'none' }}>
+                                            <button
+                                                type="button"
+                                                className="flex items-center gap-2 text-left w-full"
+                                                onClick={() => setInternalChatOpen((v) => !v)}
+                                            >
+                                                <MessageSquare className="h-3.5 w-3.5 text-gray-400" />
+                                                <h4 className="font-semibold text-xs uppercase tracking-[0.2em] text-gray-400 flex-1">
+                                                    Thảo luận nội bộ
+                                                </h4>
+                                                <ChevronDown className={cn("h-4 w-4 text-gray-400 transition-transform", internalChatOpen && "rotate-180")} />
+                                            </button>
+                                            {internalChatOpen && (
+                                                <>
+                                                    <div className="flex flex-col min-h-0 max-h-[280px] md:min-h-[220px]">
+                                                        <ProductChat
+                                                            orderId={order?.id || ''}
+                                                            entityId={entityId}
+                                                            entityType={entityType}
+                                                            roomId={roomId}
+                                                            currentUserId={currentUserId}
+                                                            highlightMessageId={highlightMessageId}
+                                                        />
+                                                    </div>
+                                                    <div className="flex flex-col min-h-0">
+                                                        <div className="flex items-center gap-2 mb-2">
+                                                            <History className="h-3.5 w-3.5 text-gray-400" />
+                                                            <h4 className="font-semibold text-xs uppercase tracking-[0.2em] text-gray-400">Lịch sử thay đổi</h4>
+                                                        </div>
+                                                        <div className="flex-1 min-h-0 max-h-[180px] md:max-h-[240px] overflow-y-auto touch-pan-y overscroll-y-contain bg-white rounded-xl border border-gray-100 p-3">
+                                                            <div className="space-y-3">
+                                                                {roomLogs.length > 0 ? roomLogs.map(renderLogItem) : (
+                                                                    <div className="text-center py-8 text-gray-400 italic text-[11px]">Chưa có lịch sử thay đổi</div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            )}
                                         </div>
                                     )}
                                 </div>

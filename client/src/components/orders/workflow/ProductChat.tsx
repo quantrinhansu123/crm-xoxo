@@ -85,6 +85,7 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const lastScrolledMsgKeyRef = useRef<string>('');
+    const hasHydratedMessagesRef = useRef(false);
     const [highlightedId, setHighlightedId] = useState<string | undefined>(undefined);
 
     const scrollChatToBottom = useCallback(() => {
@@ -206,11 +207,16 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
     useEffect(() => {
         if (!messages.length) {
             lastScrolledMsgKeyRef.current = '';
+            hasHydratedMessagesRef.current = false;
             return;
         }
         const key = `${messages.length}:${messages[messages.length - 1]?.id ?? ''}`;
         if (key === lastScrolledMsgKeyRef.current) return;
+        const isInitialLoad = !hasHydratedMessagesRef.current;
         lastScrolledMsgKeyRef.current = key;
+        hasHydratedMessagesRef.current = true;
+        // Không auto-scroll lần đầu — tránh kéo dialog/form xuống mục chat khi vừa mở
+        if (isInitialLoad) return;
         scrollChatToBottom();
     }, [messages, scrollChatToBottom]);
 
@@ -406,7 +412,7 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
                 50% { background-color: rgba(250, 204, 21, 0.35); }
             }
         `}</style>
-            <div className="flex flex-col flex-1 border rounded-lg bg-gray-50/50 min-h-0">
+            <div className="flex flex-col flex-1 border rounded-lg bg-gray-50/50 min-h-0" style={{ overflowAnchor: 'none' }}>
                 <div className="p-3 border-b bg-white rounded-t-lg">
                     <h4 className="text-sm font-semibold flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
