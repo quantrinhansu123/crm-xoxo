@@ -461,7 +461,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
         if (!inv) return;
 
         const deleteMessage = inv.order_id
-            ? `Bạn có chắc muốn xóa hóa đơn "${inv.invoice_code}"? Thao tác này sẽ xóa luôn đơn hàng liên kết và toàn bộ dữ liệu liên quan. Hành động này không thể hoàn tác.`
+            ? `Bạn có chắc muốn xóa hóa đơn "${inv.invoice_code}"?\n\nSẽ xóa theo:\n• Đơn hàng liên kết\n• Phiếu thu & phiếu chi liên quan\n• Sản phẩm/dịch vụ, quy trình, hoa hồng\n\nHành động này không thể hoàn tác.`
             : `Bạn có chắc muốn xóa hóa đơn "${inv.invoice_code}"? Hành động này không thể hoàn tác.`;
 
         if (!window.confirm(deleteMessage)) {

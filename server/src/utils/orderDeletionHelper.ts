@@ -113,7 +113,7 @@ export async function deleteOrderCascade(orderId: string, options: DeleteOrderCa
 
     const { data: invoices, error: invoicesError } = await supabaseAdmin
         .from('invoices')
-        .select('id')
+        .select('id, invoice_code')
         .eq('order_id', orderId);
 
     if (invoicesError) {
@@ -285,10 +285,11 @@ export async function deleteOrderCascade(orderId: string, options: DeleteOrderCa
             'Không thể xóa hoa hồng liên quan đơn hàng',
             { optional: true },
         ),
+        // Phiếu thu + phiếu chi (cả income và expense) gắn order_id
         deleteByFilter(
             'transactions',
             query => query.eq('order_id', orderId),
-            'Không thể xóa chứng từ thanh toán liên quan đơn hàng',
+            'Không thể xóa phiếu thu/chi liên quan đơn hàng',
             { optional: true },
         ),
         deleteByFilter(
@@ -299,19 +300,48 @@ export async function deleteOrderCascade(orderId: string, options: DeleteOrderCa
         ),
     ]);
 
+    // Phiếu chi theo sản phẩm đơn (order_product_id) — thường dùng cho PC theo HĐxx.n
+    if (orderProductIds.length > 0) {
+        await deleteByFilter(
+            'transactions',
+            query => query.in('order_product_id', orderProductIds),
+            'Không thể xóa phiếu thu/chi theo sản phẩm đơn hàng',
+            { optional: true },
+        );
+    }
+
     if (order.order_code) {
+        const invoiceCodes = (invoices || [])
+            .map((inv: any) => inv.invoice_code)
+            .filter(Boolean) as string[];
+
         await Promise.all([
             deleteByFilter(
                 'transactions',
                 query => query.eq('order_code', order.order_code),
-                'Không thể xóa chứng từ thanh toán theo mã đơn hàng',
+                'Không thể xóa phiếu thu/chi theo mã đơn hàng',
                 { optional: true },
             ),
             deleteByFilter(
                 'transactions',
                 query => query.ilike('notes', `%${order.order_code}%`),
-                'Không thể xóa chứng từ thanh toán ghi chú theo mã đơn hàng',
+                'Không thể xóa phiếu thu/chi ghi chú theo mã đơn hàng',
                 { optional: true },
+            ),
+            // Legacy finance_transactions: phiếu chi đôi khi chỉ ghi trong description
+            deleteByFilter(
+                'finance_transactions',
+                query => query.ilike('description', `%${order.order_code}%`),
+                'Không thể xóa phiếu tài chính (legacy) theo mã đơn',
+                { optional: true },
+            ),
+            ...invoiceCodes.map((code) =>
+                deleteByFilter(
+                    'transactions',
+                    query => query.ilike('notes', `%${code}%`),
+                    `Không thể xóa phiếu thu/chi theo mã hóa đơn ${code}`,
+                    { optional: true },
+                ),
             ),
         ]);
     }
