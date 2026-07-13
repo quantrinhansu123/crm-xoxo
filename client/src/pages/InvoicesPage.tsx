@@ -258,8 +258,40 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [datePreset, setDatePreset] = useState<DateRangePreset>('all');
+    const [stats, setStats] = useState({
+        total: 0,
+        draft: 0,
+        pending: 0,
+        paid: 0,
+        cancelled: 0,
+        salesAmount: 0,
+        paidAmount: 0,
+    });
 
     const { canEdit, canDelete } = useViewActionForRoles('invoices', ['manager', 'admin', 'accountant', 'sale']);
+
+    const fetchInvoiceStats = useCallback(async () => {
+        try {
+            const params: Record<string, string> = {};
+            if (fromDate) params.from_date = fromDate;
+            if (toDate) params.to_date = toDate;
+            const response = await invoicesApi.getStats(params);
+            const data = response.data.data;
+            if (data) {
+                setStats({
+                    total: data.total || 0,
+                    draft: data.draft || 0,
+                    pending: data.pending || 0,
+                    paid: data.paid || 0,
+                    cancelled: data.cancelled || 0,
+                    salesAmount: Number(data.salesAmount || data.totalAmount || 0),
+                    paidAmount: Number(data.paidAmount || 0),
+                });
+            }
+        } catch (err) {
+            console.error('Failed to load invoice stats', err);
+        }
+    }, [fromDate, toDate]);
 
     const fetchInvoices = useCallback(async () => {
         try {
@@ -369,11 +401,15 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
     useEffect(() => {
         const loadData = async () => {
             setLoading(true);
-            await Promise.all([fetchInvoices(), fetchOrders()]);
+            await Promise.all([fetchInvoices(), fetchOrders(), fetchInvoiceStats()]);
             setLoading(false);
         };
         loadData();
-    }, [fetchInvoices, fetchOrders]);
+    }, [fetchInvoices, fetchOrders, fetchInvoiceStats]);
+
+    const refreshInvoices = useCallback(async () => {
+        await Promise.all([fetchInvoices(), fetchInvoiceStats()]);
+    }, [fetchInvoices, fetchInvoiceStats]);
 
     const handleStatusChange = async (
         id: string,
@@ -393,7 +429,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             } else {
                 toast.success('Đã cập nhật trạng thái hóa đơn');
             }
-            fetchInvoices();
+            refreshInvoices();
             if (selectedInvoice?.id === id) {
                 const detail = await invoicesApi.getById(id);
                 if (detail.data.data?.invoice) setSelectedInvoice(detail.data.data.invoice);
@@ -416,7 +452,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
     const handlePaymentSuccess = async () => {
         if (selectedInvoice) {
             await handleStatusChange(selectedInvoice.id, 'paid');
-            fetchInvoices();
+            refreshInvoices();
         }
     };
 
@@ -439,7 +475,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                 setShowInvoiceDetail(false);
                 setSelectedInvoice(null);
             }
-            fetchInvoices();
+            refreshInvoices();
         } catch (err: any) {
             toast.error(err.response?.data?.message || 'Lỗi khi xóa hóa đơn');
         }
@@ -454,17 +490,6 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             inv.customer?.phone?.includes(query)
         );
     }, [invoices, searchQuery]);
-
-    const stats = useMemo(() => {
-        return {
-            total: invoices.length,
-            draft: invoices.filter(i => i.status === 'draft').length,
-            pending: invoices.filter(i => i.status === 'pending').length,
-            paid: invoices.filter(i => i.status === 'paid').length,
-            cancelled: invoices.filter(i => i.status === 'cancelled').length,
-            totalAmount: invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.total_amount, 0)
-        };
-    }, [invoices]);
 
     if (loading) {
         return (
@@ -524,8 +549,12 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                         </span>
                     </div>
                     <div className="mt-1.5 flex items-center justify-between border-t border-border/60 pt-1.5 text-[11px]">
-                        <span className="font-medium text-muted-foreground">Doanh thu</span>
-                        <span className="font-bold text-primary">{formatCurrency(stats.totalAmount)}</span>
+                        <span className="font-medium text-muted-foreground">Doanh số</span>
+                        <span className="font-bold text-primary">{formatCurrency(stats.salesAmount)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">Đã thu (HĐ đã TT)</span>
+                        <span className="font-semibold text-green-700">{formatCurrency(stats.paidAmount)}</span>
                     </div>
                 </div>
 
@@ -568,8 +597,11 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                     </Card>
                     <Card className="bg-gradient-to-br from-primary/5 to-primary/15 border-primary/20">
                         <CardContent className="p-4">
-                                <p className="text-sm text-primary font-medium truncate">Doanh thu</p>
-                                <p className="text-lg font-bold text-primary truncate">{formatCurrency(stats.totalAmount)}</p>
+                                <p className="text-sm text-primary font-medium truncate">Doanh số</p>
+                                <p className="text-lg font-bold text-primary truncate">{formatCurrency(stats.salesAmount)}</p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">
+                                    Đã thu: {formatCurrency(stats.paidAmount)}
+                                </p>
                         </CardContent>
                     </Card>
                 </div>
@@ -721,7 +753,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             <CreateInvoiceDialog
                 open={showCreateDialog}
                 onClose={() => setShowCreateDialog(false)}
-                onSuccess={fetchInvoices}
+                onSuccess={refreshInvoices}
                 orders={orders}
             />
 

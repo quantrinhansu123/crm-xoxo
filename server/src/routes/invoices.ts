@@ -71,6 +71,79 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
     }
 });
 
+/**
+ * Thống kê hóa đơn (không phân trang) — dùng cho card tổng trên UI.
+ * Doanh số = tổng HĐ chưa hủy; Doanh thu đã TT = tổng HĐ status=paid.
+ */
+router.get('/stats', authenticate, async (req: AuthenticatedRequest, res, next) => {
+    try {
+        const { from_date, to_date } = req.query;
+
+        let query = supabaseAdmin
+            .from('invoices')
+            .select('status, total_amount, created_at');
+
+        if (from_date && typeof from_date === 'string') {
+            const from = new Date(from_date);
+            from.setHours(0, 0, 0, 0);
+            query = query.gte('created_at', from.toISOString());
+        }
+        if (to_date && typeof to_date === 'string') {
+            const to = new Date(to_date);
+            to.setHours(23, 59, 59, 999);
+            query = query.lte('created_at', to.toISOString());
+        }
+
+        const { data: rows, error } = await query;
+        if (error) {
+            throw new ApiError('Lỗi khi lấy thống kê hóa đơn: ' + error.message, 500);
+        }
+
+        const invoices = rows || [];
+        const num = (v: unknown) => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+        };
+
+        let draft = 0;
+        let pending = 0;
+        let paid = 0;
+        let cancelled = 0;
+        let salesAmount = 0;
+        let paidAmount = 0;
+
+        for (const inv of invoices) {
+            const amount = num(inv.total_amount);
+            const status = String(inv.status || '');
+            if (status === 'draft') draft += 1;
+            else if (status === 'pending') pending += 1;
+            else if (status === 'paid') paid += 1;
+            else if (status === 'cancelled') cancelled += 1;
+
+            if (status !== 'cancelled') salesAmount += amount;
+            if (status === 'paid') paidAmount += amount;
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                total: invoices.length,
+                draft,
+                pending,
+                paid,
+                cancelled,
+                /** Doanh số: tổng giá trị HĐ chưa hủy */
+                salesAmount,
+                /** Doanh thu đã thanh toán */
+                paidAmount,
+                totalAmount: salesAmount,
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // Get invoice by ID
 router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {

@@ -504,6 +504,18 @@ export const invoicesApi = {
     }) =>
         api.get<PaginatedResponse<{ invoices: any[] }>>('/invoices', { params }),
 
+    getStats: (params?: { from_date?: string; to_date?: string }) =>
+        api.get<ApiResponse<{
+            total: number;
+            draft: number;
+            pending: number;
+            paid: number;
+            cancelled: number;
+            salesAmount: number;
+            paidAmount: number;
+            totalAmount: number;
+        }>>('/invoices/stats', { params }),
+
     getById: (id: string) =>
         api.get<ApiResponse<{ invoice: any }>>(`/invoices/${id}?t=${Date.now()}`),
 
