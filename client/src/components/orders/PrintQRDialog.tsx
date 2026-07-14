@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { formatCurrency } from '@/lib/utils';
 import type { Order, OrderItem } from '@/hooks/useOrders';
+import { getProductItemNotes } from '@/pages/OrderDetailPage/utils';
 
 interface PrintQRDialogProps {
     order: Order | null;
@@ -15,6 +16,13 @@ interface PrintQRDialogProps {
 }
 
 type OrderItemWithCode = OrderItem & { item_code: string };
+
+const escapeHtml = (text: string): string =>
+    text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 
 const getItemTypeLabel = (type: string) => {
     switch (type) {
@@ -70,7 +78,14 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
 
+        const orderCreatedAt = order.created_at
+            ? new Date(order.created_at).toLocaleDateString('vi-VN')
+            : '';
+
         const qrCodes = itemsToPrint.map((item: OrderItem) => {
+            const noteText = getProductItemNotes(item);
+            const technicianName = item.sales_step_data?.step3_technician_name || item.technician?.name || '';
+
             return `
                 <div class="qr-item">
                     <div class="qr-header">
@@ -78,11 +93,18 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                         <span class="item-type ${item.item_type}">${getItemTypeLabel(item.item_type)}</span>
                     </div>
                     <div class="qr-content">
-                        ${item.item_code ? `
-                            <div class="qr-code" id="qr-${item.id}"></div>
-                        ` : `
-                            <div class="no-qr">Chưa có mã QR</div>
-                        `}
+                        <div class="qr-block">
+                            ${item.item_code ? `
+                                <div class="qr-code" id="qr-${item.id}"></div>
+                            ` : `
+                                <div class="no-qr">Chưa có mã QR</div>
+                            `}
+                            <div class="qr-caption">
+                                ${orderCreatedAt ? `<p>Ngày tạo: ${escapeHtml(orderCreatedAt)}</p>` : ''}
+                                ${noteText ? `<p>Ghi chú: ${escapeHtml(noteText)}</p>` : ''}
+                                ${technicianName ? `<p>KT: ${escapeHtml(technicianName)}</p>` : ''}
+                            </div>
+                        </div>
                         <div class="item-info">
                             <p class="item-name">${item.item_name}</p>
                             <p class="item-details">SL: ${item.quantity} × ${formatCurrency(item.unit_price)}</p>
@@ -170,8 +192,14 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                         gap: 15px;
                         align-items: center;
                     }
-                    .qr-code {
+                    .qr-block {
                         flex-shrink: 0;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        width: 138px;
+                    }
+                    .qr-code {
                         padding: 8px;
                         background: #fff;
                         border: 1px solid #eee;
@@ -188,6 +216,17 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                         color: #999;
                         font-size: 12px;
                         text-align: center;
+                    }
+                    .qr-caption {
+                        margin-top: 6px;
+                        width: 100%;
+                        text-align: center;
+                    }
+                    .qr-caption p {
+                        font-size: 10px;
+                        line-height: 1.4;
+                        color: #444;
+                        word-break: break-word;
                     }
                     .item-info { flex: 1; }
                     .item-name {

@@ -95,22 +95,27 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
 router.patch('/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { id } = req.params;
-        const { images } = req.body;
+        const { images, notes } = req.body;
 
-        if (images === undefined) {
+        if (images === undefined && notes === undefined) {
             throw new ApiError('Không có dữ liệu cập nhật', 400);
         }
 
-        const imageList = Array.isArray(images) ? images.filter((u: unknown) => typeof u === 'string' && u) : [];
+        const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+        if (images !== undefined) {
+            updatePayload.images = Array.isArray(images) ? images.filter((u: unknown) => typeof u === 'string' && u) : [];
+        }
+
+        if (notes !== undefined) {
+            updatePayload.notes = typeof notes === 'string' ? notes.trim() || null : null;
+        }
 
         const { data: product, error } = await supabaseAdmin
             .from('order_products')
-            .update({
-                images: imageList,
-                updated_at: new Date().toISOString(),
-            })
+            .update(updatePayload)
             .eq('id', id)
-            .select('id, name, product_code, images, order_id')
+            .select('id, name, product_code, images, notes, order_id')
             .single();
 
         if (error || !product) {
@@ -310,6 +315,41 @@ router.patch('/:id/reset-services', authenticate, async (req: AuthenticatedReque
 // =====================================================
 // ORDER PRODUCT SERVICES ROUTES
 // =====================================================
+
+// Update a service's sale note (separate from the technician completion `notes` field)
+router.patch('/services/:serviceId/notes', authenticate, async (req: AuthenticatedRequest, res, next) => {
+    try {
+        const { serviceId } = req.params;
+        const { notes } = req.body;
+
+        const { data: service, error } = await supabaseAdmin
+            .from('order_product_services')
+            .update({
+                // Không set updated_at — bảng này không có cột đó
+                sale_note: typeof notes === 'string' ? notes.trim() || null : null,
+            })
+            .eq('id', serviceId)
+            .select('id, item_name, sale_note, order_product_id')
+            .single();
+
+        if (error || !service) {
+            console.error('[order-products] update service sale_note failed:', serviceId, error);
+            throw new ApiError(
+                error?.message
+                    ? `Không thể lưu ghi chú dịch vụ: ${error.message}`
+                    : 'Không tìm thấy dịch vụ hoặc lỗi cập nhật',
+                404,
+            );
+        }
+
+        res.json({
+            status: 'success',
+            data: service,
+        });
+    } catch (error) {
+        next(error);
+    }
+});
 
 // Assign technician(s) to a service
 router.patch('/services/:serviceId/assign', authenticate, async (req: AuthenticatedRequest, res, next) => {

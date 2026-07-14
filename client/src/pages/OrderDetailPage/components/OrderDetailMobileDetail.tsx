@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import type { Order, OrderItem } from '@/hooks/useOrders';
 import { columns } from '@/components/orders/constants';
 import { MobileProductPhotos } from './MobileProductPhotos';
+import { getProductItemNotes } from '../utils';
 
 interface OrderDetailMobileDetailProps {
     order: Order;
@@ -112,6 +113,7 @@ function ProductLine({
     dotColor,
     dueAt,
     conditionBefore,
+    productNotes,
     showProductMeta = false,
     indent = false,
 }: {
@@ -120,6 +122,7 @@ function ProductLine({
     dotColor: 'blue' | 'purple';
     dueAt?: string;
     conditionBefore?: string;
+    productNotes?: string;
     showProductMeta?: boolean;
     indent?: boolean;
 }) {
@@ -177,6 +180,12 @@ function ProductLine({
                         </span>
                     </p>
                 )}
+                {productNotes && (
+                    <p className="mt-1 flex items-start gap-1 text-[10px] leading-snug text-slate-600">
+                        <FileText className="h-2.5 w-2.5 shrink-0 mt-0.5 text-primary/70" />
+                        <span className="line-clamp-3 italic whitespace-pre-wrap">{productNotes}</span>
+                    </p>
+                )}
             </div>
         </div>
     );
@@ -196,6 +205,9 @@ export function OrderDetailMobileDetail({
     const statusTitle = columns.find((c) => c.id === order.status)?.title || order.status;
     const statusColumn = columns.find((c) => c.id === order.status);
     const groups = order.items?.length ? buildItemGroups(order.items) : [];
+    const customerProductsWithNotes = (order.items || []).filter(
+        (item) => item.item_type === 'product' && item.is_customer_item && getProductItemNotes(item),
+    );
 
     const canEditOrder =
         canEdit && order.status !== 'after_sale' && order.status !== 'cancelled' && !hasPendingEditApproval;
@@ -347,6 +359,7 @@ export function OrderDetailMobileDetail({
                                                 (product as any).condition_before ||
                                                 (product as any).product_condition_before
                                             }
+                                            productNotes={getProductItemNotes(product)}
                                             showProductMeta
                                         />
                                         {isCustomerProduct && (
@@ -388,6 +401,7 @@ export function OrderDetailMobileDetail({
                                     dotColor={item.item_type === 'product' ? 'blue' : 'purple'}
                                     dueAt={(item as any).due_at}
                                     conditionBefore={(item as any).condition_before || (item as any).product_condition_before}
+                                    productNotes={item.item_type === 'product' ? getProductItemNotes(item) : undefined}
                                     showProductMeta={item.item_type === 'product'}
                                 />
                             );
@@ -397,9 +411,30 @@ export function OrderDetailMobileDetail({
                 </CardContent>
             </Card>
 
-            {order.notes && (
+            {(customerProductsWithNotes.length > 0 || order.notes) && (
                 <MobileCard icon={ClipboardList} title="Ghi chú">
-                    <p className="text-sm leading-relaxed text-muted-foreground">{order.notes}</p>
+                    {customerProductsWithNotes.length > 0 && (
+                        <div className="space-y-2">
+                            {customerProductsWithNotes.map((item) => (
+                                <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50/80 px-2.5 py-2">
+                                    <p className="text-[10px] font-semibold text-slate-800">{item.item_name}</p>
+                                    <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap italic">
+                                        {getProductItemNotes(item)}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {order.notes && (
+                        <div className={customerProductsWithNotes.length > 0 ? 'mt-3 border-t border-slate-100 pt-3' : ''}>
+                            {customerProductsWithNotes.length > 0 && (
+                                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Ghi chú đơn hàng
+                                </p>
+                            )}
+                            <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">{order.notes}</p>
+                        </div>
+                    )}
                 </MobileCard>
             )}
         </div>

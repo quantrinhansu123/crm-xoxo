@@ -1,5 +1,13 @@
 // Utility functions for OrderDetailPage
 
+/** Ghi chú riêng của sản phẩm khách (order_products.notes → product_notes trên flat item). */
+export const getProductItemNotes = (
+    item: { product_notes?: string | null; notes?: string | null } | null | undefined,
+): string => {
+    const notes = item?.product_notes ?? item?.notes ?? '';
+    return typeof notes === 'string' ? notes.trim() : '';
+};
+
 export const getItemTypeLabel = (type: string) => {
     switch (type) {
         case 'product': return 'Sản phẩm';

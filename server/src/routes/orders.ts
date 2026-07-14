@@ -217,7 +217,7 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                 const { data: v2Products } = await supabaseAdmin
                     .from('order_products')
                     .select(`
-                        id, order_id, product_code, name, type, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
+                        id, order_id, product_code, name, type, brand, color, size, material, condition_before, notes, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
                         services:order_product_services(
                             id, item_name, item_type, unit_price, technician_id, current_phase, phase_stage,
                             service:services(id, image, code),
@@ -280,6 +280,13 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                 due_at: product.due_at || null,
                                 surcharges: product.surcharges || [],
                                 surcharge_amount: product.surcharge_amount || 0,
+                                product_type: product.type || null,
+                                product_brand: product.brand || null,
+                                product_color: product.color || null,
+                                product_size: product.size || null,
+                                product_material: product.material || null,
+                                product_condition_before: product.condition_before || null,
+                                product_notes: product.notes || null,
                             });
                             if (product.services?.length) {
                                 for (const s of product.services as any[]) {
@@ -372,7 +379,7 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             const { data: v2Products } = await supabaseAdmin
                 .from('order_products')
                 .select(`
-                    id, order_id, product_code, name, type, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
+                    id, order_id, product_code, name, type, brand, color, size, material, condition_before, notes, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
                     services:order_product_services(
                         id, item_name, item_type, unit_price, technician_id, current_phase, phase_stage,
                         service:services(id, image, code),
@@ -436,6 +443,13 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                 due_at: product.due_at || null,
                                 surcharges: product.surcharges || [],
                                 surcharge_amount: product.surcharge_amount || 0,
+                                product_type: product.type || null,
+                                product_brand: product.brand || null,
+                                product_color: product.color || null,
+                                product_size: product.size || null,
+                                product_material: product.material || null,
+                                product_condition_before: product.condition_before || null,
+                                product_notes: product.notes || null,
                             });
                         if (product.services?.length) {
                             for (const s of product.services as any[]) {
@@ -657,6 +671,7 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                             unit_price: s.unit_price,
                             total_price: s.unit_price,
                             status: s.status,
+                            notes: s.sale_note || null,
                             technician_id: s.technician_id,
                             technician: s.technician,
                             technicians: technicians,

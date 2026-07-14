@@ -50,6 +50,7 @@ import { DELIVERY_CARRIER_OPTIONS } from '@/constants/deliveryCarriers';
 import { useAuth } from '@/contexts/AuthContext';
 import { canOperateWorkflow } from '@/lib/sensitivePermissions';
 import { getAssignedSaleNames, getAssignedTechnicianNames } from '../utils/staff';
+import { getProductItemNotes } from '../utils';
 import { StaffNameSelect } from '@/components/common/StaffNameSelect';
 import {
     getDrivePreviewUrl,
@@ -507,6 +508,7 @@ export function ProductDetailDialog({
     const services = group?.services || [];
     const productName = product?.item_name ?? services[0]?.item_name ?? '—';
     const productItem = product as any;
+    const productNotes = getProductItemNotes(productItem);
     const assignedSaleNames = getAssignedSaleNames(services);
     const assignedTechnicianNames = getAssignedTechnicianNames(services);
 
@@ -1617,15 +1619,24 @@ export function ProductDetailDialog({
                                             <span className="font-bold text-gray-800 tracking-tight capitalize">{productItem.product_color}</span>
                                         </div>
                                     )}
-                                    {productItem?.product_notes && (
+                                    {productNotes && (
                                         <div className="flex items-start gap-3">
                                             <FileText className="h-4 w-4 text-primary/60 shrink-0 mt-0.5" />
                                             <span className="text-gray-500 min-w-[70px]">Ghi chú:</span>
-                                            <span className="font-medium text-gray-700 leading-relaxed italic pr-2">{productItem.product_notes}</span>
+                                            <span className="font-medium text-gray-700 leading-relaxed italic pr-2 whitespace-pre-wrap">{productNotes}</span>
                                         </div>
                                     )}
                                 </div>
                             </div>
+
+                            {productNotes && (
+                                <div className="md:hidden rounded-xl border border-gray-100 bg-gray-50/50 p-3">
+                                    <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">
+                                        <FileText className="h-3 w-3" /> Ghi chú sản phẩm
+                                    </div>
+                                    <p className="text-sm text-gray-700 italic leading-relaxed whitespace-pre-wrap">{productNotes}</p>
+                                </div>
+                            )}
 
                             {/* Staff Info Card */}
                             <div className="space-y-3 max-md:hidden">

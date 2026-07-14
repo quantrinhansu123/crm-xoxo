@@ -109,6 +109,15 @@ export interface OrderItem {
     completion_photos?: string[];
     packaging_photos?: string[];
     due_at?: string;
+    product_condition_before?: string | null;
+    product_notes?: string | null;
+    product_type?: string | null;
+    product_brand?: string | null;
+    product_color?: string | null;
+    product_size?: string | null;
+    product_material?: string | null;
+    /** Note on a service line (order_product_services.notes) */
+    notes?: string | null;
     /** Workflow steps for room deadline calculation */
     order_item_steps?: OrderItemStep[];
     surcharges?: OrderSurcharge[];

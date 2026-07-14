@@ -8,8 +8,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TabsContent } from '@/components/ui/tabs';
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
-import { cn } from '@/lib/utils';
-import { formatDateTime } from '@/lib/utils';
+import { getProductItemNotes } from '../utils';
+import { cn, formatDateTime } from '@/lib/utils';
 import { TECH_ROOMS } from '@/components/orders/constants';
 import type { Order, OrderItem } from '@/hooks/useOrders';
 import { Button } from '@/components/ui/button';
@@ -67,8 +67,9 @@ const WorkflowCard = memo(({
 }: WorkflowCardProps) => {
     const productName = group.product?.item_name ?? group.services[0]?.item_name ?? '—';
     const productItem = group.product as any;
+    const productNotes = getProductItemNotes(productItem);
     const productImages = productItem?.product_images ?? (productItem?.product?.image ? [productItem.product.image] : []);
-    const hasProductDetails = group.product && (productItem?.product_type || productItem?.product_brand || productItem?.product_color || productItem?.product_size || productItem?.product_material || productItem?.product_condition_before || productItem?.product_notes);
+    const hasProductDetails = group.product && (productItem?.product_type || productItem?.product_brand || productItem?.product_color || productItem?.product_size || productItem?.product_material || productItem?.product_condition_before || productNotes);
     const cardKey = group.product?.id ?? group.services.map((s) => s.id).join('-');
 
     const leadItem = group.services.find((s) => getItemCurrentStep(s.id)) ?? group.services[0];
@@ -163,8 +164,8 @@ const WorkflowCard = memo(({
                                 {productItem?.product_brand && (
                                     <div className="flex min-w-0 items-center gap-1.5"><Tag className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="min-w-0 truncate">Hãng: {productItem.product_brand}</span></div>
                                 )}
-                                {productItem?.product_notes && (
-                                    <div className="flex min-w-0 items-center gap-1.5"><FileText className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="min-w-0 line-clamp-1">Ghi chú: {productItem.product_notes}</span></div>
+                                {productNotes && (
+                                    <div className="flex min-w-0 items-center gap-1.5"><FileText className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="min-w-0 line-clamp-1">Ghi chú: {productNotes}</span></div>
                                 )}
                             </div>
                         )}

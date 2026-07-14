@@ -286,12 +286,16 @@ export const orderProductsApi = {
     getById: (id: string) =>
         api.get<ApiResponse<any>>(`/order-products/${id}`),
 
-    update: (id: string, data: { images?: string[] }) =>
+    update: (id: string, data: { images?: string[]; notes?: string }) =>
         api.patch<ApiResponse<any>>(`/order-products/${id}`, data),
 
     // Update product status
     updateStatus: (id: string, status: string, reason?: string, warranty_code?: string) =>
         api.patch<ApiResponse<any>>(`/order-products/${id}/status`, { status, ...(reason !== undefined && { reason }), ...(warranty_code !== undefined && { warranty_code }) }),
+
+    // Update a service's note
+    updateServiceNotes: (serviceId: string, notes: string) =>
+        api.patch<ApiResponse<any>>(`/order-products/services/${serviceId}/notes`, { notes }),
 
     // Assign technician to a service
     assignService: (serviceId: string, technician_id: string) =>
