@@ -369,6 +369,15 @@ export const orderProductsApi = {
         move_photos?: string[];
         /** Cho phép lùi đúng 1 bước (vd. bỏ tick trong danh sách bàn giao) mà không bị chặn là lùi quy trình */
         allow_step_back?: boolean;
+        aftersale_receiver_name?: string | null;
+        debt_checked?: boolean;
+        debt_checked_notes?: string | null;
+        debt_checked_by_name?: string | null;
+        delivery_creator_name?: string | null;
+        delivery_shipper_phone?: string | null;
+        delivery_staff_name?: string | null;
+        delivery_received_at?: string | null;
+        sales_step_data?: Record<string, unknown>;
     }) => api.patch<ApiResponse<any>>(`/order-products/${id}/after-sale-data`, data),
 
     resetServices: (id: string) =>
@@ -449,6 +458,15 @@ export const orderItemsApi = {
         move_photos?: string[];
         /** Cho phép lùi đúng 1 bước (vd. bỏ tick trong danh sách bàn giao) mà không bị chặn là lùi quy trình */
         allow_step_back?: boolean;
+        aftersale_receiver_name?: string | null;
+        debt_checked?: boolean;
+        debt_checked_notes?: string | null;
+        debt_checked_by_name?: string | null;
+        delivery_creator_name?: string | null;
+        delivery_shipper_phone?: string | null;
+        delivery_staff_name?: string | null;
+        delivery_received_at?: string | null;
+        sales_step_data?: Record<string, unknown>;
     }) => api.patch<ApiResponse<any>>(`/order-items/${id}/after-sale-data`, data),
 };
 
