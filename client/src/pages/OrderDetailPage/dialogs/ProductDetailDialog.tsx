@@ -887,9 +887,37 @@ export function ProductDetailDialog({
 
         setSaving(true);
         try {
+            const itemId = product?.id || services[0]?.id;
+            const isDebtConfirmFlow = isAftersale && roomId.startsWith('after1_debt');
+            const isDebtConfirm = isDebtConfirmFlow && !onConfirmAndMove;
+            const collectorName =
+                (formData.debt_checked_by_name || '').trim()
+                || user?.name?.trim()
+                || '';
+
+            // Legacy server gate đọc order.debt_checked (không đọc form SP) —
+            // ghi cấp đơn TRƯỚC khi chuyển stage để không còn toast tick kiểm nợ sai.
+            if (isDebtConfirmFlow && onUpdateOrder) {
+                const receiptPhotoUrls = Object.values(debtReceiptsByProduct).flatMap((r) => r.photos || []);
+                const mergedDebtPhotos = [...new Set([
+                    ...parsePhotoUrls((formData as any).debt_payment_photos),
+                    ...receiptPhotoUrls,
+                ])];
+                await onUpdateOrder({
+                    debt_checked: true,
+                    debt_checked_by_name: collectorName || ' ',
+                    debt_checked_notes: (formData as any).debt_checked_notes || '',
+                    debt_payment_photos: mergedDebtPhotos,
+                } as Partial<Order>);
+                setFormData((prev) => ({
+                    ...prev,
+                    debt_checked: true,
+                    debt_checked_by_name: collectorName || prev.debt_checked_by_name,
+                    debt_payment_photos: mergedDebtPhotos,
+                } as any));
+            }
+
             if ((isAftersale || isCareFlow) && onUpdateItemAfterSaleData) {
-                const itemId = product?.id || services[0]?.id;
-                const isDebtConfirm = roomId.startsWith('after1_debt') && !onConfirmAndMove;
                 const selectedIds = isDebtConfirm
                     ? Object.keys(debtReceiptsByProduct)
                     : (itemId ? [itemId] : []);
@@ -919,7 +947,7 @@ export function ProductDetailDialog({
                         await onUpdateItemAfterSaleData(selectedId, isCustomer, {
                             debt_checked: true,
                             debt_checked_notes: notes,
-                            debt_checked_by_name: formData.debt_checked_by_name || undefined,
+                            debt_checked_by_name: collectorName || undefined,
                             ...(shouldMoveToAfter2 ? { stage: 'after2' } : {}),
                             ...(selectedId === itemId ? {
                                 completion_photos: formData.completion_photos,
@@ -943,7 +971,7 @@ export function ProductDetailDialog({
                         aftersale_receiver_name: formData.aftersale_receiver_name,
                         debt_checked: roomId.startsWith('after1_debt') ? true : formData.debt_checked,
                         debt_checked_notes: (formData as any).debt_checked_notes,
-                        debt_checked_by_name: formData.debt_checked_by_name,
+                        debt_checked_by_name: collectorName || formData.debt_checked_by_name,
                         // Khi mở từ kéo Kanban: cũng chuyển bước trong cùng request kèm debt_checked
                         ...(roomId.startsWith('after1_debt') && onConfirmAndMove
                             ? { stage: 'after2' }
@@ -953,8 +981,8 @@ export function ProductDetailDialog({
             }
 
             // Also update the general order data (debt, receiver, etc)
-            // But exclude photos from order-level update to keep them strictly at item-level
-            if (onUpdateOrder) {
+            // Debt confirm đã sync order ở trên — chỉ patch còn lại nếu không phải debt flow
+            if (onUpdateOrder && !isDebtConfirmFlow) {
                 const receiptPhotoUrls = Object.values(debtReceiptsByProduct).flatMap((r) => r.photos || []);
                 const mergedDebtPhotos = [...new Set([
                     ...parsePhotoUrls((formData as any).debt_payment_photos),
@@ -975,7 +1003,6 @@ export function ProductDetailDialog({
                 }
             }
 
-            const itemId = product?.id || services[0]?.id;
             if (itemId && roomId.startsWith('after2')) {
                 const item = (group?.product || group?.services?.[0]) as any;
                 const existingStepData = item?.sales_step_data || {};

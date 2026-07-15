@@ -115,6 +115,10 @@ export function getItemAfterSaleStage(item: {
  */
 export const ORDER_LEVEL_AFTERSALE_PATCH_KEYS = new Set([
     'debt_payment_photos',
+    // Đồng bộ xác nhận kiểm nợ cấp đơn (server/legacy gate còn đọc order.debt_checked)
+    'debt_checked',
+    'debt_checked_notes',
+    'debt_checked_by_name',
     'packaging_photos',
     'delivery_carrier',
     'delivery_address',
