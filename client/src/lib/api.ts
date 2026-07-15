@@ -367,6 +367,8 @@ export const orderProductsApi = {
         care_warranty_stage?: string | null;
         move_notes?: string;
         move_photos?: string[];
+        /** Cho phép lùi đúng 1 bước (vd. bỏ tick trong danh sách bàn giao) mà không bị chặn là lùi quy trình */
+        allow_step_back?: boolean;
     }) => api.patch<ApiResponse<any>>(`/order-products/${id}/after-sale-data`, data),
 
     resetServices: (id: string) =>
@@ -445,6 +447,8 @@ export const orderItemsApi = {
         care_warranty_stage?: string | null;
         move_notes?: string;
         move_photos?: string[];
+        /** Cho phép lùi đúng 1 bước (vd. bỏ tick trong danh sách bàn giao) mà không bị chặn là lùi quy trình */
+        allow_step_back?: boolean;
     }) => api.patch<ApiResponse<any>>(`/order-items/${id}/after-sale-data`, data),
 };
 

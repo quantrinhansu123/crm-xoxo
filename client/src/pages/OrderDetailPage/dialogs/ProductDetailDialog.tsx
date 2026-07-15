@@ -894,7 +894,45 @@ export function ProductDetailDialog({
         try {
             if ((isAftersale || isCareFlow) && onUpdateItemAfterSaleData) {
                 const itemId = product?.id || services[0]?.id;
-                if (itemId) {
+                const isDebtConfirm = roomId.startsWith('after1_debt') && !onConfirmAndMove;
+                const selectedIds = isDebtConfirm
+                    ? Object.keys(debtReceiptsByProduct)
+                    : (itemId ? [itemId] : []);
+
+                if (isDebtConfirm && selectedIds.length > 0) {
+                    // Chuyển từng SP đã tick bàn giao → after2 khi xác nhận (không chuyển lúc tick — tránh 400)
+                    for (const selectedId of selectedIds) {
+                        const sourceItem = [
+                            ...(order?.customer_items || []),
+                            ...(order?.sale_items || []),
+                            ...(order?.items || []),
+                        ].find((it: any) => it?.id === selectedId) as any;
+                        const isCustomer = !!(sourceItem?.is_customer_item || sourceItem?.product_code || (order?.customer_items || []).some((c: any) => c.id === selectedId));
+                        const itemName = sourceItem?.name || sourceItem?.item_name || '';
+                        const noteLine = itemName ? `Đã trả ${itemName} cho khách`.toUpperCase() : '';
+                        let notes = (formData as any).debt_checked_notes || sourceItem?.debt_checked_notes || '';
+                        if (noteLine && !String(notes).toUpperCase().includes(noteLine)) {
+                            notes = notes ? `${notes}\n${noteLine}` : noteLine;
+                        }
+
+                        const currentStage = sourceItem
+                            ? (optimisticAfterSaleStages[selectedId] ?? resolveItemAfterSaleStage(sourceItem))
+                            : 'after1_debt';
+                        const shouldMoveToAfter2 = currentStage === 'after1_debt' || currentStage === 'after1';
+
+                        await onUpdateItemAfterSaleData(selectedId, isCustomer, {
+                            debt_checked: formData.debt_checked,
+                            debt_checked_notes: notes,
+                            debt_checked_by_name: formData.debt_checked_by_name,
+                            ...(shouldMoveToAfter2 ? { stage: 'after2' } : {}),
+                            ...(selectedId === itemId ? {
+                                completion_photos: formData.completion_photos,
+                                packaging_photos: formData.packaging_photos,
+                                aftersale_receiver_name: formData.aftersale_receiver_name,
+                            } : {}),
+                        });
+                    }
+                } else if (itemId) {
                     await onUpdateItemAfterSaleData(itemId, !!product, {
                         completion_photos: formData.completion_photos,
                         packaging_photos: formData.packaging_photos,
@@ -906,15 +944,10 @@ export function ProductDetailDialog({
                         delivery_shipper_phone: formData.delivery_shipper_phone,
                         delivery_staff_name: formData.delivery_staff_name,
                         delivery_received_at: formData.delivery_received_at,
-                        // Mỗi sản phẩm điền độc lập — không dùng chung order-level nữa
                         aftersale_receiver_name: formData.aftersale_receiver_name,
                         debt_checked: formData.debt_checked,
                         debt_checked_notes: (formData as any).debt_checked_notes,
                         debt_checked_by_name: formData.debt_checked_by_name,
-                        // Nút "Xác nhận kiểm nợ & Lưu" cũng chuyển sang bước Đóng gói
-                        ...(roomId.startsWith('after1_debt') && !onConfirmAndMove
-                            ? { stage: 'after2' }
-                            : {}),
                     });
                 }
             }
@@ -1477,8 +1510,8 @@ export function ProductDetailDialog({
     }, [order, uniqueItems, optimisticAfterSaleStages]);
 
     const handoffSelectedDetails = useMemo(() => {
-        return invoiceProductDetails.filter((detail) => ['after2', 'after3', 'after4'].includes(detail.afterSaleStage));
-    }, [invoiceProductDetails]);
+        return invoiceProductDetails.filter((detail) => !!debtReceiptsByProduct[detail.id]);
+    }, [invoiceProductDetails, debtReceiptsByProduct]);
 
     const handoffCollectAmount = useMemo(() => {
         return handoffSelectedDetails.reduce((sum, detail) => sum + detail.collectDue, 0);
@@ -1490,24 +1523,15 @@ export function ProductDetailDialog({
         return Object.values(debtReceiptsByProduct).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
     }, [debtReceiptsByProduct]);
 
-    /** Đồng bộ tab phiếu thu theo SP đã tick bàn giao (giữ draft khi đã có). */
+    /** Seed phiếu thu cho SP đã ở after2+ khi mở dialog — không xoá draft tick local. */
     useEffect(() => {
         if (!open || (!roomId.startsWith('after1_debt') && roomId !== 'after4')) return;
 
         setDebtReceiptsByProduct((prev) => {
-            const readyIds = new Set(handoffSelectedDetails.map((d) => d.id));
             let changed = false;
             const next: Record<string, DebtProductReceipt> = { ...prev };
-
-            for (const id of Object.keys(next)) {
-                if (!readyIds.has(id)) {
-                    delete next[id];
-                    changed = true;
-                }
-            }
-
-            for (const detail of handoffSelectedDetails) {
-                if (!next[detail.id]) {
+            for (const detail of invoiceProductDetails) {
+                if (['after2', 'after3', 'after4'].includes(detail.afterSaleStage) && !next[detail.id]) {
                     next[detail.id] = {
                         amount: detail.collectDue,
                         payment_method: 'cash',
@@ -1517,17 +1541,9 @@ export function ProductDetailDialog({
                     changed = true;
                 }
             }
-
             return changed ? next : prev;
         });
-
-        setDebtHandoffTab((prev) => {
-            if (prev === 'handoff') return prev;
-            const productId = prev.startsWith('receipt-') ? prev.slice('receipt-'.length) : '';
-            if (productId && handoffSelectedDetails.some((d) => d.id === productId)) return prev;
-            return 'handoff';
-        });
-    }, [open, roomId, handoffSelectedDetails]);
+    }, [open, roomId, order?.id, invoiceProductDetails]);
 
     const updateDebtReceipt = useCallback((productId: string, patch: Partial<DebtProductReceipt>) => {
         setDebtReceiptsByProduct((prev) => {
@@ -1536,6 +1552,10 @@ export function ProductDetailDialog({
             return { ...prev, [productId]: { ...current, ...patch } };
         });
     }, []);
+
+    const isHandoffChecked = useCallback((item: any) => {
+        return !!debtReceiptsByProduct[item.id];
+    }, [debtReceiptsByProduct]);
 
     const getRemainingItemsCount = () => {
         return uniqueItems.filter(item => 
@@ -2152,19 +2172,14 @@ export function ProductDetailDialog({
                                                                     <div className="flex items-center gap-2 min-w-0">
                                                                         <Checkbox 
                                                                             id={`item-sent-${item.id}`}
-                                                                            checked={isItemReadyToReturn(item)}
-                                                                            onCheckedChange={async (checked) => {
+                                                                            checked={isHandoffChecked(item)}
+                                                                            onCheckedChange={(checked) => {
                                                                                 const currentStage = getItemAfterSaleStage(item);
-                                                                                if (checked && currentStage === 'after1') {
-                                                                                    toast.error('Sản phẩm chưa qua Kiểm nợ — hoàn thành ảnh hoàn thiện và chuyển sang Kiểm nợ trước');
-                                                                                    return;
-                                                                                }
-                                                                                const nextStage = checked ? 'after2' : 'after1_debt';
-                                                                                const previousStage = currentStage;
-
-                                                                                setOptimisticAfterSaleStages(prev => ({ ...prev, [item.id]: nextStage }));
-
                                                                                 if (checked) {
+                                                                                    if (currentStage === 'after1') {
+                                                                                        toast.error('Sản phẩm chưa qua Kiểm nợ — hoàn thành ảnh hoàn thiện và chuyển sang Kiểm nợ trước');
+                                                                                        return;
+                                                                                    }
                                                                                     const detail = invoiceProductDetails.find((d) => d.id === item.id);
                                                                                     setDebtReceiptsByProduct((prev) => ({
                                                                                         ...prev,
@@ -2176,45 +2191,20 @@ export function ProductDetailDialog({
                                                                                         },
                                                                                     }));
                                                                                     setDebtHandoffTab(`receipt-${item.id}`);
-                                                                                } else {
-                                                                                    setDebtReceiptsByProduct((prev) => {
-                                                                                        const next = { ...prev };
-                                                                                        delete next[item.id];
-                                                                                        return next;
-                                                                                    });
-                                                                                    setDebtHandoffTab('handoff');
+                                                                                    return;
                                                                                 }
 
-                                                                                // Cập nhật ghi chú kiểm nợ của chính sản phẩm này
-                                                                                const noteLine = `Đã trả ${item.item_name} cho khách`.toUpperCase();
-                                                                                let currentNotes = (item as any).debt_checked_notes || '';
-                                                                                if (checked) {
-                                                                                    if (!currentNotes.toUpperCase().includes(noteLine)) {
-                                                                                        currentNotes = currentNotes ? `${currentNotes}\n${noteLine}` : noteLine;
-                                                                                    }
-                                                                                } else {
-                                                                                    currentNotes = currentNotes.split('\n').filter((line: string) => line.trim().toUpperCase() !== noteLine).join('\n');
+                                                                                // Untick chỉ bỏ draft local — không gọi API (tránh 400 quay ngược bước)
+                                                                                if (['after2', 'after3', 'after4'].includes(currentStage)) {
+                                                                                    toast.error('SP đã chuyển bước Đóng gói — không bỏ chọn được tại đây');
+                                                                                    return;
                                                                                 }
-
-                                                                                if (!onUpdateItemAfterSaleData) return;
-
-                                                                                try {
-                                                                                    await onUpdateItemAfterSaleData(item.id, !!(item as any).is_customer_item, {
-                                                                                        stage: nextStage,
-                                                                                        debt_checked_notes: currentNotes,
-                                                                                    });
-                                                                                    onReloadOrder?.();
-                                                                                } catch (error) {
-                                                                                    console.error('Update handoff item error:', error);
-                                                                                    setOptimisticAfterSaleStages(prev => ({ ...prev, [item.id]: previousStage }));
-                                                                                    setDebtReceiptsByProduct((prev) => {
-                                                                                        const next = { ...prev };
-                                                                                        if (checked) delete next[item.id];
-                                                                                        return next;
-                                                                                    });
-                                                                                    setDebtHandoffTab('handoff');
-                                                                                    toast.error('Không cập nhật được trạng thái bàn giao');
-                                                                                }
+                                                                                setDebtReceiptsByProduct((prev) => {
+                                                                                    const next = { ...prev };
+                                                                                    delete next[item.id];
+                                                                                    return next;
+                                                                                });
+                                                                                setDebtHandoffTab('handoff');
                                                                             }}
                                                                         />
                                                                         <Label htmlFor={`item-sent-${item.id}`} className="text-[11px] font-bold truncate cursor-pointer uppercase">
@@ -2223,9 +2213,9 @@ export function ProductDetailDialog({
                                                                     </div>
                                                                     <Badge className={cn(
                                                                         "text-[9px] h-4 px-1 whitespace-nowrap",
-                                                                        isItemReadyToReturn(item) ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                                                                        isHandoffChecked(item) ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
                                                                     )}>
-                                                                        {isItemReadyToReturn(item) ? 'Sắp trả' : 'Chờ trả'}
+                                                                        {isHandoffChecked(item) ? 'Sắp trả' : 'Chờ trả'}
                                                                     </Badge>
                                                                 </div>
                                                             ))}

@@ -2424,7 +2424,7 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type,
             stage, due_at, sales_step_data,
             care_warranty_flow, care_warranty_stage,
-            move_notes, move_photos,
+            move_notes, move_photos, allow_step_back,
             // Mỗi sản phẩm trong đơn phải điền độc lập — không dùng chung dữ liệu cấp đơn
             aftersale_receiver_name, debt_checked, debt_checked_notes, debt_checked_by_name,
             delivery_creator_name, delivery_shipper_phone, delivery_staff_name, delivery_received_at,
@@ -2493,10 +2493,19 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             updatePayload.current_phase = 'after_sale';
             updatePayload.phase_stage = stage;
         }
-        const oldStage = currentItem?.phase_stage || currentItem?.after_sale_stage || 'after1';
+        const oldStage =
+            (currentItem?.current_phase === 'after_sale'
+                ? (currentItem?.after_sale_stage || currentItem?.phase_stage)
+                : (currentItem?.phase_stage || currentItem?.after_sale_stage))
+            || 'after1';
 
         if (stage !== undefined && stage !== oldStage) {
-            assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
+            const oldIdx = AFTER_SALE_STAGE_ORDER.indexOf(oldStage as any);
+            const newIdx = AFTER_SALE_STAGE_ORDER.indexOf(stage as any);
+            const isSingleStepBack = allow_step_back && oldIdx >= 0 && newIdx >= 0 && oldIdx - newIdx === 1;
+            if (!isSingleStepBack) {
+                assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
+            }
         }
 
         const newCareFlowForCheck = care_warranty_flow !== undefined ? care_warranty_flow : oldCareFlow;

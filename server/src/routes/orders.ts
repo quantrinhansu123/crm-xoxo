@@ -2322,8 +2322,9 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
     try {
         const { id } = req.params;
         const { content, amount, payment_method, image_url, notes, order_product_id } = req.body;
+        const amountNum = Number(amount);
 
-        if (!content || !amount || amount <= 0) {
+        if (!content || !Number.isFinite(amountNum) || amountNum <= 0) {
             throw new ApiError('Nội dung và số tiền là bắt buộc', 400);
         }
 
@@ -2343,7 +2344,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
             order_id: order.id,
             order_code: order.order_code,
             content,
-            amount,
+            amount: amountNum,
             payment_method: payment_method || 'cash',
             image_url: image_url || null,
             notes: notes || null,
@@ -2361,7 +2362,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
         }
 
         // Update order's paid_amount and remaining_debt
-        const newPaidAmount = (order.paid_amount || 0) + amount;
+        const newPaidAmount = (order.paid_amount || 0) + amountNum;
         const newRemainingDebt = Math.max(0, order.total_amount - newPaidAmount);
         const newPaymentStatus = newRemainingDebt <= 0 ? 'paid' : (newPaidAmount > 0 ? 'partial' : 'unpaid');
 
@@ -2413,7 +2414,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                 code: transCode,
                 type: 'income',
                 category: 'Thanh toán đơn hàng',
-                amount,
+                amount: amountNum,
                 payment_method: payment_method || 'cash',
                 notes: `${content} - ${order.order_code}`,
                 image_url,
@@ -2440,7 +2441,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                     code: transCode,
                     type: 'income',
                     category: 'Thanh toán đơn hàng',
-                    amount,
+                    amount: amountNum,
                     payment_method: payment_method || 'cash',
                     status: 'approved',
                     order_id: order.id,
@@ -2460,7 +2461,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                 .insert({
                     code: financeTransCode,
                     type: 'income',
-                    amount, // The specific payment amount recorded now
+                    amount: amountNum, // The specific payment amount recorded now
                     category: 'Thanh toán đơn hàng',
                     description: `${content} - Hóa đơn ${invoice.id.slice(0, 8)} - ${order.order_code}`,
                     customer_id: (order as any).customer_id || null, 
@@ -2495,7 +2496,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                     payment_status: newPaymentStatus,
                 }
             },
-            message: `Đã ghi nhận thanh toán ${amount.toLocaleString()}đ`,
+            message: `Đã ghi nhận thanh toán ${amountNum.toLocaleString()}đ`,
         });
     } catch (error) {
         next(error);
