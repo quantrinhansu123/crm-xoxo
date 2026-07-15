@@ -848,6 +848,19 @@ export function ProductDetailDialog({
             }
         }
 
+        // Kiểm nợ → Đóng gói: bắt buộc đủ 4 mục mới cho lưu & chuyển bước
+        if (isAftersale && roomId.startsWith('after1_debt') && !onConfirmAndMove) {
+            const errors: string[] = [];
+            if (handoffSelectedCount === 0) errors.push('Chọn ít nhất 1 sản phẩm trong "Danh sách bàn giao đợt này"');
+            if (!((formData as any).debt_payment_photos?.length > 0)) errors.push('Chụp ít nhất một "Ảnh CK" (chuyển khoản/tiền mặt)');
+            if (!formData.debt_checked) errors.push('Tick "Xác nhận đã kiểm nợ"');
+            if (!formData.debt_checked_by_name?.trim()) errors.push('Chọn "Người thu tiền"');
+            if (errors.length > 0) {
+                showAfterSaleValidationToast(errors);
+                return;
+            }
+        }
+
         // Validation: xác nhận trả đủ phụ kiện khi đóng gói / giao hàng
         if (isAftersale && roomId.startsWith('after2') && !(formData as any).accessories_returned_checked) {
             setShowAccessoriesReturnWarning(true);
