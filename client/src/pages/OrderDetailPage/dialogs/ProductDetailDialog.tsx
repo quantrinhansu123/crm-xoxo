@@ -870,16 +870,11 @@ export function ProductDetailDialog({
             }
         }
 
-        // Kiểm nợ → Đóng gói: bắt buộc đủ bàn giao + xác nhận kiểm nợ + người thu tiền
+        // Kiểm nợ → Đóng gói: bắt buộc chọn ≥1 SP bàn giao (+ ảnh bill nếu thu tiền > 0 đã check ở trên)
+        // Không bắt buộc tick "Xác nhận đã kiểm nợ" / Người thu tiền — lưu nếu có điền.
         if (isAftersale && roomId.startsWith('after1_debt') && !onConfirmAndMove) {
-            const errors: string[] = [];
             if (Object.keys(debtReceiptsByProduct).length === 0) {
-                errors.push('Chọn ít nhất 1 sản phẩm trong "Danh sách bàn giao đợt này"');
-            }
-            if (!formData.debt_checked) errors.push('Tick "Xác nhận đã kiểm nợ"');
-            if (!formData.debt_checked_by_name?.trim()) errors.push('Chọn "Người thu tiền"');
-            if (errors.length > 0) {
-                showAfterSaleValidationToast(errors);
+                showAfterSaleValidationToast(['Chọn ít nhất 1 sản phẩm trong "Danh sách bàn giao đợt này"']);
                 return;
             }
         }
@@ -918,12 +913,13 @@ export function ProductDetailDialog({
                         const currentStage = sourceItem
                             ? (optimisticAfterSaleStages[selectedId] ?? resolveItemAfterSaleStage(sourceItem))
                             : 'after1_debt';
+                        // Cho phép after1 hoặc after1_debt → after2 kèm debt_checked (server đã nới rule này)
                         const shouldMoveToAfter2 = currentStage === 'after1_debt' || currentStage === 'after1';
 
                         await onUpdateItemAfterSaleData(selectedId, isCustomer, {
-                            debt_checked: formData.debt_checked,
+                            debt_checked: true,
                             debt_checked_notes: notes,
-                            debt_checked_by_name: formData.debt_checked_by_name,
+                            debt_checked_by_name: formData.debt_checked_by_name || undefined,
                             ...(shouldMoveToAfter2 ? { stage: 'after2' } : {}),
                             ...(selectedId === itemId ? {
                                 completion_photos: formData.completion_photos,
@@ -945,9 +941,13 @@ export function ProductDetailDialog({
                         delivery_staff_name: formData.delivery_staff_name,
                         delivery_received_at: formData.delivery_received_at,
                         aftersale_receiver_name: formData.aftersale_receiver_name,
-                        debt_checked: formData.debt_checked,
+                        debt_checked: roomId.startsWith('after1_debt') ? true : formData.debt_checked,
                         debt_checked_notes: (formData as any).debt_checked_notes,
                         debt_checked_by_name: formData.debt_checked_by_name,
+                        // Khi mở từ kéo Kanban: cũng chuyển bước trong cùng request kèm debt_checked
+                        ...(roomId.startsWith('after1_debt') && onConfirmAndMove
+                            ? { stage: 'after2' }
+                            : {}),
                     });
                 }
             }
@@ -2190,6 +2190,7 @@ export function ProductDetailDialog({
                                                                                             notes: '',
                                                                                         },
                                                                                     }));
+                                                                                    setFormData((prev) => ({ ...prev, debt_checked: true }));
                                                                                     setDebtHandoffTab(`receipt-${item.id}`);
                                                                                     return;
                                                                                 }
@@ -2236,13 +2237,16 @@ export function ProductDetailDialog({
                                                         </p>
                                                     </div>
 
-                                                <div className="flex items-center space-x-2 bg-white p-3 rounded-xl border shadow-sm">
+                                                    <div className="flex items-center space-x-2 bg-white p-3 rounded-xl border shadow-sm">
                                                     <Checkbox
                                                         id="debt_checked"
-                                                        checked={formData.debt_checked}
+                                                        checked={!!formData.debt_checked}
                                                         onCheckedChange={(checked) => setFormData(prev => ({ ...prev, debt_checked: !!checked }))}
                                                     />
-                                                    <Label htmlFor="debt_checked" className="text-sm font-semibold cursor-pointer">Xác nhận đã kiểm nợ</Label>
+                                                    <Label htmlFor="debt_checked" className="text-sm font-semibold cursor-pointer">
+                                                        Xác nhận đã kiểm nợ
+                                                        <span className="ml-1 text-[10px] font-normal text-muted-foreground">(tự tick khi chọn SP bàn giao)</span>
+                                                    </Label>
                                                 </div>
                                                 <div className="space-y-2">
                                                     <Label className="text-xs font-bold text-gray-500 uppercase">Ghi chú kiểm nợ</Label>

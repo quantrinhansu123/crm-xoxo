@@ -88,13 +88,21 @@ export function getAfterSaleStageLabel(value: string | null | undefined): string
     return AFTER_SALE_STAGE_LABELS[value] ?? value;
 }
 
-/** Bước after-sale của 1 dòng (ưu tiên phase_stage — khớp Kanban) */
+/** Bước after-sale của 1 dòng (ưu tiên after_sale_stage khi đang aftersale — tránh lệch phase_stage cũ) */
 export function getItemAfterSaleStage(item: {
+    current_phase?: string | null;
     phase_stage?: string | null;
     after_sale_stage?: string | null;
 } | null | undefined): string {
     if (!item) return 'after1';
-    return item.phase_stage || item.after_sale_stage || 'after1';
+    const afterStages = new Set(['after1', 'after1_debt', 'after2', 'after3', 'after4']);
+    const after = item.after_sale_stage || null;
+    const phase = item.phase_stage || null;
+    if (item.current_phase === 'after_sale' || (after && afterStages.has(after))) {
+        return after || (phase && afterStages.has(phase) ? phase : null) || 'after1';
+    }
+    if (phase && afterStages.has(phase)) return phase;
+    return phase || after || 'after1';
 }
 
 /** Bước after-sale của nhóm sản phẩm trên Kanban */

@@ -19,6 +19,7 @@ import {
     CARE_STAGE_ORDER,
     WARRANTY_STAGE_ORDER,
     assertForwardStageMove,
+    resolveAfterSaleOldStage,
 } from '../utils/kanbanStageValidation.js';
 import {
     collectAssignedSalesFromServices,
@@ -2493,17 +2494,19 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             updatePayload.current_phase = 'after_sale';
             updatePayload.phase_stage = stage;
         }
-        const oldStage =
-            (currentItem?.current_phase === 'after_sale'
-                ? (currentItem?.after_sale_stage || currentItem?.phase_stage)
-                : (currentItem?.phase_stage || currentItem?.after_sale_stage))
-            || 'after1';
+        const oldStage = resolveAfterSaleOldStage(currentItem);
 
         if (stage !== undefined && stage !== oldStage) {
             const oldIdx = AFTER_SALE_STAGE_ORDER.indexOf(oldStage as any);
             const newIdx = AFTER_SALE_STAGE_ORDER.indexOf(stage as any);
             const isSingleStepBack = allow_step_back && oldIdx >= 0 && newIdx >= 0 && oldIdx - newIdx === 1;
-            if (!isSingleStepBack) {
+            // phase_stage / after_sale_stage đôi khi lệch còn after1 trong khi UI đã ở Kiểm nợ —
+            // cho phép after1 → after2 khi xác nhận kiểm nợ (debt_checked).
+            const isDebtCheckAdvance =
+                stage === 'after2'
+                && (oldStage === 'after1' || oldStage === 'after1_debt')
+                && debt_checked === true;
+            if (!isSingleStepBack && !isDebtCheckAdvance) {
                 assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
             }
         }
