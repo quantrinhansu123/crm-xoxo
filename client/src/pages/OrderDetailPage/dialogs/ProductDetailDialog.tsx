@@ -11,8 +11,9 @@ import {
     ShoppingBag, Tag, FileText, Package, Truck, Wrench, Camera,
     User as UserIcon, MessageSquare, BookOpen,
     History, Save, Loader2, Heart, ShieldCheck, ClipboardList, Sparkles,
-    ThumbsUp, ThumbsDown, Calendar, XCircle, Maximize2, Clock, ChevronDown
+    ThumbsUp, ThumbsDown, Calendar, XCircle, Maximize2, Clock, ChevronDown, Receipt
 } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { WorkflowLogDetailDialog } from '@/components/orders/workflow/WorkflowLogDetailDialog';
 import { BackwardMoveDialog } from '@/components/orders/BackwardMoveDialog';
 import { UpsellDialog } from '@/components/orders/UpsellDialog';
@@ -58,6 +59,13 @@ import {
     getDriveViewUrl,
     isDriveUrl,
 } from '@/lib/driveMedia';
+
+type DebtProductReceipt = {
+    amount: number;
+    payment_method: 'cash' | 'transfer' | 'zalopay';
+    photos: string[];
+    notes?: string;
+};
 
 function parsePhotoUrls(photos: unknown): string[] {
     if (Array.isArray(photos)) {
@@ -388,8 +396,8 @@ export function ProductDetailDialog({
     const [saving, setSaving] = useState(false);
     const [showUpsellDialog, setShowUpsellDialog] = useState(false);
     const [optimisticAfterSaleStages, setOptimisticAfterSaleStages] = useState<Record<string, string>>({});
-    /** Theo dõi số tiền thu auto để không ghi đè khi user chỉnh tay */
-    const lastAutoCollectAmountRef = useRef(0);
+    const [debtReceiptsByProduct, setDebtReceiptsByProduct] = useState<Record<string, DebtProductReceipt>>({});
+    const [debtHandoffTab, setDebtHandoffTab] = useState('handoff');
     const { users, fetchUsers, fetchSales, fetchTechnicians, fetchMentionable } = useUsers();
     const { user } = useAuth();
 
@@ -498,7 +506,8 @@ export function ProductDetailDialog({
             
             setActiveImageIdx(0);
             setOptimisticAfterSaleStages({});
-            lastAutoCollectAmountRef.current = 0;
+            setDebtReceiptsByProduct({});
+            setDebtHandoffTab('handoff');
         }
     }, [open, order?.id, group?.product?.id, group?.services?.[0]?.id]); // Only re-init when dialog opens or identity changes
 
@@ -837,22 +846,36 @@ export function ProductDetailDialog({
             }
         }
 
-        // Validation: Require payment proof photos when collecting debt
-        if (isAftersale) {
-            if ((formData as any).debt_collect_amount && (formData as any).debt_collect_amount > 0) {
-                const hasPaymentPhotos = (formData as any).debt_payment_photos && (formData as any).debt_payment_photos.length > 0;
-                if (!hasPaymentPhotos) {
-                    toast.error("Vui lòng chụp ảnh khách đã chuyển khoản hoặc chụp tiền mặt làm bằng chứng thu tiền");
-                    return;
+        // Validation: per-SP phiếu thu — bắt buộc ảnh bill khi số tiền > 0
+        if (isAftersale && (roomId.startsWith('after1_debt') || roomId === 'after4')) {
+            const receiptErrors: string[] = [];
+            const nameLookup = new Map<string, string>();
+            for (const item of [
+                ...(order?.customer_items || []),
+                ...(order?.sale_items || []),
+                ...(order?.items || []),
+            ] as any[]) {
+                if (item?.id) {
+                    nameLookup.set(item.id, item.name || item.item_name || item.id);
                 }
+            }
+            for (const [productId, receipt] of Object.entries(debtReceiptsByProduct)) {
+                if (Number(receipt.amount) > 0 && !(receipt.photos?.length > 0)) {
+                    receiptErrors.push(`Chụp ảnh bill cho phiếu thu "${nameLookup.get(productId) || productId}"`);
+                }
+            }
+            if (receiptErrors.length > 0) {
+                showAfterSaleValidationToast(receiptErrors);
+                return;
             }
         }
 
-        // Kiểm nợ → Đóng gói: bắt buộc đủ 4 mục mới cho lưu & chuyển bước
+        // Kiểm nợ → Đóng gói: bắt buộc đủ bàn giao + xác nhận kiểm nợ + người thu tiền
         if (isAftersale && roomId.startsWith('after1_debt') && !onConfirmAndMove) {
             const errors: string[] = [];
-            if (handoffSelectedCount === 0) errors.push('Chọn ít nhất 1 sản phẩm trong "Danh sách bàn giao đợt này"');
-            if (!((formData as any).debt_payment_photos?.length > 0)) errors.push('Chụp ít nhất một "Ảnh CK" (chuyển khoản/tiền mặt)');
+            if (Object.keys(debtReceiptsByProduct).length === 0) {
+                errors.push('Chọn ít nhất 1 sản phẩm trong "Danh sách bàn giao đợt này"');
+            }
             if (!formData.debt_checked) errors.push('Tick "Xác nhận đã kiểm nợ"');
             if (!formData.debt_checked_by_name?.trim()) errors.push('Chọn "Người thu tiền"');
             if (errors.length > 0) {
@@ -899,9 +922,17 @@ export function ProductDetailDialog({
             // Also update the general order data (debt, receiver, etc)
             // But exclude photos from order-level update to keep them strictly at item-level
             if (onUpdateOrder) {
+                const receiptPhotoUrls = Object.values(debtReceiptsByProduct).flatMap((r) => r.photos || []);
+                const mergedDebtPhotos = [...new Set([
+                    ...parsePhotoUrls((formData as any).debt_payment_photos),
+                    ...receiptPhotoUrls,
+                ])];
                 const orderData = pickOrderLevelAfterSalePatch(
                     Object.fromEntries(
-                        Object.entries(formData).filter(
+                        Object.entries({
+                            ...formData,
+                            debt_payment_photos: mergedDebtPhotos,
+                        }).filter(
                             ([key]) => key !== 'completion_photos' && key !== 'packaging_photos'
                         )
                     )
@@ -921,24 +952,51 @@ export function ProductDetailDialog({
                 });
             }
 
-            // Tạo phiếu thu nợ TRƯỚC khi chuyển bước / đóng dialog
-            if ((formData as any).debt_collect_amount && (formData as any).debt_collect_amount > 0 && order && isAftersale) {
-                const { ordersApi } = await import('@/lib/api');
-                try {
-                    await ordersApi.createPayment(order.id, {
-                        content: 'Thanh toán đơn hàng',
-                        amount: (formData as any).debt_collect_amount,
-                        notes: `Thu nợ cho đơn ${order.order_code || order.id} (Bước: ${getAfterSaleStageLabel(roomId)})`,
-                        payment_method: (formData as any).debt_payment_method || 'cash',
-                        image_url: ((formData as any).debt_payment_photos || [])[0] || undefined,
-                        order_product_id: product?.id,
-                    });
-                    toast.success('Đã tạo phiếu thu nợ và cập nhật công nợ');
-                    setFormData(prev => ({ ...prev, debt_collect_amount: 0 } as any));
-                } catch (error) {
-                    console.error('Lỗi tạo phiếu thu nợ:', error);
-                    toast.error('Lỗi khi tạo phiếu thu nợ. Vui lòng thử lại trước khi chuyển bước.');
-                    return;
+            // Tạo phiếu thu theo từng SP bàn giao
+            if (order && isAftersale && (roomId.startsWith('after1_debt') || roomId === 'after4')) {
+                const receiptEntries = Object.entries(debtReceiptsByProduct).filter(
+                    ([, receipt]) => Number(receipt.amount) > 0
+                );
+                if (receiptEntries.length > 0) {
+                    const { ordersApi } = await import('@/lib/api');
+                    try {
+                        const nameLookup = new Map<string, string>();
+                        for (const item of [
+                            ...(order.customer_items || []),
+                            ...(order.sale_items || []),
+                            ...(order.items || []),
+                        ] as any[]) {
+                            if (item?.id) {
+                                nameLookup.set(item.id, item.name || item.item_name || item.id);
+                            }
+                        }
+                        for (const [productId, receipt] of receiptEntries) {
+                            const productLabel = nameLookup.get(productId);
+                            await ordersApi.createPayment(order.id, {
+                                content: 'Thanh toán đơn hàng',
+                                amount: Number(receipt.amount),
+                                notes: [
+                                    `Thu nợ cho đơn ${order.order_code || order.id}`,
+                                    productLabel ? `SP: ${productLabel}` : null,
+                                    `(Bước: ${getAfterSaleStageLabel(roomId)})`,
+                                    receipt.notes?.trim() || null,
+                                ].filter(Boolean).join(' — '),
+                                payment_method: receipt.payment_method || 'cash',
+                                image_url: receipt.photos?.[0] || undefined,
+                                order_product_id: productId,
+                            });
+                        }
+                        toast.success(
+                            receiptEntries.length === 1
+                                ? 'Đã tạo phiếu thu nợ và cập nhật công nợ'
+                                : `Đã tạo ${receiptEntries.length} phiếu thu nợ và cập nhật công nợ`
+                        );
+                        setDebtReceiptsByProduct({});
+                    } catch (error) {
+                        console.error('Lỗi tạo phiếu thu nợ:', error);
+                        toast.error('Lỗi khi tạo phiếu thu nợ. Vui lòng thử lại trước khi chuyển bước.');
+                        return;
+                    }
                 }
             }
 
@@ -1418,30 +1476,66 @@ export function ProductDetailDialog({
         });
     }, [order, uniqueItems, optimisticAfterSaleStages]);
 
+    const handoffSelectedDetails = useMemo(() => {
+        return invoiceProductDetails.filter((detail) => ['after2', 'after3', 'after4'].includes(detail.afterSaleStage));
+    }, [invoiceProductDetails]);
+
     const handoffCollectAmount = useMemo(() => {
-        return invoiceProductDetails
-            .filter((detail) => ['after2', 'after3', 'after4'].includes(detail.afterSaleStage))
-            .reduce((sum, detail) => sum + detail.collectDue, 0);
-    }, [invoiceProductDetails]);
+        return handoffSelectedDetails.reduce((sum, detail) => sum + detail.collectDue, 0);
+    }, [handoffSelectedDetails]);
 
-    const handoffSelectedCount = useMemo(() => {
-        return invoiceProductDetails.filter((detail) => ['after2', 'after3', 'after4'].includes(detail.afterSaleStage)).length;
-    }, [invoiceProductDetails]);
+    const handoffSelectedCount = handoffSelectedDetails.length;
 
-    /** Chỉ auto-điền số tiền thu khi user chưa chỉnh tay (vẫn = lần auto trước hoặc 0). */
+    const receiptCollectTotal = useMemo(() => {
+        return Object.values(debtReceiptsByProduct).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+    }, [debtReceiptsByProduct]);
+
+    /** Đồng bộ tab phiếu thu theo SP đã tick bàn giao (giữ draft khi đã có). */
     useEffect(() => {
         if (!open || (!roomId.startsWith('after1_debt') && roomId !== 'after4')) return;
-        setFormData((prev) => {
-            const current = Number((prev as any).debt_collect_amount || 0);
-            const lastAuto = lastAutoCollectAmountRef.current;
-            const userEdited = current !== 0 && current !== lastAuto;
-            if (userEdited || current === handoffCollectAmount) {
-                return prev;
+
+        setDebtReceiptsByProduct((prev) => {
+            const readyIds = new Set(handoffSelectedDetails.map((d) => d.id));
+            let changed = false;
+            const next: Record<string, DebtProductReceipt> = { ...prev };
+
+            for (const id of Object.keys(next)) {
+                if (!readyIds.has(id)) {
+                    delete next[id];
+                    changed = true;
+                }
             }
-            lastAutoCollectAmountRef.current = handoffCollectAmount;
-            return { ...prev, debt_collect_amount: handoffCollectAmount } as any;
+
+            for (const detail of handoffSelectedDetails) {
+                if (!next[detail.id]) {
+                    next[detail.id] = {
+                        amount: detail.collectDue,
+                        payment_method: 'cash',
+                        photos: [],
+                        notes: '',
+                    };
+                    changed = true;
+                }
+            }
+
+            return changed ? next : prev;
         });
-    }, [open, roomId, handoffCollectAmount]);
+
+        setDebtHandoffTab((prev) => {
+            if (prev === 'handoff') return prev;
+            const productId = prev.startsWith('receipt-') ? prev.slice('receipt-'.length) : '';
+            if (productId && handoffSelectedDetails.some((d) => d.id === productId)) return prev;
+            return 'handoff';
+        });
+    }, [open, roomId, handoffSelectedDetails]);
+
+    const updateDebtReceipt = useCallback((productId: string, patch: Partial<DebtProductReceipt>) => {
+        setDebtReceiptsByProduct((prev) => {
+            const current = prev[productId];
+            if (!current) return prev;
+            return { ...prev, [productId]: { ...current, ...patch } };
+        });
+    }, []);
 
     const getRemainingItemsCount = () => {
         return uniqueItems.filter(item => 
@@ -2007,11 +2101,45 @@ export function ProductDetailDialog({
                                                 </div>
                                             </div>
 
-                                            <div className="bg-white p-4 rounded-2xl border border-purple-100 shadow-sm space-y-4">
+                                            <div className="bg-white p-4 rounded-2xl border border-purple-100 shadow-sm space-y-3">
+                                                <Tabs value={debtHandoffTab} onValueChange={setDebtHandoffTab} className="w-full">
+                                                    <TabsList className="w-full h-auto flex-wrap justify-start gap-1 p-1">
+                                                        <TabsTrigger value="handoff" className="text-[11px] px-2.5 py-1.5">
+                                                            Bàn giao
+                                                            {handoffSelectedCount > 0 && (
+                                                                <Badge className="ml-1.5 h-4 px-1 text-[9px] bg-blue-100 text-blue-700 hover:bg-blue-100">
+                                                                    {handoffSelectedCount}
+                                                                </Badge>
+                                                            )}
+                                                        </TabsTrigger>
+                                                        {handoffSelectedDetails.map((detail) => {
+                                                            const receipt = debtReceiptsByProduct[detail.id];
+                                                            const needsPhoto = Number(receipt?.amount) > 0 && !(receipt?.photos?.length > 0);
+                                                            return (
+                                                                <TabsTrigger
+                                                                    key={detail.id}
+                                                                    value={`receipt-${detail.id}`}
+                                                                    className="text-[11px] px-2.5 py-1.5 max-w-[180px]"
+                                                                >
+                                                                    <Receipt className="h-3 w-3 mr-1 shrink-0" />
+                                                                    <span className="truncate">Phiếu thu — {detail.name}</span>
+                                                                    {needsPhoto ? (
+                                                                        <span className="ml-1 text-rose-500 font-black">*</span>
+                                                                    ) : receipt ? (
+                                                                        <span className="ml-1 text-[9px] font-bold text-emerald-600 tabular-nums">
+                                                                            {formatCurrency(receipt.amount)}
+                                                                        </span>
+                                                                    ) : null}
+                                                                </TabsTrigger>
+                                                            );
+                                                        })}
+                                                    </TabsList>
+
+                                                    <TabsContent value="handoff" className="mt-3 space-y-4">
                                                     <div className="space-y-2 mb-2">
                                                         <Label className="text-[10px] font-black text-blue-600 uppercase">Danh sách bàn giao đợt này:</Label>
                                                         <p className="text-[10px] text-muted-foreground leading-snug">
-                                                            Chỉ hiện SP đã qua Kiểm nợ. SP khác trên đơn vẫn ở Ảnh hoàn thiện cho đến khi chuyển bước riêng.
+                                                            Tích SP để mở tab Phiếu thu — điền tiền và upload ảnh bill cho từng SP.
                                                         </p>
                                                         <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-1 custom-scrollbar">
                                                             {handoffEligibleProducts.length === 0 ? (
@@ -2036,6 +2164,27 @@ export function ProductDetailDialog({
 
                                                                                 setOptimisticAfterSaleStages(prev => ({ ...prev, [item.id]: nextStage }));
 
+                                                                                if (checked) {
+                                                                                    const detail = invoiceProductDetails.find((d) => d.id === item.id);
+                                                                                    setDebtReceiptsByProduct((prev) => ({
+                                                                                        ...prev,
+                                                                                        [item.id]: prev[item.id] || {
+                                                                                            amount: detail?.collectDue ?? 0,
+                                                                                            payment_method: 'cash',
+                                                                                            photos: [],
+                                                                                            notes: '',
+                                                                                        },
+                                                                                    }));
+                                                                                    setDebtHandoffTab(`receipt-${item.id}`);
+                                                                                } else {
+                                                                                    setDebtReceiptsByProduct((prev) => {
+                                                                                        const next = { ...prev };
+                                                                                        delete next[item.id];
+                                                                                        return next;
+                                                                                    });
+                                                                                    setDebtHandoffTab('handoff');
+                                                                                }
+
                                                                                 // Cập nhật ghi chú kiểm nợ của chính sản phẩm này
                                                                                 const noteLine = `Đã trả ${item.item_name} cho khách`.toUpperCase();
                                                                                 let currentNotes = (item as any).debt_checked_notes || '';
@@ -2058,6 +2207,12 @@ export function ProductDetailDialog({
                                                                                 } catch (error) {
                                                                                     console.error('Update handoff item error:', error);
                                                                                     setOptimisticAfterSaleStages(prev => ({ ...prev, [item.id]: previousStage }));
+                                                                                    setDebtReceiptsByProduct((prev) => {
+                                                                                        const next = { ...prev };
+                                                                                        if (checked) delete next[item.id];
+                                                                                        return next;
+                                                                                    });
+                                                                                    setDebtHandoffTab('handoff');
                                                                                     toast.error('Không cập nhật được trạng thái bàn giao');
                                                                                 }
                                                                             }}
@@ -2077,85 +2232,20 @@ export function ProductDetailDialog({
                                                         </div>
                                                     </div>
 
-                                                    <div className="pt-3 mt-1 border-t-2 border-dashed border-purple-100 space-y-3">
-                                                        <div className="rounded-xl border border-blue-200 bg-blue-50/50 px-3 py-2 text-[11px]">
-                                                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                                                <span className="font-bold text-blue-800">
-                                                                    SP bàn giao đợt này: {handoffSelectedCount}
-                                                                </span>
-                                                                <span className="font-black text-blue-900 tabular-nums">
-                                                                    Thu: {formatCurrency(handoffCollectAmount)}
-                                                                </span>
-                                                            </div>
-                                                            <p className="mt-1 text-[10px] text-blue-600/90 leading-snug">
-                                                                Tự động = tổng (giá SP − cọc từng dịch vụ) của các SP đã tick bàn giao.
-                                                            </p>
-                                                        </div>
-                                                        <div className="grid grid-cols-2 gap-3">
-                                                            <div className="space-y-1.5">
-                                                                <Label className="text-[10px] font-black text-purple-900 uppercase">SỐ TIỀN THU (ĐIỀU CHỈNH):</Label>
-                                                                <div className="relative">
-                                                                    <Input
-                                                                        type="text"
-                                                                        className="h-10 text-lg font-black text-red-600 bg-white border-red-200"
-                                                                        value={(formData as any).debt_collect_amount?.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") || "0"}
-                                                                        onChange={(e) => {
-                                                                            const val = e.target.value.replace(/\./g, "");
-                                                                            if (/^\d*$/.test(val)) {
-                                                                                const amount = val ? parseInt(val, 10) : 0;
-                                                                                // Đánh dấu đã chỉnh tay để không bị auto-overwrite
-                                                                                lastAutoCollectAmountRef.current = -1;
-                                                                                setFormData(prev => ({ ...prev, debt_collect_amount: amount } as any));
-                                                                            }
-                                                                        }}
-                                                                    />
-                                                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 font-bold text-gray-400">đ</span>
-                                                                </div>
-                                                            </div>
-                                                            <div className="space-y-1.5">
-                                                                <Label className="text-[10px] font-bold text-gray-500 uppercase">PT THANH TOÁN:</Label>
-                                                                <Select 
-                                                                    value={(formData as any).debt_payment_method || 'cash'}
-                                                                    onValueChange={(val) => setFormData(prev => ({ ...prev, debt_payment_method: val } as any))}
-                                                                >
-                                                                    <SelectTrigger className="bg-white h-10 border-purple-200">
-                                                                        <SelectValue />
-                                                                    </SelectTrigger>
-                                                                    <SelectContent>
-                                                                        <SelectItem value="cash">Tiền mặt</SelectItem>
-                                                                        <SelectItem value="transfer">Chuyển khoản</SelectItem>
-                                                                        <SelectItem value="zalopay">Zalo Pay</SelectItem>
-                                                                    </SelectContent>
-                                                                </Select>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="flex justify-between items-center">
-                                                            <span className="text-xs font-black text-purple-900 uppercase tracking-tight">Cần thu còn lại:</span>
-                                                            <span className="font-black text-lg text-gray-500">
-                                                                {formatCurrency((order.remaining_debt ?? (order.total_amount - (order.paid_amount || 0))) - ((formData as any).debt_collect_amount || 0))}
+                                                    <div className="rounded-xl border border-blue-200 bg-blue-50/50 px-3 py-2 text-[11px]">
+                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                                            <span className="font-bold text-blue-800">
+                                                                SP bàn giao đợt này: {handoffSelectedCount}
+                                                            </span>
+                                                            <span className="font-black text-blue-900 tabular-nums">
+                                                                Thu ước tính: {formatCurrency(handoffCollectAmount)}
                                                             </span>
                                                         </div>
-
-                                                        <div className="space-y-1.5 pt-2">
-                                                            <Label className="text-[10px] font-black text-purple-900 uppercase flex items-center gap-1.5">
-                                                                <Camera className="h-3.5 w-3.5 text-purple-500" />
-                                                                ẢNH THU TIỀN
-                                                                {Number((formData as any).debt_collect_amount || 0) > 0 && (
-                                                                    <span className="text-rose-500">*</span>
-                                                                )}
-                                                            </Label>
-                                                            <p className="text-[9px] text-purple-500 font-medium italic leading-tight">
-                                                                Chụp ảnh khách đã chuyển khoản hoặc chụp tiền mặt làm bằng chứng
-                                                            </p>
-                                                            <MultiMediaUpload
-                                                                value={(formData as any).debt_payment_photos || []}
-                                                                onChange={(urls) => setFormData(prev => ({ ...prev, debt_payment_photos: urls } as any))}
-                                                                bucket="orders"
-                                                                folder="debt-payment"
-                                                            />
-                                                        </div>
+                                                        <p className="mt-1 text-[10px] text-blue-600/90 leading-snug">
+                                                            Sau khi tích SP, mở tab Phiếu thu để điền số tiền và upload ảnh bill.
+                                                        </p>
                                                     </div>
+
                                                 <div className="flex items-center space-x-2 bg-white p-3 rounded-xl border shadow-sm">
                                                     <Checkbox
                                                         id="debt_checked"
@@ -2187,6 +2277,103 @@ export function ProductDetailDialog({
                                                         disabled={isInputDisabled}
                                                     />
                                                 </div>
+                                                    </TabsContent>
+
+                                                    {handoffSelectedDetails.map((detail) => {
+                                                        const receipt = debtReceiptsByProduct[detail.id] || {
+                                                            amount: detail.collectDue,
+                                                            payment_method: 'cash' as const,
+                                                            photos: [] as string[],
+                                                            notes: '',
+                                                        };
+                                                        return (
+                                                            <TabsContent key={detail.id} value={`receipt-${detail.id}`} className="mt-3 space-y-3">
+                                                                <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-2">
+                                                                    <div className="text-[11px] font-black text-emerald-800 uppercase truncate">{detail.name}</div>
+                                                                    <div className="text-[10px] text-emerald-700 mt-0.5">
+                                                                        Cần thu SP: <span className="font-black tabular-nums">{formatCurrency(detail.collectDue)}</span>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="grid grid-cols-2 gap-3">
+                                                                    <div className="space-y-1.5">
+                                                                        <Label className="text-[10px] font-black text-purple-900 uppercase">SỐ TIỀN THU:</Label>
+                                                                        <div className="relative">
+                                                                            <Input
+                                                                                type="text"
+                                                                                className="h-10 text-lg font-black text-red-600 bg-white border-red-200"
+                                                                                value={(receipt.amount || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") || "0"}
+                                                                                onChange={(e) => {
+                                                                                    const val = e.target.value.replace(/\./g, "");
+                                                                                    if (/^\d*$/.test(val)) {
+                                                                                        updateDebtReceipt(detail.id, {
+                                                                                            amount: val ? parseInt(val, 10) : 0,
+                                                                                        });
+                                                                                    }
+                                                                                }}
+                                                                            />
+                                                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 font-bold text-gray-400">đ</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="space-y-1.5">
+                                                                        <Label className="text-[10px] font-bold text-gray-500 uppercase">PT THANH TOÁN:</Label>
+                                                                        <Select
+                                                                            value={receipt.payment_method || 'cash'}
+                                                                            onValueChange={(val) => updateDebtReceipt(detail.id, {
+                                                                                payment_method: val as DebtProductReceipt['payment_method'],
+                                                                            })}
+                                                                        >
+                                                                            <SelectTrigger className="bg-white h-10 border-purple-200">
+                                                                                <SelectValue />
+                                                                            </SelectTrigger>
+                                                                            <SelectContent>
+                                                                                <SelectItem value="cash">Tiền mặt</SelectItem>
+                                                                                <SelectItem value="transfer">Chuyển khoản</SelectItem>
+                                                                                <SelectItem value="zalopay">Zalo Pay</SelectItem>
+                                                                            </SelectContent>
+                                                                        </Select>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="flex justify-between items-center">
+                                                                    <span className="text-xs font-black text-purple-900 uppercase tracking-tight">Cần thu còn lại (đơn):</span>
+                                                                    <span className="font-black text-lg text-gray-500">
+                                                                        {formatCurrency((order.remaining_debt ?? (order.total_amount - (order.paid_amount || 0))) - receiptCollectTotal)}
+                                                                    </span>
+                                                                </div>
+
+                                                                <div className="space-y-1.5 pt-1">
+                                                                    <Label className="text-[10px] font-black text-purple-900 uppercase flex items-center gap-1.5">
+                                                                        <Camera className="h-3.5 w-3.5 text-purple-500" />
+                                                                        ẢNH BILL / THU TIỀN
+                                                                        {Number(receipt.amount) > 0 && (
+                                                                            <span className="text-rose-500">*</span>
+                                                                        )}
+                                                                    </Label>
+                                                                    <p className="text-[9px] text-purple-500 font-medium italic leading-tight">
+                                                                        Chụp ảnh khách đã chuyển khoản hoặc chụp tiền mặt làm bằng chứng
+                                                                    </p>
+                                                                    <MultiMediaUpload
+                                                                        value={receipt.photos || []}
+                                                                        onChange={(urls) => updateDebtReceipt(detail.id, { photos: urls })}
+                                                                        bucket="orders"
+                                                                        folder="debt-payment"
+                                                                    />
+                                                                </div>
+
+                                                                <div className="space-y-1.5">
+                                                                    <Label className="text-[10px] font-bold text-gray-500 uppercase">Ghi chú phiếu thu</Label>
+                                                                    <Textarea
+                                                                        placeholder="Ghi chú phiếu thu (tuỳ chọn)..."
+                                                                        className="bg-white min-h-[64px]"
+                                                                        value={receipt.notes || ''}
+                                                                        onChange={(e) => updateDebtReceipt(detail.id, { notes: e.target.value })}
+                                                                    />
+                                                                </div>
+                                                            </TabsContent>
+                                                        );
+                                                    })}
+                                                </Tabs>
                                             </div>
                                             </div>
                                         </div>
