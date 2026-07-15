@@ -84,6 +84,7 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
 
         const qrCodes = itemsToPrint.map((item: OrderItem) => {
             const noteText = getProductItemNotes(item);
+            const conditionBefore = ((item as any).product_condition_before || '').trim();
             const technicianName = item.sales_step_data?.step3_technician_name || item.technician?.name || '';
 
             return `
@@ -99,17 +100,13 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                             ` : `
                                 <div class="no-qr">Chưa có mã QR</div>
                             `}
-                            <div class="qr-caption">
-                                ${orderCreatedAt ? `<p>Ngày tạo: ${escapeHtml(orderCreatedAt)}</p>` : ''}
-                                ${noteText ? `<p>Ghi chú: ${escapeHtml(noteText)}</p>` : ''}
-                                ${technicianName ? `<p>KT: ${escapeHtml(technicianName)}</p>` : ''}
-                            </div>
-                        </div>
-                        <div class="item-info">
                             <p class="item-name">${item.item_name}</p>
-                            <p class="item-details">SL: ${item.quantity} × ${formatCurrency(item.unit_price)}</p>
-                            <p class="item-total">${formatCurrency(item.total_price)}</p>
-                            ${item.item_code ? `<p class="item-code">${item.item_code}</p>` : ''}
+                            <div class="qr-caption">
+                                ${orderCreatedAt ? `<p>Ngày/tháng: ${escapeHtml(orderCreatedAt)}</p>` : ''}
+                                ${conditionBefore ? `<p>Tình trạng ban đầu: ${escapeHtml(conditionBefore)}</p>` : ''}
+                                ${noteText ? `<p>Ghi chú: ${escapeHtml(noteText)}</p>` : ''}
+                                ${technicianName ? `<p>KTV làm DV: ${escapeHtml(technicianName)}</p>` : ''}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -188,16 +185,15 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                     .item-type.voucher { background: #fef3c7; color: #d97706; }
                     .qr-content {
                         display: flex;
+                        justify-content: center;
                         padding: 15px;
-                        gap: 15px;
-                        align-items: center;
                     }
                     .qr-block {
-                        flex-shrink: 0;
                         display: flex;
                         flex-direction: column;
                         align-items: center;
-                        width: 138px;
+                        text-align: center;
+                        width: 100%;
                     }
                     .qr-code {
                         padding: 8px;
@@ -217,6 +213,11 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                         font-size: 12px;
                         text-align: center;
                     }
+                    .item-name {
+                        font-weight: 600;
+                        font-size: 14px;
+                        margin-top: 8px;
+                    }
                     .qr-caption {
                         margin-top: 6px;
                         width: 100%;
@@ -227,32 +228,6 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                         line-height: 1.4;
                         color: #444;
                         word-break: break-word;
-                    }
-                    .item-info { flex: 1; }
-                    .item-name {
-                        font-weight: 600;
-                        font-size: 14px;
-                        margin-bottom: 5px;
-                    }
-                    .item-details {
-                        color: #666;
-                        font-size: 13px;
-                        margin-bottom: 3px;
-                    }
-                    .item-total {
-                        font-weight: 700;
-                        font-size: 15px;
-                        color: #059669;
-                        margin-bottom: 5px;
-                    }
-                    .item-code {
-                        font-family: monospace;
-                        font-size: 11px;
-                        color: #888;
-                        background: #f0f0f0;
-                        padding: 3px 8px;
-                        border-radius: 4px;
-                        display: inline-block;
                     }
                     @media print {
                         body { background: #fff; padding: 10px; }

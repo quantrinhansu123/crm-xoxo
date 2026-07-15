@@ -1,6 +1,7 @@
 # Các thư mục phụ thuộc (Dependency) - Quan trọng nhất để giảm tải RAM
 node_modules/
 jspm_packages/
+.pnpm-store/
 
 # Các thư mục build (Đầu ra của React/Node)
 dist/
