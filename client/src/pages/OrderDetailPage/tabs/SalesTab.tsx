@@ -41,8 +41,13 @@ interface SalesTabProps {
     onProductCardClick?: (group: { product: OrderItem | null; services: OrderItem[] }, roomId: string) => void;
     workflowKanbanGroups?: { product: OrderItem | null; services: OrderItem[] }[];
     onTabChange?: (tab: string) => void;
-    /** Mở dialog với pending move callback — sau khi user xác nhận, card tự chuyển và dialog tự đóng */
-    onOpenProductDialogWithMove?: (group: any, roomId: string, moveCallback: () => Promise<void>) => void;
+    /** Mở dialog với pending move — sau khi xác nhận sẽ chuyển bước rồi mở form bước đích */
+    onOpenProductDialogWithMove?: (
+        group: any,
+        roomId: string,
+        moveCallback: () => Promise<void>,
+        destinationRoomId?: string,
+    ) => void;
 }
 
 const SalesCard = memo(({
@@ -75,7 +80,12 @@ const SalesCard = memo(({
     fetchKanbanLogs: (orderId: string) => Promise<void>;
     reloadOrder: () => Promise<void>;
     onTabChange?: (tab: string) => void;
-    onOpenProductDialogWithMove?: (group: any, roomId: string, moveCallback: () => Promise<void>) => void;
+    onOpenProductDialogWithMove?: (
+        group: any,
+        roomId: string,
+        moveCallback: () => Promise<void>,
+        destinationRoomId?: string,
+    ) => void;
     isPhoneView?: boolean;
 }) => {
     const leadItem = group.product || group.services[0];
@@ -276,7 +286,7 @@ const SalesCard = memo(({
                                                 if (order?.id) fetchKanbanLogs(order.id);
                                             };
                                             if (onOpenProductDialogWithMove) {
-                                                onOpenProductDialogWithMove(group, 'step1', moveAction);
+                                                onOpenProductDialogWithMove(group, 'step1', moveAction, nextStep);
                                             } else {
                                                 onProductCardClick?.(group, 'step1');
                                             }
@@ -300,7 +310,7 @@ const SalesCard = memo(({
                                                 if (order?.id) fetchKanbanLogs(order.id);
                                             };
                                             if (onOpenProductDialogWithMove) {
-                                                onOpenProductDialogWithMove(group, 'step2', moveAction);
+                                                onOpenProductDialogWithMove(group, 'step2', moveAction, nextStep);
                                             } else {
                                                 onProductCardClick?.(group, 'step2');
                                             }
@@ -315,6 +325,8 @@ const SalesCard = memo(({
                                         toast.success(`Đã chuyển nhóm sang: ${SALES_STEPS[nextStepIdx].label}`);
                                         if (nextStep === 'step5') {
                                             onTabChange?.('workflow');
+                                        } else {
+                                            onProductCardClick?.(group, nextStep);
                                         }
                                         if (order?.id) fetchKanbanLogs(order.id);
                                     } catch {
@@ -402,13 +414,17 @@ export function SalesTab({
 
     const confirmSalesForwardMove = async (notes: string, photos: string[]) => {
         if (!pendingForwardMove) return;
-        const { itemsToUpdate, newStatus, stepLabel } = pendingForwardMove;
+        const { itemsToUpdate, newStatus, stepLabel, group } = pendingForwardMove;
         try {
             for (const item of itemsToUpdate) {
                 await updateOrderItemStatus(item.id, newStatus, undefined, photos, notes);
             }
             toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
-            if (newStatus === 'step5') onTabChange?.('workflow');
+            if (newStatus === 'step5') {
+                onTabChange?.('workflow');
+            } else {
+                onProductCardClick?.(group, newStatus);
+            }
             if (order?.id) fetchKanbanLogs(order.id);
         } catch {
             reloadOrder();
@@ -466,7 +482,7 @@ export function SalesTab({
                     if (order?.id) fetchKanbanLogs(order.id);
                 };
                 if (onOpenProductDialogWithMove) {
-                    onOpenProductDialogWithMove(group, 'step1', moveAction);
+                    onOpenProductDialogWithMove(group, 'step1', moveAction, newStatus);
                 } else {
                     onProductCardClick?.(group, 'step1');
                 }
@@ -489,7 +505,7 @@ export function SalesTab({
                     if (order?.id) fetchKanbanLogs(order.id);
                 };
                 if (onOpenProductDialogWithMove) {
-                    onOpenProductDialogWithMove(group, 'step2', moveAction);
+                    onOpenProductDialogWithMove(group, 'step2', moveAction, newStatus);
                 } else {
                     onProductCardClick?.(group, 'step2');
                 }

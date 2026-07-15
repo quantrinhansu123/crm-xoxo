@@ -98,13 +98,15 @@ export function getItemAfterSaleStage(item: {
 }
 
 /** Bước after-sale của nhóm sản phẩm trên Kanban */
-/** Trường cấp đơn được phép PATCH khi lưu form after-sale (không gồm bước SP) */
+/**
+ * Trường cấp đơn được phép PATCH khi lưu form after-sale (không gồm bước SP).
+ * Các trường debt_checked/debt_checked_notes/debt_checked_by_name/aftersale_receiver_name/
+ * delivery_creator_name/delivery_shipper_phone/delivery_staff_name/delivery_received_at đã
+ * chuyển sang lưu độc lập theo từng sản phẩm (item-level) — không còn ở đây để tránh
+ * các sản phẩm khác trong cùng đơn bị dùng chung dữ liệu.
+ */
 export const ORDER_LEVEL_AFTERSALE_PATCH_KEYS = new Set([
-    'debt_checked',
-    'debt_checked_notes',
-    'debt_checked_by_name',
     'debt_payment_photos',
-    'aftersale_receiver_name',
     'packaging_photos',
     'delivery_carrier',
     'delivery_address',
@@ -114,10 +116,6 @@ export const ORDER_LEVEL_AFTERSALE_PATCH_KEYS = new Set([
     'delivery_fee',
     'aftersale_return_user_name',
     'delivery_notes',
-    'delivery_creator_name',
-    'delivery_shipper_phone',
-    'delivery_staff_name',
-    'delivery_received_at',
     'hd_sent',
     'hd_sent_photos',
     'feedback_requested',

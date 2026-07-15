@@ -45,7 +45,12 @@ interface AftersaleTabProps {
     // Dialog control props
     onProductCardClick: (group: any, roomId: string) => void;
     /** Mở dialog với pending move callback — sau khi user xác nhận, card tự chuyển và dialog tự đóng */
-    onOpenProductDialogWithMove?: (group: any, roomId: string, moveCallback: () => Promise<void>) => void;
+    onOpenProductDialogWithMove?: (
+        group: any,
+        roomId: string,
+        moveCallback: () => Promise<void>,
+        destinationRoomId?: string,
+    ) => void;
     isPhoneView?: boolean;
 }
 
@@ -516,6 +521,7 @@ export function AftersaleTab({
         newStage: string;
         fromStage: string;
         itemName?: string;
+        group?: WorkflowKanbanGroup;
     } | null>(null);
     const [aftersaleForwardDialogOpen, setAftersaleForwardDialogOpen] = useState(false);
     const mobileScrollRef = useRef<HTMLDivElement>(null);
@@ -615,7 +621,7 @@ export function AftersaleTab({
         const isCustomerItem = !!draggedGroup.product.is_customer_item;
 
         if (result.source.droppableId === 'after1' && newStage === 'after1_debt') {
-            const validationErrors = getAfter1ToDebtValidationErrors(order, draggedGroup.product);
+            const validationErrors = getAfter1ToDebtValidationErrors(draggedGroup.product);
 
             if (validationErrors.length > 0) {
                 showAfterSaleValidationToast(validationErrors);
@@ -633,7 +639,7 @@ export function AftersaleTab({
                     toast.success(`Đã chuyển sản phẩm "${draggedGroup.product?.item_name}" sang bước mới`);
                 };
                 if (onOpenProductDialogWithMove) {
-                    onOpenProductDialogWithMove(draggedGroup, 'after1', moveAction);
+                    onOpenProductDialogWithMove(draggedGroup, 'after1', moveAction, newStage);
                 } else {
                     onProductCardClick(draggedGroup, 'after1');
                 }
@@ -642,7 +648,7 @@ export function AftersaleTab({
         }
 
         if (result.source.droppableId === 'after1_debt' && newStage === 'after2') {
-            const validationErrors = getAfter1DebtToAfter2ValidationErrors(order);
+            const validationErrors = getAfter1DebtToAfter2ValidationErrors(draggedGroup.product);
 
             if (validationErrors.length > 0) {
                 showAfterSaleValidationToast(validationErrors);
@@ -660,7 +666,7 @@ export function AftersaleTab({
                     toast.success(`Đã chuyển sản phẩm "${draggedGroup.product?.item_name}" sang bước mới`);
                 };
                 if (onOpenProductDialogWithMove) {
-                    onOpenProductDialogWithMove(draggedGroup, 'after1_debt', moveAction);
+                    onOpenProductDialogWithMove(draggedGroup, 'after1_debt', moveAction, newStage);
                 } else {
                     onProductCardClick(draggedGroup, 'after1_debt');
                 }
@@ -672,10 +678,11 @@ export function AftersaleTab({
         if (result.source.droppableId === 'after2' && newStage === 'after3') {
             const arePhotosOk = draggedGroup.product.packaging_photos && draggedGroup.product.packaging_photos.length > 0;
             const accessoriesReturned = !!(draggedGroup.product as any)?.sales_step_data?.after2_accessories_returned_checked;
-            const isPickup = order.delivery_type === 'pickup';
-            const areFieldsOk = order.delivery_creator_name && order.delivery_shipper_phone &&
-                order.delivery_received_at &&
-                (isPickup ? order.delivery_staff_name : order.delivery_carrier);
+            const productAny = draggedGroup.product as any;
+            const isPickup = (productAny.delivery_type || order.delivery_type) === 'pickup';
+            const areFieldsOk = productAny.delivery_creator_name && productAny.delivery_shipper_phone &&
+                productAny.delivery_received_at &&
+                (isPickup ? productAny.delivery_staff_name : productAny.delivery_carrier);
             
             if (!areFieldsOk || !arePhotosOk || !accessoriesReturned) {
                 let errorMsg = "Vui lòng hoàn thành các yêu cầu sau để chuyển bước:";
@@ -702,7 +709,7 @@ export function AftersaleTab({
                     toast.success(`Đã chuyển sản phẩm "${draggedGroup.product?.item_name}" sang bước mới`);
                 };
                 if (onOpenProductDialogWithMove) {
-                    onOpenProductDialogWithMove(draggedGroup, 'after2', moveAction);
+                    onOpenProductDialogWithMove(draggedGroup, 'after2', moveAction, newStage);
                 } else {
                     onProductCardClick(draggedGroup, 'after2');
                 }
@@ -717,13 +724,14 @@ export function AftersaleTab({
             newStage,
             fromStage: result.source.droppableId as string,
             itemName: draggedGroup.product?.item_name,
+            group: draggedGroup,
         });
         setAftersaleForwardDialogOpen(true);
     };
 
     const confirmAftersaleMove = (notes: string, photos: string[]) => {
         if (!order || !pendingAftersaleMove) return;
-        const { itemId, isCustomerItem, newStage, itemName } = pendingAftersaleMove;
+        const { itemId, isCustomerItem, newStage, itemName, group } = pendingAftersaleMove;
 
         const apiPromise = isCustomerItem
             ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage, move_notes: notes, move_photos: photos })
@@ -739,6 +747,9 @@ export function AftersaleTab({
             .then(() => fetchKanbanLogs(order.id))
             .then(() => {
                 toast.success(`Đã chuyển "${itemName}" sang ${getAfterSaleStageLabel(newStage)}`);
+                if (group && newStage !== 'after4') {
+                    onProductCardClick(group, newStage);
+                }
             })
             .catch((e: any) => {
                 reloadOrder();

@@ -55,6 +55,7 @@ interface UseUsersReturn {
     fetchUsers: (params?: { role?: string }) => Promise<void>;
     fetchTechnicians: () => Promise<void>;
     fetchSales: () => Promise<void>;
+    fetchMentionable: () => Promise<void>;
     createUser: (data: CreateUserData) => Promise<User>;
     updateUser: (id: string, data: UpdateUserData) => Promise<User>;
     deleteUser: (id: string) => Promise<void>;
@@ -139,6 +140,28 @@ export function useUsers(): UseUsersReturn {
         }
     }, []);
 
+    /** Tất cả NV active (mọi role đăng nhập được gọi) — dùng chọn người thu tiền / nhận đồ / … */
+    const fetchMentionable = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const response = await api.get('/users/mentionable');
+            const responseData = response?.data ?? response;
+            const usersData = responseData?.data?.users ?? responseData?.users ?? responseData;
+            const newData = Array.isArray(usersData) ? usersData : [];
+            setUsers(prev => {
+                const ids = new Set(newData.map((u: { id: string }) => u.id));
+                return [...prev.filter(u => !ids.has(u.id)), ...newData];
+            });
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Lỗi khi tải danh sách nhân viên';
+            setError(message);
+            console.error('Error fetching mentionable users:', err);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
     const createUser = useCallback(async (data: CreateUserData): Promise<User> => {
         setLoading(true);
         setError(null);
@@ -205,6 +228,7 @@ export function useUsers(): UseUsersReturn {
         fetchUsers,
         fetchTechnicians,
         fetchSales,
+        fetchMentionable,
         createUser,
         updateUser,
         deleteUser

@@ -793,7 +793,10 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type,
             stage, due_at, sales_step_data,
             care_warranty_flow, care_warranty_stage,
-            move_notes, move_photos
+            move_notes, move_photos,
+            // Mỗi sản phẩm trong đơn phải điền độc lập — không dùng chung dữ liệu cấp đơn
+            aftersale_receiver_name, debt_checked, debt_checked_notes, debt_checked_by_name,
+            delivery_creator_name, delivery_shipper_phone, delivery_staff_name, delivery_received_at,
         } = req.body;
         const userId = req.user?.id;
 
@@ -808,6 +811,14 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
         if (sales_step_data !== undefined) updatePayload.sales_step_data = sales_step_data;
         if (care_warranty_flow !== undefined) updatePayload.care_warranty_flow = care_warranty_flow;
         if (care_warranty_stage !== undefined) updatePayload.care_warranty_stage = care_warranty_stage;
+        if (aftersale_receiver_name !== undefined) updatePayload.aftersale_receiver_name = aftersale_receiver_name;
+        if (debt_checked !== undefined) updatePayload.debt_checked = !!debt_checked;
+        if (debt_checked_notes !== undefined) updatePayload.debt_checked_notes = debt_checked_notes;
+        if (debt_checked_by_name !== undefined) updatePayload.debt_checked_by_name = debt_checked_by_name;
+        if (delivery_creator_name !== undefined) updatePayload.delivery_creator_name = delivery_creator_name;
+        if (delivery_shipper_phone !== undefined) updatePayload.delivery_shipper_phone = delivery_shipper_phone;
+        if (delivery_staff_name !== undefined) updatePayload.delivery_staff_name = delivery_staff_name;
+        if (delivery_received_at !== undefined) updatePayload.delivery_received_at = delivery_received_at || null;
 
         const { data: currentItem } = await supabaseAdmin.from('order_products').select('after_sale_stage, order_id, current_phase, care_warranty_flow, care_warranty_stage, completion_photos').eq('id', id).single();
         const oldCareFlow = currentItem?.care_warranty_flow ?? null;

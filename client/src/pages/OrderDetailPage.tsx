@@ -631,11 +631,30 @@ export function OrderDetailPage() {
         setShowProductDialog(true);
     };
 
-    /** Mở ProductDetailDialog kèm callback move — sau khi user xác nhận, card tự chuyển và dialog tự đóng */
-    const handleOpenProductDialogWithMove = (group: any, roomId: string, moveCallback: () => Promise<void>) => {
+    /** Các bước kết thúc — không mở form thao tác sau khi chuyển tới */
+    const skipOpenFormAfterMove = (roomId?: string) =>
+        !roomId || roomId === 'step5' || roomId === 'after4' || roomId === 'done' || roomId === 'fail';
+
+    /** Mở ProductDetailDialog kèm callback move — sau khi xác nhận chuyển bước sẽ mở form bước đích */
+    const handleOpenProductDialogWithMove = (
+        group: any,
+        roomId: string,
+        moveCallback: () => Promise<void>,
+        destinationRoomId?: string,
+    ) => {
         setSelectedProductGroup(group);
         setCurrentRoomId(roomId);
-        setPendingMoveCallback(() => moveCallback); // store callback in state
+        setPendingMoveCallback(() => async () => {
+            await moveCallback();
+            if (!skipOpenFormAfterMove(destinationRoomId)) {
+                window.setTimeout(() => {
+                    setSelectedProductGroup(group);
+                    setCurrentRoomId(destinationRoomId!);
+                    setPendingMoveCallback(null);
+                    setShowProductDialog(true);
+                }, 120);
+            }
+        });
         setShowProductDialog(true);
     };
 

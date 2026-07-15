@@ -647,7 +647,16 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                     surcharge_amount: product.surcharge_amount || 0,
                     due_at: product.due_at || null,
                     current_phase: product.current_phase || null,
-                    phase_stage: product.phase_stage || null
+                    phase_stage: product.phase_stage || null,
+                    // Mỗi sản phẩm điền độc lập — không dùng chung dữ liệu cấp đơn
+                    aftersale_receiver_name: product.aftersale_receiver_name || null,
+                    debt_checked: product.debt_checked || false,
+                    debt_checked_notes: product.debt_checked_notes || null,
+                    debt_checked_by_name: product.debt_checked_by_name || null,
+                    delivery_creator_name: product.delivery_creator_name || null,
+                    delivery_shipper_phone: product.delivery_shipper_phone || null,
+                    delivery_staff_name: product.delivery_staff_name || null,
+                    delivery_received_at: product.delivery_received_at || null,
                 });
 
                 if (product.services && product.services.length > 0) {

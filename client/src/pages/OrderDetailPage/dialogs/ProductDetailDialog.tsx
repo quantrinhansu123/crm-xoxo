@@ -390,8 +390,15 @@ export function ProductDetailDialog({
     const [optimisticAfterSaleStages, setOptimisticAfterSaleStages] = useState<Record<string, string>>({});
     /** Theo dõi số tiền thu auto để không ghi đè khi user chỉnh tay */
     const lastAutoCollectAmountRef = useRef(0);
-    const { users, fetchUsers, fetchSales, fetchTechnicians } = useUsers();
+    const { users, fetchUsers, fetchSales, fetchTechnicians, fetchMentionable } = useUsers();
     const { user } = useAuth();
+
+    const moneyCollectorUsers = useMemo(() => {
+        const preferred = users.filter((u) =>
+            ['sale', 'accountant', 'cashier', 'manager', 'admin'].includes(u.role)
+        );
+        return preferred.length > 0 ? preferred : users.filter((u) => !!u.name?.trim());
+    }, [users]);
 
     const [mentionSearch, setMentionSearch] = useState('');
     const [showMentionList, setShowMentionList] = useState(false);
@@ -408,6 +415,7 @@ export function ProductDetailDialog({
 
     useEffect(() => {
         if (open) {
+            fetchMentionable();
             fetchUsers();
             fetchSales();
             fetchTechnicians();
@@ -420,7 +428,7 @@ export function ProductDetailDialog({
                 window.clearTimeout(t2);
             };
         }
-    }, [open, fetchUsers, fetchSales, fetchTechnicians, roomId, pinFormScrollTop, highlightMessageId]);
+    }, [open, fetchMentionable, fetchUsers, fetchSales, fetchTechnicians, roomId, pinFormScrollTop, highlightMessageId]);
 
     // Local form state
     const [formData, setFormData] = useState<Partial<Order>>({});
@@ -456,10 +464,11 @@ export function ProductDetailDialog({
             const itemPackPhotos = parsePhotos((item as any)?.packaging_photos);
 
             setFormData({
-                debt_checked: order.debt_checked || false,
-                debt_checked_notes: order.debt_checked_notes || '',
-                debt_checked_by_name: order.debt_checked_by_name || '',
-                aftersale_receiver_name: order.aftersale_receiver_name || '',
+                // Mỗi sản phẩm trong đơn phải điền độc lập — không dùng chung dữ liệu cấp đơn
+                debt_checked: (item as any)?.debt_checked || false,
+                debt_checked_notes: (item as any)?.debt_checked_notes || '',
+                debt_checked_by_name: (item as any)?.debt_checked_by_name || '',
+                aftersale_receiver_name: (item as any)?.aftersale_receiver_name || '',
                 delivery_type: (item as any)?.delivery_type || order.delivery_type || 'ship',
                 delivery_carrier: (item as any)?.delivery_carrier || order.delivery_carrier || '',
                 delivery_code: (item as any)?.delivery_code || order.delivery_code || '',
@@ -467,10 +476,10 @@ export function ProductDetailDialog({
                 aftersale_return_user_name: order.aftersale_return_user_name || '',
                 delivery_address: order.delivery_address || '',
                 delivery_notes: order.delivery_notes || '',
-                delivery_creator_name: order.delivery_creator_name || '',
-                delivery_shipper_phone: order.delivery_shipper_phone || '',
-                delivery_staff_name: order.delivery_staff_name || '',
-                delivery_received_at: order.delivery_received_at ? new Date(order.delivery_received_at).toISOString().slice(0, 16) : '',
+                delivery_creator_name: (item as any)?.delivery_creator_name || '',
+                delivery_shipper_phone: (item as any)?.delivery_shipper_phone || '',
+                delivery_staff_name: (item as any)?.delivery_staff_name || '',
+                delivery_received_at: (item as any)?.delivery_received_at ? new Date((item as any).delivery_received_at).toISOString().slice(0, 16) : '',
                 hd_sent: order.hd_sent || false,
                 hd_sent_photos: order.hd_sent_photos || [],
                 feedback_requested: order.feedback_requested || false,
@@ -537,12 +546,22 @@ export function ProductDetailDialog({
 
     const canEditDueDate = isAdminOrManager || isSaleOfOrder || isAssignedTech;
     const canEditTechnicalFields = canOperateTech || isAssignedTech || isAdminOrManager;
+    /** Aftersale / care: sale, KT, kế toán, thu ngân đều được thao tác form bước */
+    const canEditAftersaleOrCare =
+        canEditDueDate ||
+        user?.role === 'sale' ||
+        user?.role === 'accountant' ||
+        user?.role === 'cashier';
 
     const currentExtensionRequest = (product as any)?.extension_request || (services[0] as any)?.extension_request;
     const hasPendingRequest = currentExtensionRequest?.status === 'requested';
     const isInputDisabled =
         hasPendingRequest ||
-        (isTechnicalRoom ? !canEditTechnicalFields : !canEditDueDate);
+        (isTechnicalRoom
+            ? !canEditTechnicalFields
+            : isAftersale || isCareFlow
+              ? !canEditAftersaleOrCare
+              : !canEditDueDate);
 
     // Build image lists — ảnh lúc nhận lấy từ step1_evidence_photos (bước Nhận đồ & Chụp ảnh)
     const leadItemForPhotos = product || services[0];
@@ -585,13 +604,13 @@ export function ProductDetailDialog({
         if (!onConfirmAndMove || !isAftersale) return [];
         const item = product || services[0];
         if (roomId === 'after1') {
-            return getAfter1ToDebtValidationErrors(order, item, {
+            return getAfter1ToDebtValidationErrors(item, {
                 aftersale_receiver_name: formData.aftersale_receiver_name ?? undefined,
                 completion_photos: Array.isArray(formData.completion_photos) ? formData.completion_photos : [],
             });
         }
         if (roomId === 'after1_debt') {
-            return getAfter1DebtToAfter2ValidationErrors(order, {
+            return getAfter1DebtToAfter2ValidationErrors(item, {
                 debt_checked: formData.debt_checked,
                 debt_checked_by_name: formData.debt_checked_by_name ?? undefined,
             });
@@ -805,7 +824,7 @@ export function ProductDetailDialog({
 
         if (isAftersale && onConfirmAndMove) {
             if (roomId === 'after1') {
-                const errors = getAfter1ToDebtValidationErrors(order, itemForValidation, {
+                const errors = getAfter1ToDebtValidationErrors(itemForValidation, {
                     aftersale_receiver_name: formData.aftersale_receiver_name ?? undefined,
                     completion_photos: Array.isArray(formData.completion_photos)
                         ? formData.completion_photos
@@ -818,7 +837,7 @@ export function ProductDetailDialog({
             }
 
             if (roomId === 'after1_debt') {
-                const errors = getAfter1DebtToAfter2ValidationErrors(order, {
+                const errors = getAfter1DebtToAfter2ValidationErrors(itemForValidation, {
                     debt_checked: formData.debt_checked,
                     debt_checked_by_name: formData.debt_checked_by_name ?? undefined,
                 });
@@ -874,6 +893,11 @@ export function ProductDetailDialog({
                         delivery_shipper_phone: formData.delivery_shipper_phone,
                         delivery_staff_name: formData.delivery_staff_name,
                         delivery_received_at: formData.delivery_received_at,
+                        // Mỗi sản phẩm điền độc lập — không dùng chung order-level nữa
+                        aftersale_receiver_name: formData.aftersale_receiver_name,
+                        debt_checked: formData.debt_checked,
+                        debt_checked_notes: (formData as any).debt_checked_notes,
+                        debt_checked_by_name: formData.debt_checked_by_name,
                     });
                 }
             }
@@ -2001,12 +2025,13 @@ export function ProductDetailDialog({
                                                                                     toast.error('Sản phẩm chưa qua Kiểm nợ — hoàn thành ảnh hoàn thiện và chuyển sang Kiểm nợ trước');
                                                                                     return;
                                                                                 }
+                                                                                // Mỗi sản phẩm điền độc lập — kiểm tra debt_checked/debt_checked_by_name của CHÍNH sản phẩm này
                                                                                 if (checked) {
-                                                                                    if (!formData.debt_checked) {
+                                                                                    if (!(item as any).debt_checked) {
                                                                                         toast.error('Vui lòng tick "Xác nhận đã kiểm nợ" trước khi bàn giao sản phẩm');
                                                                                         return;
                                                                                     }
-                                                                                    if (!formData.debt_checked_by_name?.trim()) {
+                                                                                    if (!(item as any).debt_checked_by_name?.trim()) {
                                                                                         toast.error('Vui lòng chọn Người thu tiền');
                                                                                         return;
                                                                                     }
@@ -2016,9 +2041,9 @@ export function ProductDetailDialog({
 
                                                                                 setOptimisticAfterSaleStages(prev => ({ ...prev, [item.id]: nextStage }));
 
-                                                                                // Cập nhật ghi chú kiểm nợ
+                                                                                // Cập nhật ghi chú kiểm nợ của chính sản phẩm này
                                                                                 const noteLine = `Đã trả ${item.item_name} cho khách`.toUpperCase();
-                                                                                let currentNotes = (formData as any).debt_checked_notes || '';
+                                                                                let currentNotes = (item as any).debt_checked_notes || '';
                                                                                 if (checked) {
                                                                                     if (!currentNotes.toUpperCase().includes(noteLine)) {
                                                                                         currentNotes = currentNotes ? `${currentNotes}\n${noteLine}` : noteLine;
@@ -2026,21 +2051,14 @@ export function ProductDetailDialog({
                                                                                 } else {
                                                                                     currentNotes = currentNotes.split('\n').filter((line: string) => line.trim().toUpperCase() !== noteLine).join('\n');
                                                                                 }
-                                                                                setFormData(prev => ({ ...prev, debt_checked_notes: currentNotes } as any));
 
                                                                                 if (!onUpdateItemAfterSaleData) return;
 
                                                                                 try {
-                                                                                    if (checked && onUpdateOrder) {
-                                                                                        await onUpdateOrder(
-                                                                                            pickOrderLevelAfterSalePatch({
-                                                                                                debt_checked: formData.debt_checked,
-                                                                                                debt_checked_notes: currentNotes,
-                                                                                                debt_checked_by_name: formData.debt_checked_by_name,
-                                                                                            }),
-                                                                                        );
-                                                                                    }
-                                                                                    await onUpdateItemAfterSaleData(item.id, !!(item as any).is_customer_item, { stage: nextStage });
+                                                                                    await onUpdateItemAfterSaleData(item.id, !!(item as any).is_customer_item, {
+                                                                                        stage: nextStage,
+                                                                                        debt_checked_notes: currentNotes,
+                                                                                    });
                                                                                     onReloadOrder?.();
                                                                                 } catch (error) {
                                                                                     console.error('Update handoff item error:', error);
@@ -2174,8 +2192,8 @@ export function ProductDetailDialog({
                                                         className="bg-white h-9"
                                                         value={formData.debt_checked_by_name || ''}
                                                         onValueChange={(val) => setFormData(prev => ({ ...prev, debt_checked_by_name: val }))}
-                                                        users={users}
-                                                        placeholder="Chọn nhân viên..."
+                                                        users={moneyCollectorUsers}
+                                                        placeholder="Chọn hoặc gõ tìm nhân viên..."
                                                         disabled={isInputDisabled}
                                                     />
                                                 </div>

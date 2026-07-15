@@ -108,6 +108,15 @@ export interface OrderItem {
     after_sale_stage?: string | null;
     completion_photos?: string[];
     packaging_photos?: string[];
+    /** Mỗi sản phẩm điền độc lập — không dùng chung dữ liệu cấp đơn */
+    aftersale_receiver_name?: string | null;
+    debt_checked?: boolean;
+    debt_checked_notes?: string | null;
+    debt_checked_by_name?: string | null;
+    delivery_creator_name?: string | null;
+    delivery_shipper_phone?: string | null;
+    delivery_staff_name?: string | null;
+    delivery_received_at?: string | null;
     due_at?: string;
     product_condition_before?: string | null;
     product_notes?: string | null;

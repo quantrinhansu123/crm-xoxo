@@ -159,6 +159,7 @@ export function CareTab({
         toStage: string;
         fromStage: string;
         productId?: string;
+        group?: any;
     } | null>(null);
     const [careForwardDialogOpen, setCareForwardDialogOpen] = useState(false);
     const warrantyColumns: MobileKanbanColumn[] = CARE_WAR_COLS.filter((c) => c.flow === 'warranty').map(
@@ -199,13 +200,13 @@ export function CareTab({
         const isCustomerItem = !!(group.product as any).is_customer_item;
 
         // Luôn yêu cầu xác nhận (ghi chú + ảnh) trước khi thực hiện chuyển bước xuôi
-        setPendingCareMove({ itemId, isCustomerItem, toFlow, toStage, fromStage, productId: group.product.id });
+        setPendingCareMove({ itemId, isCustomerItem, toFlow, toStage, fromStage, productId: group.product.id, group });
         setCareForwardDialogOpen(true);
     };
 
     const confirmCareMove = (notes: string, photos: string[]) => {
         if (!order || !pendingCareMove) return;
-        const { itemId, isCustomerItem, toFlow, toStage, productId } = pendingCareMove;
+        const { itemId, isCustomerItem, toFlow, toStage, productId, group } = pendingCareMove;
 
         // Optimistic UI: update local order state immediately so card moves instantly
         if (order.items) {
@@ -228,6 +229,9 @@ export function CareTab({
         } as any).then(() => {
             fetchKanbanLogs(order.id);
             toast.success('Đã chuyển bước Chăm sóc/Bảo hành');
+            if (group) {
+                onProductCardClick(group, toStage);
+            }
         }).catch((e: any) => {
             toast.error('Lỗi cập nhật — đang khôi phục...');
             reloadOrder(); // Revert on failure
