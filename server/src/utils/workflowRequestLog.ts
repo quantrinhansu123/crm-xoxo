@@ -38,6 +38,7 @@ const ACCESSORY_STATUS_LOGS: Record<string, { action: string; stepName: string; 
     waiting_ship: { action: 'accessory_waiting_ship', stepName: 'Mua phụ kiện', notes: 'Phụ kiện đang chờ ship' },
     shipped: { action: 'accessory_shipped', stepName: 'Mua phụ kiện', notes: 'Đã nhận phụ kiện' },
     delivered_to_tech: { action: 'accessory_delivered_to_tech', stepName: 'Mua phụ kiện', notes: 'Đã giao phụ kiện cho kỹ thuật' },
+    done: { action: 'accessory_done', stepName: 'Mua phụ kiện', notes: 'Kế toán đã hoàn thành yêu cầu mua phụ kiện' },
     rejected: { action: 'accessory_rejected', stepName: 'Mua phụ kiện', notes: 'QL từ chối yêu cầu mua phụ kiện' },
 };
 

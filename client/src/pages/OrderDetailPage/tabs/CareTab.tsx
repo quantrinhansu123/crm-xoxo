@@ -16,6 +16,7 @@ import {
     MobileKanbanMoveBar,
     type MobileKanbanColumn,
 } from '@/components/kanban/mobileKanban';
+import { ForwardMoveDialog } from '@/components/orders/ForwardMoveDialog';
 
 interface CareTabProps {
     order: Order | null;
@@ -151,6 +152,15 @@ export function CareTab({
 
     const [mobileWarCol, setMobileWarCol] = useState('war1');
     const [mobileCareCol, setMobileCareCol] = useState('care6');
+    const [pendingCareMove, setPendingCareMove] = useState<{
+        itemId: string;
+        isCustomerItem: boolean;
+        toFlow: 'warranty' | 'care';
+        toStage: string;
+        fromStage: string;
+        productId?: string;
+    } | null>(null);
+    const [careForwardDialogOpen, setCareForwardDialogOpen] = useState(false);
     const warrantyColumns: MobileKanbanColumn[] = CARE_WAR_COLS.filter((c) => c.flow === 'warranty').map(
         (c) => ({ id: c.id, title: c.title })
     );
@@ -175,22 +185,32 @@ export function CareTab({
         
         const toStage = result.destination.droppableId as string;
         const toFlow = ['war1', 'war2', 'war3'].includes(toStage) ? 'warranty' : 'care';
-        
+        const fromStage = result.source.droppableId as string;
+
         // Extract original itemId from draggableId (format: orderId::itemId::flow)
         const parts = result.draggableId.split('::');
         if (parts.length < 2) return;
         const itemId = parts[1];
-        
+
         // Find which group/product is being moved
         const group = groups.find(g => g.product?.id === itemId);
         if (!group || !group.product) return;
-        
+
         const isCustomerItem = !!(group.product as any).is_customer_item;
+
+        // Luôn yêu cầu xác nhận (ghi chú + ảnh) trước khi thực hiện chuyển bước xuôi
+        setPendingCareMove({ itemId, isCustomerItem, toFlow, toStage, fromStage, productId: group.product.id });
+        setCareForwardDialogOpen(true);
+    };
+
+    const confirmCareMove = (notes: string, photos: string[]) => {
+        if (!order || !pendingCareMove) return;
+        const { itemId, isCustomerItem, toFlow, toStage, productId } = pendingCareMove;
 
         // Optimistic UI: update local order state immediately so card moves instantly
         if (order.items) {
             const updatedItems = order.items.map((item: any) => {
-                if (item.id === itemId || (item.is_customer_item && item.id === group.product?.id)) {
+                if (item.id === itemId || (item.is_customer_item && item.id === productId)) {
                     return { ...item, care_warranty_flow: toFlow, care_warranty_stage: toStage };
                 }
                 return item;
@@ -198,12 +218,14 @@ export function CareTab({
             // Mutate order in place for immediate re-render
             (order as any).items = updatedItems;
         }
-        
+
         // Fire API call in background — no await needed for perceived speed
         onUpdateItemAfterSaleData(itemId, isCustomerItem, {
             care_warranty_flow: toFlow,
-            care_warranty_stage: toStage
-        }).then(() => {
+            care_warranty_stage: toStage,
+            move_notes: notes,
+            move_photos: photos,
+        } as any).then(() => {
             fetchKanbanLogs(order.id);
             toast.success('Đã chuyển bước Chăm sóc/Bảo hành');
         }).catch((e: any) => {
@@ -488,6 +510,14 @@ export function CareTab({
                     )}
                 </CardContent>
             </Card>
+            <ForwardMoveDialog
+                open={careForwardDialogOpen}
+                onClose={() => setCareForwardDialogOpen(false)}
+                onConfirm={confirmCareMove}
+                itemName={groups.find(g => g.product?.id === pendingCareMove?.itemId)?.product?.item_name || 'sản phẩm'}
+                currentStepLabel={pendingCareMove ? getCareWarrantyStageLabel(pendingCareMove.fromStage) : undefined}
+                targetStepLabel={pendingCareMove ? getCareWarrantyStageLabel(pendingCareMove.toStage) : undefined}
+            />
         </TabsContent>
     );
 }

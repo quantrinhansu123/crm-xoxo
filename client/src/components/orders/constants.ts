@@ -228,6 +228,7 @@ export const ACCESSORY_LABELS: Record<string, string> = {
     waiting_ship: 'Chờ ship',
     shipped: 'Ship tới',
     delivered_to_tech: 'Giao KT',
+    done: 'Hoàn thành',
     rejected: 'Bị từ chối',
 };
 
@@ -236,7 +237,7 @@ export const PARTNER_LABELS: Record<string, string> = {
     ship_to_partner: 'Ship Đối tác',
     partner_doing: 'Đối tác làm',
     ship_back: 'Ship về Shop',
-    done: 'Done',
+    done: 'Hoàn thành',
     rejected: 'Bị từ chối',
 };
 

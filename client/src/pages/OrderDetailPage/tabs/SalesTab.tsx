@@ -26,6 +26,7 @@ import {
     getItemTypeColor,
 } from '../utils';
 import { BackwardMoveDialog } from '@/components/orders/BackwardMoveDialog';
+import { ForwardMoveDialog } from '@/components/orders/ForwardMoveDialog';
 import { ImageIcon } from 'lucide-react';
 import { UpsellDialog } from '@/components/orders/UpsellDialog';
 
@@ -33,7 +34,7 @@ interface SalesTabProps {
     order: Order;
     isPhoneView?: boolean;
     salesLogs: any[];
-    updateOrderItemStatus: (itemId: string, status: string, reason?: string, photos?: string[]) => Promise<void>;
+    updateOrderItemStatus: (itemId: string, status: string, reason?: string, photos?: string[], notes?: string) => Promise<void>;
     updateOrderStatus: (orderId: string, status: string) => Promise<void>;
     reloadOrder: () => Promise<void>;
     fetchKanbanLogs: (orderId: string) => Promise<void>;
@@ -70,7 +71,7 @@ const SalesCard = memo(({
     salesLogs: any[];
     onBackwardMove?: (group: any, targetStepId: string) => void;
     onUpsell?: (group: any) => void;
-    updateOrderItemStatus: (itemId: string, status: string, reason?: string, photos?: string[]) => Promise<void>;
+    updateOrderItemStatus: (itemId: string, status: string, reason?: string, photos?: string[], notes?: string) => Promise<void>;
     fetchKanbanLogs: (orderId: string) => Promise<void>;
     reloadOrder: () => Promise<void>;
     onTabChange?: (tab: string) => void;
@@ -351,6 +352,13 @@ export function SalesTab({
     const [searchTerm, setSearchTerm] = useState('');
     const [pendingMove, setPendingMove] = useState<{ group: any; targetStepId: string } | null>(null);
     const [backwardDialogOpen, setBackwardDialogOpen] = useState(false);
+    const [pendingForwardMove, setPendingForwardMove] = useState<{
+        itemsToUpdate: OrderItem[];
+        newStatus: string;
+        stepLabel: string;
+        group: any;
+    } | null>(null);
+    const [forwardDialogOpen, setForwardDialogOpen] = useState(false);
     const [viewLogData, setViewLogData] = useState<{ reason?: string; photos?: string[]; itemName?: string } | null>(null);
     const [upsellGroup, setUpsellGroup] = useState<any>(null);
     const [mobileSalesStep, setMobileSalesStep] = useState('step1');
@@ -390,6 +398,108 @@ export function SalesTab({
             reloadOrder();
             toast.error('Lỗi khi cập nhật trạng thái');
         }
+    };
+
+    const confirmSalesForwardMove = async (notes: string, photos: string[]) => {
+        if (!pendingForwardMove) return;
+        const { itemsToUpdate, newStatus, stepLabel } = pendingForwardMove;
+        try {
+            for (const item of itemsToUpdate) {
+                await updateOrderItemStatus(item.id, newStatus, undefined, photos, notes);
+            }
+            toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
+            if (newStatus === 'step5') onTabChange?.('workflow');
+            if (order?.id) fetchKanbanLogs(order.id);
+        } catch {
+            reloadOrder();
+            toast.error('Lỗi khi cập nhật trạng thái');
+        }
+    };
+
+    /** Dùng chung cho drag-drop desktop và mobile — luôn bắt buộc form khi chuyển bước chiều xuôi */
+    const handleSalesDragEnd = async (result: DropResult) => {
+        if (!result.destination || result.destination.droppableId === result.source.droppableId) return;
+        if (rejectNonSequentialKanbanMove(
+            SALES_COLUMN_IDS,
+            result.source.droppableId,
+            result.destination.droppableId,
+            { allowBackward: true }
+        )) {
+            return;
+        }
+        const draggableId = result.draggableId;
+        const newStatus = result.destination.droppableId;
+        const stepLabel = SALES_STEPS.find((s: any) => s.id === newStatus)?.label || newStatus;
+
+        const group = workflowKanbanGroups?.find(g =>
+            (g.product?.id ?? g.services.map((s: OrderItem) => s.id).join('-')) === draggableId
+        );
+
+        if (!group) return;
+
+        const sourceIdx = SALES_STEPS.findIndex(s => s.id === result.source.droppableId);
+        const destIdx = SALES_STEPS.findIndex(s => s.id === newStatus);
+
+        if (destIdx < sourceIdx) {
+            // Backward move
+            setPendingMove({ group, targetStepId: newStatus });
+            setBackwardDialogOpen(true);
+            return;
+        }
+
+        const itemsToUpdate: OrderItem[] = [];
+        const leadItem = group.product || group.services[0];
+        if (leadItem) itemsToUpdate.push(leadItem);
+
+        // Step 1 validation
+        if (result.source.droppableId === 'step1' && destIdx > sourceIdx) {
+            const firstItem = itemsToUpdate[0];
+            const stepData = firstItem?.sales_step_data || {};
+            if (!stepData.step1_receiver_name || !stepData.step1_evidence_photos?.length || !stepData.step1_accessories_checked) {
+                toast.error('Vui lòng hoàn thành bước 1: NV Sale nhận, ảnh bằng chứng và xác nhận phụ kiện đi kèm');
+                const moveAction = async () => {
+                    for (const item of itemsToUpdate) {
+                        await updateOrderItemStatus(item.id, newStatus);
+                    }
+                    toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
+                    if (newStatus === 'step5') onTabChange?.('workflow');
+                    if (order?.id) fetchKanbanLogs(order.id);
+                };
+                if (onOpenProductDialogWithMove) {
+                    onOpenProductDialogWithMove(group, 'step1', moveAction);
+                } else {
+                    onProductCardClick?.(group, 'step1');
+                }
+                return;
+            }
+        }
+
+        // Step 2 validation: TAGS + FORM TÚI + SHOESTREE
+        if (result.source.droppableId === 'step2' && destIdx > sourceIdx) {
+            const firstItem = itemsToUpdate[0];
+            const stepData = firstItem?.sales_step_data || {};
+            if (!stepData.step2_tags_photos?.length || !stepData.step2_form_photos?.length) {
+                toast.error('Vui lòng tải ảnh bằng chứng TAGS và FORM TÚI/SHOESTREE trước khi chuyển bước 2');
+                const moveAction = async () => {
+                    for (const item of itemsToUpdate) {
+                        await updateOrderItemStatus(item.id, newStatus);
+                    }
+                    toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
+                    if (newStatus === 'step5') onTabChange?.('workflow');
+                    if (order?.id) fetchKanbanLogs(order.id);
+                };
+                if (onOpenProductDialogWithMove) {
+                    onOpenProductDialogWithMove(group, 'step2', moveAction);
+                } else {
+                    onProductCardClick?.(group, 'step2');
+                }
+                return;
+            }
+        }
+
+        // Không còn validate riêng nào — vẫn bắt buộc xác nhận (ghi chú + ảnh) trước khi chuyển bước
+        setPendingForwardMove({ itemsToUpdate, newStatus, stepLabel, group });
+        setForwardDialogOpen(true);
     };
 
     const hasSalesItem = workflowKanbanGroups?.some(g => {
@@ -485,36 +595,7 @@ export function SalesTab({
                                                 );
                                             })}
                                         </div>
-                                        <DragDropContext
-                                            onDragEnd={async (result: DropResult) => {
-                                                if (!result.destination || result.destination.droppableId === result.source.droppableId) return;
-                                                if (rejectNonSequentialKanbanMove(
-                                                    SALES_COLUMN_IDS,
-                                                    result.source.droppableId,
-                                                    result.destination.droppableId,
-                                                    { allowBackward: true }
-                                                )) {
-                                                    return;
-                                                }
-                                                const draggableId = result.draggableId;
-                                                const newStatus = result.destination.droppableId;
-                                                const group = workflowKanbanGroups?.find(
-                                                    (g) =>
-                                                        (g.product?.id ?? g.services.map((s: OrderItem) => s.id).join('-')) ===
-                                                        draggableId,
-                                                );
-                                                if (!group) return;
-                                                const leadItem = group.product || group.services[0];
-                                                if (leadItem) {
-                                                    try {
-                                                        await updateOrderItemStatus(leadItem.id, newStatus);
-                                                        if (order?.id) fetchKanbanLogs(order.id);
-                                                    } catch {
-                                                        reloadOrder();
-                                                    }
-                                                }
-                                            }}
-                                        >
+                                        <DragDropContext onDragEnd={handleSalesDragEnd}>
                                             <Droppable droppableId={mobileSalesStep}>
                                                 {(provided) => {
                                                     const column = SALES_STEPS.find((s) => s.id === mobileSalesStep)!;
@@ -568,102 +649,7 @@ export function SalesTab({
                                     </div>
                                 )}
                             <div className="hidden overflow-x-auto pb-4 md:block">
-                                <DragDropContext
-                                    onDragEnd={async (result: DropResult) => {
-                                        if (!result.destination || result.destination.droppableId === result.source.droppableId) return;
-                                        if (rejectNonSequentialKanbanMove(
-                                            SALES_COLUMN_IDS,
-                                            result.source.droppableId,
-                                            result.destination.droppableId,
-                                            { allowBackward: true }
-                                        )) {
-                                            return;
-                                        }
-                                        const draggableId = result.draggableId;
-                                        const newStatus = result.destination.droppableId;
-                                        const stepLabel = SALES_STEPS.find((s: any) => s.id === newStatus)?.label || newStatus;
-
-                                        const group = workflowKanbanGroups?.find(g =>
-                                            (g.product?.id ?? g.services.map((s: OrderItem) => s.id).join('-')) === draggableId
-                                        );
-
-                                        if (group) {
-                                            const sourceIdx = SALES_STEPS.findIndex(s => s.id === result.source.droppableId);
-                                            const destIdx = SALES_STEPS.findIndex(s => s.id === newStatus);
-
-                                            if (destIdx < sourceIdx) {
-                                                // Backward move
-                                                setPendingMove({ group, targetStepId: newStatus });
-                                                setBackwardDialogOpen(true);
-                                                return;
-                                            }
-
-                                            const itemsToUpdate: OrderItem[] = [];
-                                            const leadItem = group.product || group.services[0];
-                                            if (leadItem) itemsToUpdate.push(leadItem);
-
-                                            // Step 1 validation
-                                            if (result.source.droppableId === 'step1' && destIdx > sourceIdx) {
-                                                const firstItem = itemsToUpdate[0];
-                                                const stepData = firstItem?.sales_step_data || {};
-                                                if (!stepData.step1_receiver_name || !stepData.step1_evidence_photos?.length || !stepData.step1_accessories_checked) {
-                                                    toast.error('Vui lòng hoàn thành bước 1: NV Sale nhận, ảnh bằng chứng và xác nhận phụ kiện đi kèm');
-                                                    const moveAction = async () => {
-                                                        for (const item of itemsToUpdate) {
-                                                            await updateOrderItemStatus(item.id, newStatus);
-                                                        }
-                                                        toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
-                                                        if (newStatus === 'step5') onTabChange?.('workflow');
-                                                        if (order?.id) fetchKanbanLogs(order.id);
-                                                    };
-                                                    if (onOpenProductDialogWithMove) {
-                                                        onOpenProductDialogWithMove(group, 'step1', moveAction);
-                                                    } else {
-                                                        onProductCardClick?.(group, 'step1');
-                                                    }
-                                                    return;
-                                                }
-                                            }
-
-                                            // Step 2 validation: TAGS + FORM TÚI + SHOESTREE
-                                            if (result.source.droppableId === 'step2' && destIdx > sourceIdx) {
-                                                const firstItem = itemsToUpdate[0];
-                                                const stepData = firstItem?.sales_step_data || {};
-                                                if (!stepData.step2_tags_photos?.length || !stepData.step2_form_photos?.length) {
-                                                    toast.error('Vui lòng tải ảnh bằng chứng TAGS và FORM TÚI/SHOESTREE trước khi chuyển bước 2');
-                                                    const moveAction = async () => {
-                                                        for (const item of itemsToUpdate) {
-                                                            await updateOrderItemStatus(item.id, newStatus);
-                                                        }
-                                                        toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
-                                                        if (newStatus === 'step5') onTabChange?.('workflow');
-                                                        if (order?.id) fetchKanbanLogs(order.id);
-                                                    };
-                                                    if (onOpenProductDialogWithMove) {
-                                                        onOpenProductDialogWithMove(group, 'step2', moveAction);
-                                                    } else {
-                                                        onProductCardClick?.(group, 'step2');
-                                                    }
-                                                    return;
-                                                }
-                                            }
-
-                                            try {
-                                                for (const item of itemsToUpdate) {
-                                                    await updateOrderItemStatus(item.id, newStatus);
-                                                }
-                                                toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
-                                                if (newStatus === 'step5') {
-                                                    onTabChange?.('workflow');
-                                                }
-                                                if (order?.id) fetchKanbanLogs(order.id);
-                                            } catch (error) {
-                                                reloadOrder();
-                                                toast.error('Lỗi khi cập nhật trạng thái');
-                                            }
-                                        }
-                                    }}
-                                >
+                                <DragDropContext onDragEnd={handleSalesDragEnd}>
                                     <div className="flex min-w-0 flex-col gap-4 md:min-w-[1200px] md:flex-row">
                                         {SALES_STEPS.map((column, colIdx) => {
                                             const columnGroups = workflowKanbanGroups?.filter(group => {
@@ -966,6 +952,17 @@ export function SalesTab({
                 onConfirm={handleBackwardMoveConfirm}
                 itemName={pendingMove?.group?.product?.item_name || pendingMove?.group?.services?.[0]?.item_name}
                 mode="create"
+            />
+
+            <ForwardMoveDialog
+                open={forwardDialogOpen}
+                onClose={() => {
+                    setForwardDialogOpen(false);
+                    setPendingForwardMove(null);
+                }}
+                onConfirm={confirmSalesForwardMove}
+                itemName={pendingForwardMove?.group?.product?.item_name || pendingForwardMove?.group?.services?.[0]?.item_name}
+                targetStepLabel={pendingForwardMove?.stepLabel}
             />
 
             <BackwardMoveDialog

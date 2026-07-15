@@ -790,7 +790,7 @@ router.get('/:id/kanban-logs', authenticate, async (req: AuthenticatedRequest, r
         if (tab === 'aftersale') {
             const { data: logs, error } = await supabaseAdmin
                 .from('order_after_sale_stage_log')
-                .select('id, entity_type, entity_id, from_stage, to_stage, created_by, created_at, created_by_user:users!order_after_sale_stage_log_created_by_fkey(id, name)')
+                .select('id, entity_type, entity_id, from_stage, to_stage, notes, photos, created_by, created_at, created_by_user:users!order_after_sale_stage_log_created_by_fkey(id, name)')
                 .eq('order_id', orderId)
                 .order('created_at', { ascending: false })
                 .limit(100);
@@ -869,7 +869,7 @@ router.get('/:id/kanban-logs', authenticate, async (req: AuthenticatedRequest, r
         if (tab === 'care') {
             const { data: logs, error } = await supabaseAdmin
                 .from('order_care_warranty_log')
-                .select('id, entity_type, entity_id, from_stage, to_stage, flow_type, created_by, created_at, created_by_user:users!order_care_warranty_log_created_by_fkey(id, name)')
+                .select('id, entity_type, entity_id, from_stage, to_stage, flow_type, notes, photos, created_by, created_at, created_by_user:users!order_care_warranty_log_created_by_fkey(id, name)')
                 .eq('order_id', orderId)
                 .order('created_at', { ascending: false })
                 .limit(100);

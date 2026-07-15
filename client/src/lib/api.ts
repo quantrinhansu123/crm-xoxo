@@ -365,6 +365,8 @@ export const orderProductsApi = {
         due_at?: string | null;
         care_warranty_flow?: string | null;
         care_warranty_stage?: string | null;
+        move_notes?: string;
+        move_photos?: string[];
     }) => api.patch<ApiResponse<any>>(`/order-products/${id}/after-sale-data`, data),
 
     resetServices: (id: string) =>
@@ -441,6 +443,8 @@ export const orderItemsApi = {
         due_at?: string | null;
         care_warranty_flow?: string | null;
         care_warranty_stage?: string | null;
+        move_notes?: string;
+        move_photos?: string[];
     }) => api.patch<ApiResponse<any>>(`/order-items/${id}/after-sale-data`, data),
 };
 

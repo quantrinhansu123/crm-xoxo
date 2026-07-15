@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { UserPlus, Loader2, Camera, Info, Plus, X, Pencil, EyeOff, Eye } from 'lucide-react';
+import { UserPlus, Loader2, Camera, Info, Plus, X, EyeOff, Eye } from 'lucide-react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -676,24 +676,93 @@ export function EmployeeFormDialog({
                                                 )}
                                             </div>
 
-                                            {/* Tài khoản đăng nhập with dropdown + edit + add */}
+                                            {/* Tài khoản đăng nhập */}
+                                            <div className="space-y-1 col-span-2">
+                                                <Label className="text-[12px] text-gray-500">Tài khoản đăng nhập *</Label>
+                                                <Input
+                                                    type="email"
+                                                    value={email}
+                                                    onChange={(e) => setEmail(e.target.value)}
+                                                    placeholder="email@company.com"
+                                                    className="h-[34px] text-[13px]"
+                                                    autoComplete="username"
+                                                />
+                                            </div>
                                             <div className="space-y-1">
-                                                <Label className="text-[12px] text-gray-500">Tài khoản đăng nhập</Label>
-                                                <div className="flex items-center gap-1.5">
+                                                <Label className="text-[12px] text-gray-500">
+                                                    Mật khẩu {isEditing ? '' : '*'}
+                                                </Label>
+                                                <div className="relative">
+                                                    <Input
+                                                        type={showPassword ? 'text' : 'password'}
+                                                        value={password}
+                                                        onChange={(e) => setPassword(e.target.value)}
+                                                        placeholder={isEditing ? 'Để trống nếu không đổi' : 'Tối thiểu 6 ký tự'}
+                                                        className="h-[34px] text-[13px] pr-9"
+                                                        autoComplete="new-password"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                                        onClick={() => setShowPassword(!showPassword)}
+                                                    >
+                                                        {showPassword ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-[12px] text-gray-500">
+                                                    Nhập lại mật khẩu {isEditing ? '' : '*'}
+                                                </Label>
+                                                <div className="relative">
+                                                    <Input
+                                                        type={showPasswordConfirm ? 'text' : 'password'}
+                                                        value={passwordConfirm}
+                                                        onChange={(e) => setPasswordConfirm(e.target.value)}
+                                                        placeholder={isEditing ? 'Để trống nếu không đổi' : 'Nhập lại mật khẩu'}
+                                                        className="h-[34px] text-[13px] pr-9"
+                                                        autoComplete="new-password"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                                        onClick={() => setShowPasswordConfirm(!showPasswordConfirm)}
+                                                    >
+                                                        {showPasswordConfirm ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-[12px] text-gray-500">Vai trò</Label>
+                                                <Select value={role} onValueChange={(v) => setRole(v as UserRole)}>
+                                                    <SelectTrigger className="h-[34px] text-[13px]">
+                                                        <SelectValue placeholder="Chọn vai trò" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {roleOptions.map((r) => (
+                                                            <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            {usersProp.length > 0 && (
+                                                <div className="space-y-1 col-span-2">
+                                                    <Label className="text-[12px] text-gray-400">Chọn nhanh tài khoản có sẵn</Label>
                                                     <Select value={selectedAccountId} onValueChange={(v) => {
                                                         setSelectedAccountId(v);
-                                                        const u = usersProp.find(u => u.id === v);
+                                                        if (v === 'none') return;
+                                                        const u = usersProp.find((user) => user.id === v);
                                                         if (u) {
                                                             setEmail(u.email);
                                                             setRole(u.role);
                                                         }
                                                     }}>
-                                                        <SelectTrigger className="flex-1 h-[34px] text-[13px]">
-                                                            <SelectValue placeholder="Chọn Tài khoản" />
+                                                        <SelectTrigger className="h-[34px] text-[13px]">
+                                                            <SelectValue placeholder="-- Không chọn --" />
                                                         </SelectTrigger>
                                                         <SelectContent>
-                                                            <SelectItem value="none">-- Chọn Tài khoản --</SelectItem>
-                                                            {usersProp.map(u => (
+                                                            <SelectItem value="none">-- Không chọn --</SelectItem>
+                                                            {usersProp.map((u) => (
                                                                 <SelectItem key={u.id} value={u.id}>
                                                                     <div className="flex flex-col">
                                                                         <span className="text-[13px] font-medium">{u.email}</span>
@@ -703,48 +772,8 @@ export function EmployeeFormDialog({
                                                             ))}
                                                         </SelectContent>
                                                     </Select>
-                                                    {/* Edit button */}
-                                                    <button
-                                                        type="button"
-                                                        className="shrink-0 w-[34px] h-[34px] rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 hover:text-blue-600 hover:border-blue-200 transition-colors flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-                                                        onClick={() => {
-                                                            const u = usersProp.find(u => u.id === selectedAccountId);
-                                                            if (u) {
-                                                                setAcctDisplayName(u.name);
-                                                                setAcctPhone(u.phone || '');
-                                                                setAcctEmail(u.email);
-                                                                setAcctUsername(u.email.split('@')[0]);
-                                                                setAcctPassword('');
-                                                                setAcctPasswordConfirm('');
-                                                                setAcctRole(u.role);
-                                                                setShowEditAccountDialog(true);
-                                                            }
-                                                        }}
-                                                        disabled={selectedAccountId === 'none'}
-                                                        title="Cập nhật tài khoản"
-                                                    >
-                                                        <Pencil className="h-3.5 w-3.5" />
-                                                    </button>
-                                                    {/* Add button */}
-                                                    <button
-                                                        type="button"
-                                                        className="shrink-0 w-[34px] h-[34px] rounded-md border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:border-blue-300 transition-colors flex items-center justify-center"
-                                                        onClick={() => {
-                                                            setAcctDisplayName('');
-                                                            setAcctPhone('');
-                                                            setAcctEmail('');
-                                                            setAcctUsername('');
-                                                            setAcctPassword('');
-                                                            setAcctPasswordConfirm('');
-                                                            setAcctRole('sale');
-                                                            setShowCreateAccountDialog(true);
-                                                        }}
-                                                        title="Tạo tài khoản mới"
-                                                    >
-                                                        <Plus className="h-4 w-4" />
-                                                    </button>
                                                 </div>
-                                            </div>
+                                            )}
 
                                             <div className="space-y-1">
                                                 <Label className="text-[12px] text-gray-500">Thiết bị di động</Label>
@@ -827,61 +856,6 @@ export function EmployeeFormDialog({
                                             Thông tin liên hệ
                                         </h3>
                                         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                                            <div className="space-y-1">
-                                                <Label className="text-[12px] text-gray-500">Email *</Label>
-                                                <Input
-                                                    type="email"
-                                                    value={email}
-                                                    onChange={(e) => setEmail(e.target.value)}
-                                                    placeholder="email@company.com"
-                                                    disabled={isEditing}
-                                                    className="h-[34px] text-[13px]"
-                                                />
-                                            </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-[12px] text-gray-500">
-                                                    Mật khẩu {isEditing ? '' : '*'}
-                                                </Label>
-                                                <div className="relative">
-                                                    <Input
-                                                        type={showPassword ? 'text' : 'password'}
-                                                        value={password}
-                                                        onChange={(e) => setPassword(e.target.value)}
-                                                        placeholder={isEditing ? 'Để trống nếu không đổi' : 'Tối thiểu 6 ký tự'}
-                                                        className="h-[34px] text-[13px] pr-9"
-                                                        autoComplete="new-password"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                                                        onClick={() => setShowPassword(!showPassword)}
-                                                    >
-                                                        {showPassword ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-[12px] text-gray-500">
-                                                    Nhập lại mật khẩu {isEditing ? '' : '*'}
-                                                </Label>
-                                                <div className="relative">
-                                                    <Input
-                                                        type={showPasswordConfirm ? 'text' : 'password'}
-                                                        value={passwordConfirm}
-                                                        onChange={(e) => setPasswordConfirm(e.target.value)}
-                                                        placeholder={isEditing ? 'Để trống nếu không đổi' : 'Nhập lại mật khẩu'}
-                                                        className="h-[34px] text-[13px] pr-9"
-                                                        autoComplete="new-password"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                                                        onClick={() => setShowPasswordConfirm(!showPasswordConfirm)}
-                                                    >
-                                                        {showPasswordConfirm ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                                                    </button>
-                                                </div>
-                                            </div>
                                             <div className="space-y-1">
                                                 <Label className="text-[12px] text-gray-500">Telegram Chat ID</Label>
                                                 <Input

@@ -28,6 +28,8 @@ import {
     type MobileKanbanColumn,
 } from '@/components/kanban/mobileKanban';
 import { rejectNonSequentialKanbanMove, AFTER_SALE_COLUMN_IDS } from '@/lib/kanbanSequential';
+import { parseProductImages } from '../components/OrderItemPhotos';
+import { ForwardMoveDialog } from '@/components/orders/ForwardMoveDialog';
 
 interface AftersaleTabProps {
     order: Order | null;
@@ -150,7 +152,15 @@ const AftersaleCard = memo(({
     const draggableId = product?.id || `group-${index}`;
     const productName = product?.item_name || 'Khách';
     const productItem = product as any;
-    const productImage = product?.image || productItem?.product?.image || productItem?.service?.image;
+    const productImages = product
+        ? parseProductImages(product as OrderItem)
+        : [];
+    const productImage =
+        productImages[0] ||
+        product?.image ||
+        productItem?.product?.image ||
+        productItem?.service?.image;
+    const previewImages = (productImages.length > 0 ? productImages : productImage ? [productImage] : []).slice(0, 4);
 
     const { remainingMs } = useSLACountdown(col.id, col.slaDurationMs, aftersaleLogs, order.updated_at);
     const slaDisplay = remainingMs !== null ? formatSLACountdown(remainingMs, col.id) : null;
@@ -222,7 +232,7 @@ const AftersaleCard = memo(({
                     {...(isPhoneView ? {} : provided.dragHandleProps)}
                     className={cn(
                         "bg-white rounded-xl shadow-sm mb-3 border-l-4 transition-all",
-                        isPhoneView ? "cursor-pointer p-3" : "cursor-grab active:cursor-grabbing p-4",
+                        isPhoneView ? "cursor-pointer p-3" : "cursor-grab active:cursor-grabbing p-3",
                         snapshot.isDragging ? "shadow-lg ring-2 ring-primary/20 scale-105" : "",
                         isLate ? "border-red-500 bg-red-50/30" : "border-purple-400 hover:border-purple-600"
                     )}
@@ -333,105 +343,135 @@ const AftersaleCard = memo(({
                         </>
                     ) : (
                         <>
-                    <div className="space-y-2 mb-3">
-                        {productImage && (
-                            <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50 aspect-video w-full max-h-24">
-                                <img
-                                    src={productImage}
-                                    alt={productName}
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                                />
-                            </div>
-                        )}
-                        <h3 className="font-bold text-gray-800 text-[13px] flex items-center gap-1.5 flex-wrap">
-                            <ShoppingBag className="h-3.5 w-3.5 shrink-0 text-primary" />
-                            <span className="truncate">{productName}</span>
-                        </h3>
-                        {order.customer?.name && (
-                            <div className="flex items-center gap-1.5 text-[11px] text-gray-600">
-                                <UserIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                <span className="truncate">{order.customer.name}</span>
-                            </div>
-                        )}
-                    </div>
-
-                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Dịch vụ</p>
-                    <ul className="space-y-1">
-                        {group.services.map((svc) => (
-                            <li key={svc.id} className="rounded-md px-2 py-1">
-                                <div className="flex items-center gap-1.5 text-[11px] font-medium text-gray-700">
-                                    <Wrench className="h-3 w-3 shrink-0 text-primary/60" />
-                                    <span className="truncate">{svc.item_name}</span>
+                    <div className="flex gap-3 mb-2">
+                        {/* Cột trái: ảnh + tên SP/khách + nút */}
+                        <div className="w-[48%] shrink-0 flex flex-col gap-1.5">
+                            {previewImages.length > 0 ? (
+                                <div
+                                    className={cn(
+                                        'rounded-lg overflow-hidden border border-gray-200 bg-gray-50 gap-0.5',
+                                        previewImages.length === 1 ? 'grid grid-cols-1' : 'grid grid-cols-2'
+                                    )}
+                                >
+                                    {previewImages.map((src, i) => (
+                                        <div
+                                            key={`${src}-${i}`}
+                                            className={cn(
+                                                'overflow-hidden bg-muted',
+                                                previewImages.length === 1 ? 'aspect-[4/3] max-h-28' : 'aspect-square'
+                                            )}
+                                        >
+                                            <img
+                                                src={src}
+                                                alt=""
+                                                className="h-full w-full object-cover"
+                                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                            />
+                                        </div>
+                                    ))}
                                 </div>
-                            </li>
-                        ))}
-                    </ul>
+                            ) : (
+                                <div className="flex aspect-[4/3] max-h-28 items-center justify-center rounded-lg border border-dashed bg-gray-50 text-[10px] text-muted-foreground">
+                                    Không ảnh
+                                </div>
+                            )}
 
-                    <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
-                        <Badge variant="secondary" className="text-[10px] font-bold text-purple-500 bg-purple-50 uppercase h-5">
-                            {order.sales_user?.name || 'Sale'}
-                        </Badge>
+                            <h3 className="font-bold text-gray-800 text-[13px] flex items-start gap-1.5">
+                                <ShoppingBag className="h-3.5 w-3.5 shrink-0 text-primary mt-0.5" />
+                                <span className="line-clamp-2 leading-snug">{productName}</span>
+                            </h3>
+                            {order.customer?.name && (
+                                <div className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                                    <UserIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    <span className="truncate">{order.customer.name}</span>
+                                </div>
+                            )}
+                            <Badge variant="secondary" className="w-fit text-[10px] font-bold text-purple-500 bg-purple-50 uppercase h-5 max-w-full truncate">
+                                {order.sales_user?.name || 'Sale'}
+                            </Badge>
+
+                            {col.id === 'after1' && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full h-7 text-[10px] font-bold border-purple-200 hover:bg-purple-50 text-purple-700 px-1"
+                                    onClick={(e) => { e.stopPropagation(); onProductCardClick(group, 'after1'); }}
+                                >
+                                    <Camera className="h-3 w-3 mr-1 shrink-0" /> Ảnh hoàn thiện
+                                </Button>
+                            )}
+                            {col.id === 'after1_debt' && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full h-7 text-[10px] font-bold border-purple-200 hover:bg-purple-50 text-purple-700 px-1"
+                                    onClick={(e) => { e.stopPropagation(); onProductCardClick(group, 'after1_debt'); }}
+                                >
+                                    <FileText className="h-3 w-3 mr-1 shrink-0" /> Kiểm nợ
+                                </Button>
+                            )}
+                            {col.id === 'after2' && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className={cn(
+                                        'w-full h-7 text-[10px] font-bold px-1',
+                                        productItem?.sales_step_data?.after2_accessories_returned_checked
+                                            ? 'border-emerald-200 hover:bg-emerald-50 text-emerald-700'
+                                            : 'border-amber-300 hover:bg-amber-50 text-amber-800 bg-amber-50/80'
+                                    )}
+                                    onClick={(e) => { e.stopPropagation(); onProductCardClick(group, 'after2'); }}
+                                >
+                                    <Upload className="h-3 w-3 mr-1 shrink-0" />
+                                    {productItem?.sales_step_data?.after2_accessories_returned_checked
+                                        ? 'Đã trả đủ PK'
+                                        : 'Trả phụ kiện'}
+                                </Button>
+                            )}
+                            {col.id === 'after3' && onFeedbackAction && (
+                                <div className="flex gap-1.5 w-full">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="flex-1 h-7 text-[10px] font-bold border-green-200 hover:bg-green-50 text-green-700 px-1"
+                                        onClick={(e) => { e.stopPropagation(); onFeedbackAction(group, 'care'); }}
+                                    >
+                                        <ThumbsUp className="h-3 w-3 mr-0.5" /> Khen
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="flex-1 h-7 text-[10px] font-bold border-red-200 hover:bg-red-50 text-red-700 px-1"
+                                        onClick={(e) => { e.stopPropagation(); onFeedbackAction(group, 'warranty'); }}
+                                    >
+                                        <ThumbsDown className="h-3 w-3 mr-0.5" /> Chê
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Cột phải: danh sách dịch vụ */}
+                        <div className="min-w-0 flex-1 flex flex-col">
+                            {group.services.length > 0 ? (
+                                <>
+                                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Dịch vụ</p>
+                                    <ul className="space-y-0.5 overflow-y-auto">
+                                        {group.services.map((svc) => (
+                                            <li key={svc.id} className="rounded-md px-1.5 py-0.5">
+                                                <div className="flex items-start gap-1.5 text-[11px] font-medium text-gray-700">
+                                                    <Wrench className="h-3 w-3 shrink-0 text-primary/60 mt-0.5" />
+                                                    <span className="line-clamp-2 leading-snug">{svc.item_name}</span>
+                                                </div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </>
+                            ) : (
+                                <p className="text-[11px] text-muted-foreground italic">Không có dịch vụ</p>
+                            )}
+                        </div>
                     </div>
 
-                    {col.id === 'after1' && (
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="mt-2 w-full h-8 text-[11px] font-bold border-purple-200 hover:bg-purple-50 text-purple-700"
-                            onClick={(e) => { e.stopPropagation(); onProductCardClick(group, 'after1'); }}
-                        >
-                            <Camera className="h-3.5 w-3.5 mr-1.5" /> Ảnh hoàn thiện
-                        </Button>
-                    )}
-                    {col.id === 'after1_debt' && (
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="mt-2 w-full h-8 text-[11px] font-bold border-purple-200 hover:bg-purple-50 text-purple-700"
-                            onClick={(e) => { e.stopPropagation(); onProductCardClick(group, 'after1_debt'); }}
-                        >
-                            <FileText className="h-3.5 w-3.5 mr-1.5" /> Kiểm nợ
-                        </Button>
-                    )}
-                    {col.id === 'after2' && (
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className={cn(
-                                'mt-2 w-full h-8 text-[11px] font-bold px-1',
-                                productItem?.sales_step_data?.after2_accessories_returned_checked
-                                    ? 'border-emerald-200 hover:bg-emerald-50 text-emerald-700'
-                                    : 'border-amber-300 hover:bg-amber-50 text-amber-800 bg-amber-50/80'
-                            )}
-                            onClick={(e) => { e.stopPropagation(); onProductCardClick(group, 'after2'); }}
-                        >
-                            <Upload className="h-3.5 w-3.5 mr-1.5" />
-                            {productItem?.sales_step_data?.after2_accessories_returned_checked
-                                ? 'Đã trả đủ phụ kiện'
-                                : 'Xác nhận trả phụ kiện'}
-                        </Button>
-                    )}
-                    {col.id === 'after3' && onFeedbackAction && (
-                        <div className="mt-2 flex gap-2 w-full">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="flex-1 h-8 text-[11px] font-bold border-green-200 hover:bg-green-50 text-green-700 px-1"
-                                onClick={(e) => { e.stopPropagation(); onFeedbackAction(group, 'care'); }}
-                            >
-                                <ThumbsUp className="h-3.5 w-3.5 mr-1" /> Khen (Lưu trữ)
-                            </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="flex-1 h-8 text-[11px] font-bold border-red-200 hover:bg-red-50 text-red-700 px-1"
-                                onClick={(e) => { e.stopPropagation(); onFeedbackAction(group, 'warranty'); }}
-                            >
-                                <ThumbsDown className="h-3.5 w-3.5 mr-1" /> Chê (Bảo hành)
-                            </Button>
-                        </div>
-                    )}
                     {onAfterSaleMove && afterColumns.length > 0 && col.id !== 'after3' && (
                         <MobileKanbanMoveBar
                             columns={afterColumns}
@@ -470,6 +510,14 @@ export function AftersaleTab({
     if (!order) return null;
 
     const [mobileAfterCol, setMobileAfterCol] = useState<string>('after1');
+    const [pendingAftersaleMove, setPendingAftersaleMove] = useState<{
+        itemId: string;
+        isCustomerItem: boolean;
+        newStage: string;
+        fromStage: string;
+        itemName?: string;
+    } | null>(null);
+    const [aftersaleForwardDialogOpen, setAftersaleForwardDialogOpen] = useState(false);
     const mobileScrollRef = useRef<HTMLDivElement>(null);
     const mobileAfterInitializedRef = useRef(false);
     const afterColumns: MobileKanbanColumn[] = AFTER_COLS.map((c) => ({
@@ -662,9 +710,24 @@ export function AftersaleTab({
             }
         }
 
+        // Không còn validate riêng nào — vẫn bắt buộc xác nhận (ghi chú + ảnh) trước khi chuyển bước
+        setPendingAftersaleMove({
+            itemId,
+            isCustomerItem,
+            newStage,
+            fromStage: result.source.droppableId as string,
+            itemName: draggedGroup.product?.item_name,
+        });
+        setAftersaleForwardDialogOpen(true);
+    };
+
+    const confirmAftersaleMove = (notes: string, photos: string[]) => {
+        if (!order || !pendingAftersaleMove) return;
+        const { itemId, isCustomerItem, newStage, itemName } = pendingAftersaleMove;
+
         const apiPromise = isCustomerItem
-            ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage })
-            : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage });
+            ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage, move_notes: notes, move_photos: photos })
+            : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage, move_notes: notes, move_photos: photos });
 
         apiPromise
             .then(() => {
@@ -675,7 +738,7 @@ export function AftersaleTab({
             })
             .then(() => fetchKanbanLogs(order.id))
             .then(() => {
-                toast.success(`Đã chuyển "${draggedGroup.product?.item_name}" sang ${getAfterSaleStageLabel(newStage)}`);
+                toast.success(`Đã chuyển "${itemName}" sang ${getAfterSaleStageLabel(newStage)}`);
             })
             .catch((e: any) => {
                 reloadOrder();
@@ -774,13 +837,13 @@ export function AftersaleTab({
                                     })}
                                 </div>
                             </div>
-                            <div className="hidden gap-4 pb-4 md:grid md:grid-cols-5">
+                            <div className="hidden gap-4 overflow-x-auto pb-4 md:flex">
                                 {AFTER_COLS.map((col) => {
                                     const colGroups = groups.filter(
                                         (g) => getGroupAfterSaleStage(g) === col.id
                                     );
                                     return (
-                                        <div key={col.id} className="flex flex-col min-w-[220px]">
+                                        <div key={col.id} className="flex w-[300px] shrink-0 flex-col">
                                             <div className="flex justify-between items-center mb-4 px-2">
                                                 <h2 className={cn("font-bold uppercase text-xs tracking-widest", col.color)}>
                                                     {col.title}
@@ -948,6 +1011,14 @@ export function AftersaleTab({
                     </CardContent>
                 </Card>
             </div>
+            <ForwardMoveDialog
+                open={aftersaleForwardDialogOpen}
+                onClose={() => setAftersaleForwardDialogOpen(false)}
+                onConfirm={confirmAftersaleMove}
+                itemName={pendingAftersaleMove?.itemName || 'sản phẩm'}
+                currentStepLabel={pendingAftersaleMove ? getAfterSaleStageLabel(pendingAftersaleMove.fromStage) : undefined}
+                targetStepLabel={pendingAftersaleMove ? getAfterSaleStageLabel(pendingAftersaleMove.newStage) : undefined}
+            />
         </TabsContent>
     );
 }

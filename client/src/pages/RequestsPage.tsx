@@ -52,11 +52,15 @@ import {
 } from '@/lib/sensitivePermissions';
 
 const ACCESSORY_COLUMNS = Object.entries(ACCESSORY_LABELS)
-    .filter(([id]) => id !== 'requested' && id !== 'rejected')
+    .filter(([id]) => id !== 'requested' && id !== 'rejected' && id !== 'done')
     .map(([id, label]) => ({ id, label }));
 const PARTNER_COLUMNS = Object.entries(PARTNER_LABELS)
     .filter(([id]) => id !== 'requested' && id !== 'rejected')
     .map(([id, label]) => ({ id, label }));
+
+const isPartnerAccountingClosed = (row: any) => !!(row?.metadata?.accounting_closed);
+const isExtensionAccountingClosed = (row: any) =>
+    row?.status === 'kpi_recorded' || row?.status === 'rejected';
 
 // Extension: Show only requested, manager_approved, sale_contacted, notified_tech in Kanban board
 const EXTENSION_COLUMNS = Object.entries(EXTENSION_LABELS)
@@ -250,6 +254,8 @@ function RequestCardActions({
     isOverdue,
     overdueLabel = 'Xử lý quá hạn',
     deleting,
+    primaryLabel,
+    onPrimaryClick,
 }: {
     row: any;
     onOpenDialog: (row: any) => void;
@@ -258,17 +264,26 @@ function RequestCardActions({
     isOverdue?: boolean;
     overdueLabel?: string;
     deleting?: boolean;
+    primaryLabel?: string;
+    onPrimaryClick?: (row: any) => void;
 }) {
+    const label = primaryLabel || (isOverdue ? overdueLabel : 'Cập nhật');
+    const handlePrimary = () => {
+        if (onPrimaryClick) onPrimaryClick(row);
+        else onOpenDialog(row);
+    };
+
     return (
         <div className="mt-2 flex gap-2 sm:mt-2.5">
             <Button
-                variant={isOverdue ? 'destructive' : 'outline'}
+                variant={isOverdue && !primaryLabel ? 'destructive' : primaryLabel ? 'default' : 'outline'}
                 size="sm"
                 className="h-7 flex-1 rounded-lg text-[11px] font-semibold sm:h-8 sm:text-xs"
-                onClick={() => onOpenDialog(row)}
+                onClick={handlePrimary}
                 disabled={deleting}
             >
-                {isOverdue ? overdueLabel : 'Cập nhật'}
+                {deleting ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+                {label}
             </Button>
             {canDelete && onDelete && (
                 <Button
@@ -676,9 +691,9 @@ const ACCESSORY_TRANSITIONS: Record<string, { next: string; label: string; field
     },
     delivered_to_tech: {
         next: 'done',
-        label: 'Hoàn tất',
-        fields: []
-    }
+        label: 'Hoàn thành',
+        fields: [],
+    },
 };
 
 const PARTNER_TRANSITIONS: Record<string, { next: string; label: string; fields: { name: string; label: string; type: 'photo' | 'text' | 'number' | 'select' | 'datetime-local'; required: boolean; placeholder?: string; options?: { label: string; value: string }[] }[] }> = {
@@ -746,6 +761,7 @@ type KanbanCardProps = {
     onOpenDialog: (row: any) => void;
     onNavigateOrder: (id: string) => void;
     onDelete?: (row: any) => void;
+    onComplete?: (row: any) => void;
     canDelete?: boolean;
     deleting?: boolean;
     getProductCode?: (row: any) => string;
@@ -754,7 +770,7 @@ type KanbanCardProps = {
     extra?: React.ReactNode;
 };
 
-function AccessoryKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
+function AccessoryKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, onComplete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
     const productCode = getProductCode?.(row) ?? '—';
     const productImage = getProductImage?.(row) ?? null;
 
@@ -801,13 +817,15 @@ function AccessoryKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, can
                     canDelete={canDelete}
                     isOverdue={isOverdue}
                     deleting={deleting}
+                    primaryLabel={row.status === 'delivered_to_tech' ? 'Hoàn thành' : undefined}
+                    onPrimaryClick={row.status === 'delivered_to_tech' && onComplete ? onComplete : undefined}
                 />
             </div>
         </div>
     );
 }
 
-function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
+function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, onComplete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
     const productCode = getProductCode?.(row) ?? '—';
     const productImage = getProductImage?.(row) ?? null;
 
@@ -905,13 +923,15 @@ function PartnerKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDe
                     canDelete={canDelete}
                     isOverdue={finalOverdue}
                     deleting={deleting}
+                    primaryLabel={row.status === 'done' ? 'Hoàn thành' : undefined}
+                    onPrimaryClick={row.status === 'done' && onComplete ? onComplete : undefined}
                 />
             </div>
         </div>
     );
 }
 
-function ExtensionKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
+function ExtensionKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, onComplete, canDelete, deleting, getProductCode, getItemName, getProductImage, extra }: KanbanCardProps) {
     const productCode = getProductCode?.(row) ?? '—';
     const productImage = getProductImage?.(row) ?? null;
 
@@ -966,6 +986,8 @@ function ExtensionKanbanCard({ row, onOpenDialog, onNavigateOrder, onDelete, can
                     canDelete={canDelete}
                     isOverdue={isOverdue}
                     deleting={deleting}
+                    primaryLabel={row.status === 'notified_tech' ? 'Hoàn thành' : undefined}
+                    onPrimaryClick={row.status === 'notified_tech' && onComplete ? onComplete : undefined}
                 />
             </div>
         </div>
@@ -977,6 +999,7 @@ function AccessoryKanban({
     updatingId,
     onDragEnd,
     onOpenDialog,
+    onComplete,
     onNavigateOrder,
     onDelete,
     canDelete,
@@ -985,20 +1008,27 @@ function AccessoryKanban({
     updatingId: string | null;
     onDragEnd: (result: DropResult) => void;
     onOpenDialog: (row: any) => void;
+    onComplete?: (row: any) => void;
     onNavigateOrder: (id: string) => void;
     onDelete?: (row: any) => void;
     canDelete?: boolean;
 }) {
+    const visibleItems = useMemo(
+        () => items.filter((row) => row.status !== 'done' && row.status !== 'requested' && row.status !== 'rejected'),
+        [items],
+    );
+
     return (
         <RequestKanbanBoard
             columns={ACCESSORY_COLUMNS}
-            items={items}
+            items={visibleItems}
             updatingId={updatingId}
             onDragEnd={onDragEnd}
             renderCard={(row) => (
                     <AccessoryKanbanCard
                         row={row}
                         onOpenDialog={onOpenDialog}
+                        onComplete={onComplete}
                         onNavigateOrder={onNavigateOrder}
                         onDelete={onDelete}
                         canDelete={canDelete}
@@ -1027,6 +1057,7 @@ function PartnerKanban({
     updatingId,
     onDragEnd,
     onOpenDialog,
+    onComplete,
     onNavigateOrder,
     onDelete,
     canDelete,
@@ -1035,20 +1066,27 @@ function PartnerKanban({
     updatingId: string | null;
     onDragEnd: (result: DropResult) => void;
     onOpenDialog: (row: any) => void;
+    onComplete?: (row: any) => void;
     onNavigateOrder: (id: string) => void;
     onDelete?: (row: any) => void;
     canDelete?: boolean;
 }) {
+    const visibleItems = useMemo(
+        () => items.filter((row) => !isPartnerAccountingClosed(row) && row.status !== 'requested' && row.status !== 'rejected'),
+        [items],
+    );
+
     return (
         <RequestKanbanBoard
             columns={PARTNER_COLUMNS}
-            items={items}
+            items={visibleItems}
             updatingId={updatingId}
             onDragEnd={onDragEnd}
             renderCard={(row) => (
                     <PartnerKanbanCard
                         row={row}
                         onOpenDialog={onOpenDialog}
+                        onComplete={onComplete}
                         onNavigateOrder={onNavigateOrder}
                         onDelete={onDelete}
                         canDelete={canDelete}
@@ -1077,6 +1115,7 @@ function ExtensionKanban({
     updatingId,
     onDragEnd,
     onOpenDialog,
+    onComplete,
     onNavigateOrder,
     onDelete,
     canDelete,
@@ -1085,20 +1124,27 @@ function ExtensionKanban({
     updatingId: string | null;
     onDragEnd: (result: DropResult) => void;
     onOpenDialog: (row: any) => void;
+    onComplete?: (row: any) => void;
     onNavigateOrder: (id: string) => void;
     onDelete?: (row: any) => void;
     canDelete?: boolean;
 }) {
+    const visibleItems = useMemo(
+        () => items.filter((row) => !isExtensionAccountingClosed(row) && row.status !== 'requested'),
+        [items],
+    );
+
     return (
         <RequestKanbanBoard
             columns={EXTENSION_COLUMNS}
-            items={items}
+            items={visibleItems}
             updatingId={updatingId}
             onDragEnd={onDragEnd}
             renderCard={(row) => (
                     <ExtensionKanbanCard
                         row={row}
                         onOpenDialog={onOpenDialog}
+                        onComplete={onComplete}
                         onNavigateOrder={onNavigateOrder}
                         onDelete={onDelete}
                         canDelete={canDelete}
@@ -1177,6 +1223,19 @@ export function RequestsPage() {
     const [searchingOrder, setSearchingOrder] = useState(false);
     const [foundOrder, setFoundOrder] = useState<any>(null);
     const [foundItem, setFoundItem] = useState<any>(null);
+
+    const visibleAccessoryCount = useMemo(
+        () => accessories.filter((row) => row.status !== 'done' && row.status !== 'requested' && row.status !== 'rejected').length,
+        [accessories],
+    );
+    const visiblePartnerCount = useMemo(
+        () => partners.filter((row) => !isPartnerAccountingClosed(row) && row.status !== 'requested' && row.status !== 'rejected').length,
+        [partners],
+    );
+    const visibleExtensionCount = useMemo(
+        () => extensions.filter((row) => !isExtensionAccountingClosed(row) && row.status !== 'requested').length,
+        [extensions],
+    );
 
     const getOrderCode = resolveRequestOrderCode;
     const getOrderId = resolveRequestOrderId;
@@ -1340,7 +1399,11 @@ export function RequestsPage() {
                 ...(typeof kpiImpact === 'boolean' && { kpi_impact: kpiImpact }),
             });
             toast.success('Đã cập nhật yêu cầu gia hạn');
-            loadAll();
+            if (status === 'kpi_recorded') {
+                setExtensions((prev) => prev.filter((r) => r.id !== requestId));
+            } else {
+                loadAll();
+            }
             setShowExtensionDialog(false);
             setExtensionRow(null);
         } catch (e: any) {
@@ -1538,13 +1601,80 @@ export function RequestsPage() {
                 }
             }
 
-            toast.success('Đã cập nhật trạng thái mua phụ kiện');
-            loadAll();
+            toast.success(
+                accessoryStatus === 'done'
+                    ? 'Đã hoàn thành — ẩn khỏi danh sách Giao KT'
+                    : 'Đã cập nhật trạng thái mua phụ kiện',
+            );
+            if (accessoryStatus === 'done') {
+                setAccessories((prev) => prev.filter((r) => r.id !== accessoryRow.id));
+            } else {
+                loadAll();
+            }
             setShowAccessoryDialog(false);
             setAccessoryRow(null);
             setAccessoryMeta({});
         } catch (e: any) {
             toast.error(e?.response?.data?.message || 'Lỗi cập nhật');
+        } finally {
+            setUpdatingId(null);
+        }
+    };
+
+    const handleCompleteAccessory = async (row: any) => {
+        if (!canEditRequests) {
+            toast.error('Bạn không có quyền sửa trên màn Tất cả yêu cầu');
+            return;
+        }
+        if (!row?.id || row.status !== 'delivered_to_tech') return;
+
+        setUpdatingId(row.id);
+        try {
+            await requestsApi.updateAccessory(row.id, { status: 'done' });
+            setAccessories((prev) => prev.filter((r) => r.id !== row.id));
+            toast.success('Đã hoàn thành — ẩn khỏi danh sách Giao KT');
+        } catch (e: any) {
+            toast.error(e?.response?.data?.message || 'Không thể hoàn thành yêu cầu');
+        } finally {
+            setUpdatingId(null);
+        }
+    };
+
+    const handleCompletePartner = async (row: any) => {
+        if (!canEditRequests) {
+            toast.error('Bạn không có quyền sửa trên màn Tất cả yêu cầu');
+            return;
+        }
+        if (!row?.id || row.status !== 'done') return;
+
+        setUpdatingId(row.id);
+        try {
+            await requestsApi.updatePartner(row.id, {
+                metadata: { ...(row.metadata || {}), accounting_closed: true },
+            });
+            setPartners((prev) => prev.filter((r) => r.id !== row.id));
+            toast.success('Đã hoàn thành — ẩn khỏi danh sách Gửi Đối Tác');
+        } catch (e: any) {
+            toast.error(e?.response?.data?.message || 'Không thể hoàn thành yêu cầu');
+        } finally {
+            setUpdatingId(null);
+        }
+    };
+
+    const handleCompleteExtension = async (row: any) => {
+        if (!canEditRequests) {
+            toast.error('Bạn không có quyền sửa trên màn Tất cả yêu cầu');
+            return;
+        }
+        if (!row?.id || row.status !== 'notified_tech') return;
+
+        setUpdatingId(row.id);
+        try {
+            await requestsApi.updateExtension(row.id, { status: 'kpi_recorded' });
+            setExtensions((prev) => prev.filter((r) => r.id !== row.id));
+            toast.success('Đã hoàn thành — ẩn khỏi danh sách Xin gia hạn');
+        } catch (e: any) {
+            toast.error(e?.response?.data?.message || 'Không thể hoàn thành yêu cầu');
         } finally {
             setUpdatingId(null);
         }
@@ -1692,7 +1822,7 @@ export function RequestsPage() {
     const EXTENSION_NEXT_STATUS: Record<string, string> = {
         manager_approved: 'sale_contacted',
         sale_contacted: 'notified_tech',
-        notified_tech: 'notified_tech', // terminal
+        notified_tech: 'kpi_recorded',
     };
 
     const openExtensionDialog = (row: any) => {
@@ -1881,15 +2011,15 @@ export function RequestsPage() {
                 <TabsList className="grid h-auto w-full grid-cols-3 gap-1 rounded-xl border bg-slate-50 p-1 md:flex md:h-12 md:max-w-2xl md:items-center md:justify-start md:gap-2">
                     <TabsTrigger value="accessories" className="flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-lg border bg-white px-1 py-2 text-[10px] font-semibold leading-tight data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white md:min-h-[44px] md:flex-row md:gap-1.5 md:rounded-xl md:px-4 md:text-sm">
                         <Package className="h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
-                        <span className="text-center"><span className="md:hidden">Phụ kiện</span><span className="hidden md:inline">Mua phụ kiện</span> ({accessories.length})</span>
+                        <span className="text-center"><span className="md:hidden">Phụ kiện</span><span className="hidden md:inline">Mua phụ kiện</span> ({visibleAccessoryCount})</span>
                     </TabsTrigger>
                     <TabsTrigger value="partners" className="flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-lg border bg-white px-1 py-2 text-[10px] font-semibold leading-tight data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white md:min-h-[44px] md:flex-row md:gap-1.5 md:rounded-xl md:px-4 md:text-sm">
                         <Truck className="h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
-                        <span className="text-center"><span className="md:hidden">Đối tác</span><span className="hidden md:inline">Gửi Đối Tác</span> ({partners.length})</span>
+                        <span className="text-center"><span className="md:hidden">Đối tác</span><span className="hidden md:inline">Gửi Đối Tác</span> ({visiblePartnerCount})</span>
                     </TabsTrigger>
                     <TabsTrigger value="extensions" className="flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-lg border bg-white px-1 py-2 text-[10px] font-semibold leading-tight data-[state=active]:border-primary data-[state=active]:bg-primary data-[state=active]:text-white md:min-h-[44px] md:flex-row md:gap-1.5 md:rounded-xl md:px-4 md:text-sm">
                         <Clock className="h-3.5 w-3.5 shrink-0 md:h-4 md:w-4" />
-                        <span className="text-center"><span className="md:hidden">Gia hạn</span><span className="hidden md:inline">Xin gia hạn</span> ({extensions.length})</span>
+                        <span className="text-center"><span className="md:hidden">Gia hạn</span><span className="hidden md:inline">Xin gia hạn</span> ({visibleExtensionCount})</span>
                     </TabsTrigger>
                 </TabsList>
 
@@ -1910,7 +2040,7 @@ export function RequestsPage() {
                             </div>
                         </CardHeader>
                         <CardContent className="min-w-0 p-3 pt-0 sm:p-6 sm:pt-0">
-                            {accessories.length === 0 ? (
+                            {visibleAccessoryCount === 0 ? (
                                 <p className="text-sm text-muted-foreground text-center py-8">Chưa có yêu cầu nào.</p>
                             ) : (
                                 <AccessoryKanban
@@ -1918,6 +2048,7 @@ export function RequestsPage() {
                                     updatingId={updatingId}
                                     onDragEnd={handleAccessoryDragEnd}
                                     onOpenDialog={openAccessoryDialog}
+                                    onComplete={handleCompleteAccessory}
                                     onNavigateOrder={(id) => navigate(`/orders/${id}`)}
                                     onDelete={(row) => handleDeleteRequest('accessory', row)}
                                     canDelete={canDeleteRequests}
@@ -1936,7 +2067,7 @@ export function RequestsPage() {
                             </div>
                         </CardHeader>
                         <CardContent className="min-w-0 p-3 pt-0 sm:p-6 sm:pt-0">
-                            {partners.length === 0 ? (
+                            {visiblePartnerCount === 0 ? (
                                 <p className="text-sm text-muted-foreground text-center py-8">Chưa có yêu cầu nào.</p>
                             ) : (
                                 <PartnerKanban
@@ -1944,6 +2075,7 @@ export function RequestsPage() {
                                     updatingId={updatingId}
                                     onDragEnd={handlePartnerDragEnd}
                                     onOpenDialog={openPartnerDialog}
+                                    onComplete={handleCompletePartner}
                                     onNavigateOrder={(id) => navigate(`/orders/${id}`)}
                                     onDelete={(row) => handleDeleteRequest('partner', row)}
                                     canDelete={canDeleteRequests}
@@ -1962,7 +2094,7 @@ export function RequestsPage() {
                             </div>
                         </CardHeader>
                         <CardContent className="min-w-0 p-3 pt-0 sm:p-6 sm:pt-0">
-                            {extensions.length === 0 ? (
+                            {visibleExtensionCount === 0 ? (
                                 <p className="text-sm text-muted-foreground text-center py-8">Chưa có yêu cầu nào.</p>
                             ) : (
                                 <ExtensionKanban
@@ -1970,6 +2102,7 @@ export function RequestsPage() {
                                     updatingId={updatingId}
                                     onDragEnd={handleExtensionDragEnd}
                                     onOpenDialog={openExtensionDialog}
+                                    onComplete={handleCompleteExtension}
                                     onNavigateOrder={(id) => navigate(`/orders/${id}`)}
                                     onDelete={(row) => handleDeleteRequest('extension', row)}
                                     canDelete={canDeleteRequests}
@@ -2126,7 +2259,7 @@ export function RequestsPage() {
                             className="h-9 flex-1 rounded-lg px-3 text-xs font-semibold shadow-md shadow-primary/15"
                         >
                             {updatingId ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
-                            Xác nhận
+                            {accessoryRow?.status === 'delivered_to_tech' ? 'Hoàn thành' : 'Xác nhận'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
@@ -2268,12 +2401,12 @@ export function RequestsPage() {
                             Hủy
                         </Button>
                         <Button
-                            onClick={handleSubmitPartner}
+                            onClick={partnerRow?.status === 'done' ? () => handleCompletePartner(partnerRow) : handleSubmitPartner}
                             disabled={!!updatingId}
                             className="h-9 flex-1 rounded-lg px-3 text-xs font-semibold shadow-md shadow-primary/15"
                         >
                             {updatingId ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
-                            Xác nhận
+                            {partnerRow?.status === 'done' ? 'Hoàn thành' : 'Xác nhận'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
@@ -2462,7 +2595,9 @@ export function RequestsPage() {
                                     className="flex-[2] h-12 rounded-2xl font-bold bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20"
                                 >
                                     {updatingId ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <CheckCircle2 className="w-5 h-5 mr-2" />}
-                                    Chuyển → {EXTENSION_LABELS[extensionStatus] || extensionStatus}
+                                    {extensionRow?.status === 'notified_tech' && extensionStatus === 'kpi_recorded'
+                                        ? 'Hoàn thành'
+                                        : `Chuyển → ${EXTENSION_LABELS[extensionStatus] || extensionStatus}`}
                                 </Button>
                             </div>
                         )}

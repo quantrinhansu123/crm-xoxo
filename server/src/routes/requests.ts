@@ -90,6 +90,17 @@ const ACCESSORY_REQUIRED_FIELDS: Record<string, string[]> = {
     shipped: ['photos_item', 'photos_storage']
 };
 
+const ACCESSORY_ALLOWED_STATUSES = [
+    'requested',
+    'rejected',
+    'need_buy',
+    'bought',
+    'waiting_ship',
+    'shipped',
+    'delivered_to_tech',
+    'done',
+] as const;
+
 const ACCESSORY_FIELD_LABELS: Record<string, string> = {
     photos_purchase: 'Ảnh mua',
     photos_transfer: 'Ảnh ck',
@@ -207,6 +218,13 @@ router.patch('/accessories/:id', authenticate, async (req: AuthenticatedRequest,
 
         assertManagerQueueApproval(req, current.status, status);
 
+        if (status && !(ACCESSORY_ALLOWED_STATUSES as readonly string[]).includes(status)) {
+            throw new ApiError(
+                `Trạng thái phụ kiện không hợp lệ: "${status}". Cho phép: ${ACCESSORY_ALLOWED_STATUSES.join(', ')}`,
+                400,
+            );
+        }
+
         // Validate if changing status
         if (status && status !== current.status && status !== 'rejected' && status !== 'cancelled') {
             const required = ACCESSORY_REQUIRED_FIELDS[current.status];
@@ -236,6 +254,7 @@ router.patch('/accessories/:id', authenticate, async (req: AuthenticatedRequest,
             .single();
 
         if (error) {
+            console.error('[requests] update accessory failed:', id, { status, error });
             throw new ApiError('Không thể cập nhật yêu cầu: ' + error.message, 500);
         }
 
