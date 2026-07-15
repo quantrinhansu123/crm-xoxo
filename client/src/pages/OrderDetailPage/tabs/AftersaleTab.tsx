@@ -18,6 +18,7 @@ import type { WorkflowKanbanGroup } from '../types';
 import { getGroupAfterSaleStage } from '../constants';
 import {
     getAfter1ToDebtValidationErrors,
+    getAfter1DebtToAfter2ValidationErrors,
     showAfterSaleValidationToast,
 } from '../afterSaleValidation';
 import {
@@ -641,6 +642,35 @@ export function AftersaleTab({
                     onOpenProductDialogWithMove(draggedGroup, 'after1', moveAction, newStage);
                 } else {
                     onProductCardClick(draggedGroup, 'after1');
+                }
+                return;
+            }
+        }
+
+        if (result.source.droppableId === 'after1_debt' && newStage === 'after2') {
+            const validationErrors = getAfter1DebtToAfter2ValidationErrors(draggedGroup.product);
+            const hasPaymentPhotos = Array.isArray((order as any).debt_payment_photos) && (order as any).debt_payment_photos.length > 0;
+            if (!hasPaymentPhotos) validationErrors.push('Chụp ít nhất một "Ảnh CK" (chuyển khoản/tiền mặt)');
+
+            if (validationErrors.length > 0) {
+                showAfterSaleValidationToast(validationErrors);
+                // Mở dialog kèm move callback — sau khi confirm thành công sẽ tự chuyển bước
+                const moveAction = async () => {
+                    const api = isCustomerItem
+                        ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage })
+                        : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage });
+                    await api;
+                    if (order.status !== 'after_sale') {
+                        ordersApi.updateStatus(order.id, 'after_sale').catch(console.error);
+                    }
+                    reloadOrder();
+                    fetchKanbanLogs(order.id);
+                    toast.success(`Đã chuyển sản phẩm "${draggedGroup.product?.item_name}" sang bước mới`);
+                };
+                if (onOpenProductDialogWithMove) {
+                    onOpenProductDialogWithMove(draggedGroup, 'after1_debt', moveAction, newStage);
+                } else {
+                    onProductCardClick(draggedGroup, 'after1_debt');
                 }
                 return;
             }
