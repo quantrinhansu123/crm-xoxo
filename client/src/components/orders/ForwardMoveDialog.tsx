@@ -42,7 +42,7 @@ export function ForwardMoveDialog({
         setPhotos(prev => prev.filter((_, i) => i !== index));
     };
 
-    const canConfirm = notes.trim().length > 0 && photos.length > 0;
+    const canConfirm = notes.trim().length > 0;
 
     const handleConfirm = () => {
         if (!canConfirm) return;
@@ -67,13 +67,13 @@ export function ForwardMoveDialog({
                             </>
                         ) : null}.
                         <br />
-                        <span className="text-xs text-destructive font-bold">Lưu ý: Ghi chú và Ảnh minh chứng là bắt buộc.</span>
+                        <span className="text-xs text-destructive font-bold">Lưu ý: Ghi chú là bắt buộc.</span>
                     </DialogDescription>
                 </DialogHeader>
 
                 <div className="grid gap-4 py-4">
                     <div className="grid gap-2">
-                        <Label>Ảnh / Video minh chứng <span className="text-destructive">*</span></Label>
+                        <Label>Ảnh / Video minh chứng <span className="text-muted-foreground font-normal">(không bắt buộc)</span></Label>
                         <div className="flex flex-wrap gap-2">
                             {photos.map((url, index) => (
                                 <div key={index} className="relative group">
