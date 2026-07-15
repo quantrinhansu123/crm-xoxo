@@ -42,8 +42,10 @@ export function useOrderActions(
                 await orderItemsApi.updateAfterSaleData(itemId, data);
             }
             await reloadOrder();
-        } catch (error) {
-            toast.error('Lỗi khi cập nhật thông tin After-sale sản phẩm');
+        } catch (error: any) {
+            const msg = error?.response?.data?.message || error?.message || 'Lỗi khi cập nhật thông tin After-sale sản phẩm';
+            toast.error(msg);
+            throw error;
         }
     }, [reloadOrder]);
 

@@ -17,7 +17,6 @@ import type { Order, OrderItem } from '@/hooks/useOrders';
 import type { WorkflowKanbanGroup } from '../types';
 import { getGroupAfterSaleStage } from '../constants';
 import {
-    getAfter1DebtToAfter2ValidationErrors,
     getAfter1ToDebtValidationErrors,
     showAfterSaleValidationToast,
 } from '../afterSaleValidation';
@@ -642,33 +641,6 @@ export function AftersaleTab({
                     onOpenProductDialogWithMove(draggedGroup, 'after1', moveAction, newStage);
                 } else {
                     onProductCardClick(draggedGroup, 'after1');
-                }
-                return;
-            }
-        }
-
-        if (result.source.droppableId === 'after1_debt' && newStage === 'after2') {
-            const validationErrors = getAfter1DebtToAfter2ValidationErrors(draggedGroup.product);
-
-            if (validationErrors.length > 0) {
-                showAfterSaleValidationToast(validationErrors);
-                // Mở dialog kèm move callback
-                const moveAction = async () => {
-                    const api = isCustomerItem
-                        ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage })
-                        : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage });
-                    await api;
-                    if (order.status !== 'after_sale') {
-                        ordersApi.updateStatus(order.id, 'after_sale').catch(console.error);
-                    }
-                    reloadOrder();
-                    fetchKanbanLogs(order.id);
-                    toast.success(`Đã chuyển sản phẩm "${draggedGroup.product?.item_name}" sang bước mới`);
-                };
-                if (onOpenProductDialogWithMove) {
-                    onOpenProductDialogWithMove(draggedGroup, 'after1_debt', moveAction, newStage);
-                } else {
-                    onProductCardClick(draggedGroup, 'after1_debt');
                 }
                 return;
             }

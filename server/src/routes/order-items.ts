@@ -18,7 +18,6 @@ import {
     AFTER_SALE_STAGE_ORDER,
     CARE_STAGE_ORDER,
     WARRANTY_STAGE_ORDER,
-    assertDebtCheckCompleteForStageMove,
     assertForwardStageMove,
 } from '../utils/kanbanStageValidation.js';
 import {
@@ -2452,7 +2451,7 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
         if (delivery_staff_name !== undefined) updatePayload.delivery_staff_name = delivery_staff_name;
         if (delivery_received_at !== undefined) updatePayload.delivery_received_at = delivery_received_at || null;
 
-        const { data: currentItem } = await supabaseAdmin.from('order_items').select('after_sale_stage, order_id, current_phase, care_warranty_flow, care_warranty_stage, completion_photos').eq('id', id).single();
+        const { data: currentItem } = await supabaseAdmin.from('order_items').select('after_sale_stage, phase_stage, order_id, current_phase, care_warranty_flow, care_warranty_stage, completion_photos').eq('id', id).single();
         const oldCareFlow = currentItem?.care_warranty_flow ?? null;
         const oldCareStage = currentItem?.care_warranty_stage ?? null;
 
@@ -2494,18 +2493,10 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             updatePayload.current_phase = 'after_sale';
             updatePayload.phase_stage = stage;
         }
-        const oldStage = currentItem?.after_sale_stage || 'after1';
+        const oldStage = currentItem?.phase_stage || currentItem?.after_sale_stage || 'after1';
 
         if (stage !== undefined && stage !== oldStage) {
             assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
-            if (oldStage === 'after1_debt' && stage === 'after2' && currentItem?.order_id) {
-                const { data: orderRow } = await supabaseAdmin
-                    .from('orders')
-                    .select('debt_checked, debt_checked_by_name')
-                    .eq('id', currentItem.order_id)
-                    .single();
-                assertDebtCheckCompleteForStageMove(oldStage, stage, orderRow);
-            }
         }
 
         const newCareFlowForCheck = care_warranty_flow !== undefined ? care_warranty_flow : oldCareFlow;

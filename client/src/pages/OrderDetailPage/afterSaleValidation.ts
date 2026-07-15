@@ -52,24 +52,13 @@ export type After1DebtFormOverride = {
 
 /**
  * Kiểm nợ → Đóng gói & Giao hàng
- * Mỗi sản phẩm trong cùng đơn phải điền độc lập — nhận dữ liệu từ chính sản phẩm (product/item), không dùng chung cấp đơn.
+ * Không bắt buộc tick kiểm nợ / người thu tiền — chỉ cần mở form (các field vẫn lưu được nếu điền).
  */
 export function getAfter1DebtToAfter2ValidationErrors(
-    product: Pick<OrderItem, 'debt_checked' | 'debt_checked_by_name'> | null | undefined,
-    formOverride?: After1DebtFormOverride,
+    _product?: Pick<OrderItem, 'debt_checked' | 'debt_checked_by_name'> | null,
+    _formOverride?: After1DebtFormOverride,
 ): string[] {
-    const errors: string[] = [];
-    const debtChecked = formOverride?.debt_checked ?? (product as any)?.debt_checked;
-    const collector = (formOverride?.debt_checked_by_name ?? (product as any)?.debt_checked_by_name ?? '').trim();
-
-    if (!debtChecked) {
-        errors.push('Tick "Xác nhận đã kiểm nợ"');
-    }
-    if (!collector) {
-        errors.push('Chọn "Người thu tiền"');
-    }
-
-    return errors;
+    return [];
 }
 
 export function showAfterSaleValidationToast(errors: string[]): void {

@@ -835,29 +835,6 @@ export function ProductDetailDialog({
                     return;
                 }
             }
-
-            if (roomId === 'after1_debt') {
-                const errors = getAfter1DebtToAfter2ValidationErrors(itemForValidation, {
-                    debt_checked: formData.debt_checked,
-                    debt_checked_by_name: formData.debt_checked_by_name ?? undefined,
-                });
-                if (errors.length > 0) {
-                    showAfterSaleValidationToast(errors);
-                    return;
-                }
-            }
-        }
-
-        // Kiểm nợ: bắt buộc tick xác nhận trước khi lưu / chuyển bước
-        if (isAftersale && roomId.startsWith('after1_debt')) {
-            if (!formData.debt_checked) {
-                toast.error('Vui lòng tick "Xác nhận đã kiểm nợ" trước khi lưu hoặc chuyển bước');
-                return;
-            }
-            if (!formData.debt_checked_by_name?.trim()) {
-                toast.error('Vui lòng chọn Người thu tiền');
-                return;
-            }
         }
 
         // Validation: Require payment proof photos when collecting debt
@@ -898,6 +875,10 @@ export function ProductDetailDialog({
                         debt_checked: formData.debt_checked,
                         debt_checked_notes: (formData as any).debt_checked_notes,
                         debt_checked_by_name: formData.debt_checked_by_name,
+                        // Nút "Xác nhận kiểm nợ & Lưu" cũng chuyển sang bước Đóng gói
+                        ...(roomId.startsWith('after1_debt') && !onConfirmAndMove
+                            ? { stage: 'after2' }
+                            : {}),
                     });
                 }
             }
@@ -964,16 +945,24 @@ export function ProductDetailDialog({
                 }
             }
 
-            // Chuyển bước sau khi đã thu nợ thành công
+            // Chuyển bước sau khi đã thu nợ thành công / xác nhận kiểm nợ
             if (onConfirmAndMove) {
                 await onConfirmAndMove();
                 onOpenChange(false);
+            } else if (roomId.startsWith('after1_debt')) {
+                toast.success('Đã xác nhận kiểm nợ — chuyển sang Đóng gói & Giao hàng');
+                if (onReloadOrder) await onReloadOrder();
+                onOpenChange(false);
+                return;
             }
 
             toast.success('Đã cập nhật thông tin thành công');
             if (onReloadOrder) await onReloadOrder();
         } catch (error: any) {
-            toast.error(error?.message || 'Lỗi khi cập nhật thông tin');
+            // updateItemAfterSaleData đã toast chi tiết nếu lỗi API; tránh toast trùng
+            if (!error?.response?.data?.message) {
+                toast.error(error?.message || 'Lỗi khi cập nhật thông tin');
+            }
         } finally {
             setSaving(false);
         }
@@ -1915,6 +1904,7 @@ export function ProductDetailDialog({
                                     {(roomId.startsWith('after1_debt') || roomId.startsWith('after4')) && (
                                         <div className="space-y-3">
                                             <h3 className="font-semibold text-xs uppercase tracking-[0.2em] text-purple-800">Thông tin thanh toán (Kiểm nợ)</h3>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:items-start">
                                             <div className="bg-white p-4 rounded-2xl border border-purple-100 shadow-sm space-y-4">
                                                 <div className="flex justify-between items-center bg-purple-50/50 p-2.5 rounded-xl border border-purple-50">
                                                     <span className="text-xs font-semibold text-purple-700">NGƯỜI TRẢ ĐỒ:</span>
@@ -2001,8 +1991,11 @@ export function ProductDetailDialog({
                                                         <span className="text-red-500 font-bold uppercase text-[10px]">CÒN CHƯA TRẢ KHÁCH:</span>
                                                         <Badge variant="destructive" className="font-bold h-5 px-1.5 text-[10px]">{remainingItemsCount} sản phẩm</Badge>
                                                     </div>
+                                                </div>
+                                            </div>
 
-                                                    <div className="space-y-2 mb-2 pt-2 border-t border-purple-50">
+                                            <div className="bg-white p-4 rounded-2xl border border-purple-100 shadow-sm space-y-4">
+                                                    <div className="space-y-2 mb-2">
                                                         <Label className="text-[10px] font-black text-blue-600 uppercase">Danh sách bàn giao đợt này:</Label>
                                                         <p className="text-[10px] text-muted-foreground leading-snug">
                                                             Chỉ hiện SP đã qua Kiểm nợ. SP khác trên đơn vẫn ở Ảnh hoàn thiện cho đến khi chuyển bước riêng.
@@ -2024,17 +2017,6 @@ export function ProductDetailDialog({
                                                                                 if (checked && currentStage === 'after1') {
                                                                                     toast.error('Sản phẩm chưa qua Kiểm nợ — hoàn thành ảnh hoàn thiện và chuyển sang Kiểm nợ trước');
                                                                                     return;
-                                                                                }
-                                                                                // Mỗi sản phẩm điền độc lập — kiểm tra debt_checked/debt_checked_by_name của CHÍNH sản phẩm này
-                                                                                if (checked) {
-                                                                                    if (!(item as any).debt_checked) {
-                                                                                        toast.error('Vui lòng tick "Xác nhận đã kiểm nợ" trước khi bàn giao sản phẩm');
-                                                                                        return;
-                                                                                    }
-                                                                                    if (!(item as any).debt_checked_by_name?.trim()) {
-                                                                                        toast.error('Vui lòng chọn Người thu tiền');
-                                                                                        return;
-                                                                                    }
                                                                                 }
                                                                                 const nextStage = checked ? 'after2' : 'after1_debt';
                                                                                 const previousStage = currentStage;
@@ -2161,10 +2143,6 @@ export function ProductDetailDialog({
                                                             />
                                                         </div>
                                                     </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-3 pt-1">
                                                 <div className="flex items-center space-x-2 bg-white p-3 rounded-xl border shadow-sm">
                                                     <Checkbox
                                                         id="debt_checked"
@@ -2186,7 +2164,6 @@ export function ProductDetailDialog({
                                                 <div className="space-y-2">
                                                     <Label className="text-xs font-bold text-gray-500 uppercase flex items-center gap-1.5">
                                                         Người thu tiền
-                                                        {(roomId.startsWith('after1_debt') || roomId === 'after4') && <span className="text-rose-500">*</span>}
                                                     </Label>
                                                     <StaffNameSelect
                                                         className="bg-white h-9"
@@ -2197,6 +2174,7 @@ export function ProductDetailDialog({
                                                         disabled={isInputDisabled}
                                                     />
                                                 </div>
+                                            </div>
                                             </div>
                                         </div>
                                     )}

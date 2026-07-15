@@ -30,17 +30,3 @@ export function assertForwardStageMove(
     }
 }
 
-/** Kiểm nợ → Đóng gói: bắt buộc đã tick xác nhận kiểm nợ trên đơn */
-export function assertDebtCheckCompleteForStageMove(
-    oldStage: string,
-    newStage: string,
-    order: { debt_checked?: boolean; debt_checked_by_name?: string | null } | null | undefined,
-): void {
-    if (oldStage !== 'after1_debt' || newStage !== 'after2') return;
-    if (!order?.debt_checked || !order.debt_checked_by_name?.trim()) {
-        throw new ApiError(
-            'Vui lòng tick "Xác nhận đã kiểm nợ" và chọn Người thu tiền trước khi chuyển bước',
-            400,
-        );
-    }
-}
