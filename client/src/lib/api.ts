@@ -1007,8 +1007,17 @@ export const transactionsApi = {
     update: (id: string, data: any) =>
         api.put<ApiResponse<{ transaction: any }>>(`/transactions/${id}`, data),
 
-    delete: (id: string) =>
-        api.delete<ApiResponse<null>>(`/transactions/${id}`),
+    delete: (id: string, hard?: boolean) =>
+        api.delete<ApiResponse<null>>(`/transactions/${id}`, { params: hard ? { hard: 1 } : undefined }),
+
+    bulkDelete: (ids: string[], hard?: boolean) =>
+        api.post<ApiResponse<{ deleted: number; skipped?: number }>>('/transactions/bulk-delete', { ids, hard: !!hard }),
+
+    getEditLogs: (params?: { type?: 'income' | 'expense'; limit?: number }) =>
+        api.get<ApiResponse<{ logs: any[] }>>('/transactions/edit-logs', { params }),
+
+    getEditLogsById: (id: string) =>
+        api.get<ApiResponse<{ logs: any[] }>>(`/transactions/${id}/edit-logs`),
 };
 
 export const productChatsApi = {

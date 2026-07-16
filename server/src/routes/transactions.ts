@@ -1,10 +1,42 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../middleware/errorHandler.js';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth.js';
+import { authenticate, AuthenticatedRequest, authorize } from '../middleware/auth.js';
 import { notifyFinanceEvent } from '../utils/financeNotifications.js';
 
 const router = Router();
+
+const EDITABLE_FIELDS = ['category', 'amount', 'payment_method', 'notes', 'image_url', 'date'] as const;
+const FIELD_LABELS: Record<string, string> = {
+    category: 'Loại',
+    amount: 'Số tiền',
+    payment_method: 'Phương thức',
+    notes: 'Ghi chú',
+    image_url: 'Ảnh chứng từ',
+    date: 'Ngày',
+};
+
+function buildTransactionChanges(
+    before: Record<string, any>,
+    after: Record<string, any>,
+): Array<{ field: string; label: string; old_value: any; new_value: any }> {
+    const changes: Array<{ field: string; label: string; old_value: any; new_value: any }> = [];
+    for (const field of EDITABLE_FIELDS) {
+        const oldVal = before[field] ?? null;
+        const newVal = after[field] ?? null;
+        const oldNorm = field === 'amount' ? Number(oldVal || 0) : (oldVal ?? '');
+        const newNorm = field === 'amount' ? Number(newVal || 0) : (newVal ?? '');
+        if (String(oldNorm) !== String(newNorm)) {
+            changes.push({
+                field,
+                label: FIELD_LABELS[field] || field,
+                old_value: oldVal,
+                new_value: newVal,
+            });
+        }
+    }
+    return changes;
+}
 
 // Generate transaction code
 async function generateTransactionCode(type: 'income' | 'expense'): Promise<string> {
@@ -205,6 +237,95 @@ router.get('/summary', authenticate, async (req: AuthenticatedRequest, res, next
                 pendingIncomeCount: pIncRes.count || 0,
                 pendingExpenseCount: pExpRes.count || 0,
             },
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Lịch sử sửa phiếu thu/chi (chỉ admin)
+router.get('/edit-logs', authenticate, authorize('admin'), async (req: AuthenticatedRequest, res, next) => {
+    try {
+        const { type, limit = 100 } = req.query;
+        let query = supabaseAdmin
+            .from('transaction_edit_logs')
+            .select(`
+                *,
+                edited_by_user:users!transaction_edit_logs_edited_by_fkey(id, name, avatar)
+            `)
+            .order('created_at', { ascending: false })
+            .limit(Math.min(Number(limit) || 100, 300));
+
+        if (type === 'income' || type === 'expense') {
+            query = query.eq('transaction_type', type);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+            console.error('Error fetching transaction edit logs:', error);
+            throw new ApiError('Lỗi khi lấy lịch sử sửa phiếu', 500);
+        }
+
+        res.json({
+            status: 'success',
+            data: { logs: data || [] },
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Xóa nhiều phiếu (hủy trạng thái; admin có thể hard-delete nếu ?hard=1)
+router.post('/bulk-delete', authenticate, async (req: AuthenticatedRequest, res, next) => {
+    try {
+        const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((id: unknown) => typeof id === 'string' && id) : [];
+        const hard = !!req.body?.hard && req.user!.role === 'admin';
+
+        if (ids.length === 0) {
+            throw new ApiError('Chọn ít nhất một phiếu để xóa', 400);
+        }
+
+        const { data: rows, error: fetchError } = await supabaseAdmin
+            .from('transactions')
+            .select('id, code, status, type')
+            .in('id', ids);
+
+        if (fetchError) {
+            throw new ApiError('Lỗi khi lấy danh sách phiếu', 500);
+        }
+
+        const found = rows || [];
+        if (found.length === 0) {
+            throw new ApiError('Không tìm thấy phiếu nào', 404);
+        }
+
+        if (hard) {
+            const { error } = await supabaseAdmin.from('transactions').delete().in('id', found.map((r) => r.id));
+            if (error) throw new ApiError('Lỗi khi xóa phiếu: ' + error.message, 500);
+            res.json({
+                status: 'success',
+                message: `Đã xóa ${found.length} phiếu`,
+                data: { deleted: found.length },
+            });
+            return;
+        }
+
+        const cancellable = found.filter((r) => r.status === 'pending' || r.status === 'approved');
+        if (cancellable.length === 0) {
+            throw new ApiError('Không có phiếu nào có thể xóa/hủy', 400);
+        }
+
+        const { error } = await supabaseAdmin
+            .from('transactions')
+            .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+            .in('id', cancellable.map((r) => r.id));
+
+        if (error) throw new ApiError('Lỗi khi hủy phiếu', 500);
+
+        res.json({
+            status: 'success',
+            message: `Đã hủy ${cancellable.length} phiếu`,
+            data: { deleted: cancellable.length, skipped: found.length - cancellable.length },
         });
     } catch (error) {
         next(error);
@@ -465,34 +586,54 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
         const { id } = req.params;
         const { category, amount, payment_method, notes, image_url, date } = req.body;
 
-        // Only allow updating pending transactions
         const { data: existing } = await supabaseAdmin
             .from('transactions')
-            .select('status')
+            .select('id, code, type, status, category, amount, payment_method, notes, image_url, date')
             .eq('id', id)
             .single();
 
-        if (existing?.status !== 'pending') {
+        if (!existing) {
+            throw new ApiError('Không tìm thấy giao dịch', 404);
+        }
+
+        // Admin được sửa mọi trạng thái; role khác chỉ sửa phiếu chờ duyệt
+        if (existing.status !== 'pending' && req.user!.role !== 'admin') {
             throw new ApiError('Chỉ có thể sửa phiếu đang chờ duyệt', 400);
         }
 
+        const updatePayload: Record<string, any> = {
+            updated_at: new Date().toISOString(),
+        };
+        if (category !== undefined) updatePayload.category = category;
+        if (amount !== undefined) updatePayload.amount = amount;
+        if (payment_method !== undefined) updatePayload.payment_method = payment_method;
+        if (notes !== undefined) updatePayload.notes = notes;
+        if (image_url !== undefined) updatePayload.image_url = image_url;
+        if (date !== undefined) updatePayload.date = date;
+
         const { data: transaction, error } = await supabaseAdmin
             .from('transactions')
-            .update({
-                category,
-                amount,
-                payment_method,
-                notes,
-                image_url,
-                date,
-                updated_at: new Date().toISOString(),
-            })
+            .update(updatePayload)
             .eq('id', id)
             .select()
             .single();
 
         if (error) {
             throw new ApiError('Lỗi khi cập nhật giao dịch', 500);
+        }
+
+        const changes = buildTransactionChanges(existing, transaction || {});
+        if (changes.length > 0) {
+            const { error: logError } = await supabaseAdmin.from('transaction_edit_logs').insert({
+                transaction_id: id,
+                transaction_code: existing.code,
+                transaction_type: existing.type,
+                edited_by: req.user!.id,
+                changes,
+            });
+            if (logError) {
+                console.error('Error writing transaction edit log:', logError);
+            }
         }
 
         res.json({
@@ -504,26 +645,66 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
     }
 });
 
+// Lịch sử sửa 1 phiếu (admin)
+router.get('/:id/edit-logs', authenticate, authorize('admin'), async (req: AuthenticatedRequest, res, next) => {
+    try {
+        const { id } = req.params;
+        const { data, error } = await supabaseAdmin
+            .from('transaction_edit_logs')
+            .select(`
+                *,
+                edited_by_user:users!transaction_edit_logs_edited_by_fkey(id, name, avatar)
+            `)
+            .eq('transaction_id', id)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            throw new ApiError('Lỗi khi lấy lịch sử sửa phiếu', 500);
+        }
+
+        res.json({
+            status: 'success',
+            data: { logs: data || [] },
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
 // Delete transaction
 router.delete('/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { id } = req.params;
+        const hard = String(req.query.hard || '') === '1' && req.user!.role === 'admin';
 
-        // Only allow deleting pending transactions
         const { data: existing } = await supabaseAdmin
             .from('transactions')
             .select('status')
             .eq('id', id)
             .single();
 
-        if (existing?.status !== 'pending') {
+        if (!existing) {
+            throw new ApiError('Không tìm thấy phiếu', 404);
+        }
+
+        if (hard) {
+            const { error } = await supabaseAdmin.from('transactions').delete().eq('id', id);
+            if (error) throw new ApiError('Lỗi khi xóa giao dịch', 500);
+            res.json({ status: 'success', message: 'Đã xóa phiếu' });
+            return;
+        }
+
+        if (existing.status === 'cancelled') {
+            throw new ApiError('Phiếu đã bị hủy', 400);
+        }
+
+        if (existing.status !== 'pending' && req.user!.role !== 'admin') {
             throw new ApiError('Chỉ có thể xóa phiếu đang chờ duyệt', 400);
         }
 
-        // Instead of deleting, we update the status to cancelled as requested
         const { error } = await supabaseAdmin
             .from('transactions')
-            .update({ 
+            .update({
                 status: 'cancelled',
                 updated_at: new Date().toISOString()
             })

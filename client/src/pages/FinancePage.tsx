@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Edit, Trash2, Check, X, Upload, FileText, Loader2, RefreshCw, Eye, ExternalLink, Image as ImageIcon, Filter, ChevronDown, ChevronRight, Printer, MoreHorizontal, Download, Calendar as CalendarIcon } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, Check, X, Upload, FileText, Loader2, RefreshCw, Eye, ExternalLink, Image as ImageIcon, Filter, ChevronDown, ChevronRight, Printer, MoreHorizontal, Download, Calendar as CalendarIcon, History } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,8 +12,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Checkbox } from '@/components/ui/checkbox';
 import { transactionsApi, ordersApi, requestsApi, invoicesApi } from '@/lib/api';
-import { formatCurrency, formatDate, cn, normalizeSearchText } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, cn, normalizeSearchText } from '@/lib/utils';
 import type { User } from '@/types';
 import { InvoiceDetailDialog } from '@/components/invoices/InvoiceDetailDialog';
 import { MobileFinanceList } from '@/components/finance';
@@ -554,8 +555,14 @@ function TransactionTable({
     transactions,
     canEdit,
     canDelete,
+    canViewHistory,
+    selectedIds,
+    onToggleSelect,
+    onToggleSelectAll,
     onDelete,
+    onBulkDelete,
     onView,
+    onViewHistory,
     onCustomerClick,
     onInvoiceClick,
     loading,
@@ -563,21 +570,44 @@ function TransactionTable({
     transactions: Transaction[];
     canEdit: boolean;
     canDelete: boolean;
+    canViewHistory: boolean;
+    selectedIds: string[];
+    onToggleSelect: (id: string) => void;
+    onToggleSelectAll: () => void;
     onDelete: (id: string) => void;
+    onBulkDelete: () => void;
     onView: (trans: Transaction) => void;
+    onViewHistory: (trans?: Transaction | null) => void;
     onCustomerClick: (id: string) => void;
     onInvoiceClick: (code: string) => void;
     loading: boolean;
 }) {
     const [expandedRow, setExpandedRow] = useState<string | null>(null);
+    const allSelected = transactions.length > 0 && selectedIds.length === transactions.length;
+    const someSelected = selectedIds.length > 0 && selectedIds.length < transactions.length;
 
     if (transactions.length === 0) {
         return (
-            <div className="py-24 text-center text-muted-foreground flex flex-col items-center justify-center bg-white rounded-lg border-2 border-dashed">
-                <FileText className="h-16 w-16 mb-4 opacity-20" />
-                <p className="text-lg font-medium">Chưa có giao dịch nào phù hợp</p>
-                <p className="text-sm opacity-60">Hãy thử đổi bộ lọc hoặc thêm phiếu mới</p>
-            </div>
+            <>
+                {canViewHistory && (
+                    <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b bg-slate-50/80">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 gap-2 font-bold border-violet-200 text-violet-700 hover:bg-violet-50"
+                            onClick={() => onViewHistory(null)}
+                        >
+                            <History className="h-4 w-4" />
+                            Xem lịch sử sửa
+                        </Button>
+                    </div>
+                )}
+                <div className="py-24 text-center text-muted-foreground flex flex-col items-center justify-center bg-white rounded-lg border-2 border-dashed">
+                    <FileText className="h-16 w-16 mb-4 opacity-20" />
+                    <p className="text-lg font-medium">Chưa có giao dịch nào phù hợp</p>
+                    <p className="text-sm opacity-60">Hãy thử đổi bộ lọc hoặc thêm phiếu mới</p>
+                </div>
+            </>
         );
     }
 
@@ -605,16 +635,57 @@ function TransactionTable({
 
     return (
         <>
+            {(canDelete || canViewHistory) && (
+                <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b bg-slate-50/80">
+                    {canViewHistory && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 gap-2 font-bold border-violet-200 text-violet-700 hover:bg-violet-50"
+                            onClick={() => onViewHistory(null)}
+                        >
+                            <History className="h-4 w-4" />
+                            Xem lịch sử sửa
+                        </Button>
+                    )}
+                    {canDelete && (
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            className="h-9 gap-2 font-bold"
+                            disabled={selectedIds.length === 0 || loading}
+                            onClick={onBulkDelete}
+                        >
+                            <Trash2 className="h-4 w-4" />
+                            {selectedIds.length > 0
+                                ? `Xóa đã chọn (${selectedIds.length})`
+                                : 'Xóa đã chọn'}
+                        </Button>
+                    )}
+                    {canDelete && selectedIds.length === 0 && (
+                        <span className="text-xs text-muted-foreground">
+                            Tick checkbox để chọn nhiều phiếu rồi xóa
+                        </span>
+                    )}
+                </div>
+            )}
+
             {/* Mobile view */}
             <div className="lg:hidden">
                 <MobileFinanceList
                     vouchers={mobileVouchers}
                     loading={loading}
+                    selectedIds={selectedIds}
+                    onToggleSelect={canDelete ? onToggleSelect : undefined}
                     onView={(voucher) => {
                         const trans = transactions.find(t => t.id === voucher.id);
                         if (trans) onView(trans);
                     }}
                     onDelete={canDelete ? onDelete : undefined}
+                    onViewHistory={canViewHistory ? (id) => {
+                        const trans = transactions.find(t => t.id === id);
+                        onViewHistory(trans || null);
+                    } : undefined}
                 />
             </div>
 
@@ -623,6 +694,15 @@ function TransactionTable({
                 <table className="w-full border-collapse">
                     <thead className="bg-[#f9fafb] border-b">
                         <tr>
+                            <th className="p-3 w-10">
+                                {canDelete && (
+                                    <Checkbox
+                                        checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                                        onCheckedChange={() => onToggleSelectAll()}
+                                        aria-label="Chọn tất cả"
+                                    />
+                                )}
+                            </th>
                             <th className="p-3 text-left text-[13px] font-bold text-muted-foreground uppercase tracking-wider w-[120px]">Mã phiếu</th>
                             <th className="p-3 text-left text-[13px] font-bold text-muted-foreground uppercase tracking-wider w-[140px]">Thời gian</th>
                             <th className="p-3 text-left text-[13px] font-bold text-muted-foreground uppercase tracking-wider">Người tạo</th>
@@ -633,11 +713,15 @@ function TransactionTable({
                             <th className="p-3 text-right text-[13px] font-bold text-muted-foreground uppercase tracking-wider">Số tiền</th>
                             <th className="p-3 text-left text-[13px] font-bold text-muted-foreground uppercase tracking-wider">Ghi chú</th>
                             <th className="p-3 text-left text-[13px] font-bold text-muted-foreground uppercase tracking-wider">Trạng thái</th>
+                            {(canDelete || canViewHistory) && (
+                                <th className="p-3 text-right text-[13px] font-bold text-muted-foreground uppercase tracking-wider w-[100px]">Thao tác</th>
+                            )}
                         </tr>
                     </thead>
                     <tbody>
                         {transactions.map((trans) => {
                             const isExpanded = expandedRow === trans.id;
+                            const isSelected = selectedIds.includes(trans.id);
 
                             // Extract payer info from linked order → customer data
                             const orderData: any = Array.isArray(trans.orders) ? trans.orders[0] : (trans.orders || trans.order || (trans as any).order);
@@ -652,13 +736,25 @@ function TransactionTable({
                                     <tr
                                         className={cn(
                                             "border-b hover:bg-[#f0f7ff] transition-colors cursor-pointer text-sm group",
-                                            isExpanded && "bg-[#f0f7ff]"
+                                            isExpanded && "bg-[#f0f7ff]",
+                                            isSelected && "bg-blue-50/70"
                                         )}
                                         onClick={() => toggleRow(trans.id)}
                                     >
-                                        <td className="p-3 font-bold text-primary flex items-center gap-2">
+                                        <td className="p-3" onClick={(e) => e.stopPropagation()}>
+                                            {canDelete && (
+                                                <Checkbox
+                                                    checked={isSelected}
+                                                    onCheckedChange={() => onToggleSelect(trans.id)}
+                                                    aria-label={`Chọn ${trans.code}`}
+                                                />
+                                            )}
+                                        </td>
+                                        <td className="p-3 font-bold text-primary">
+                                            <span className="inline-flex items-center gap-2">
                                             {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                                             {trans.code}
+                                            </span>
                                         </td>
                                         <td className="p-3 whitespace-nowrap">{formatDate(trans.date)}</td>
                                         <td className="p-3 text-muted-foreground">{trans.created_by_user?.name || 'N/A'}</td>
@@ -703,10 +799,39 @@ function TransactionTable({
                                                 {statusLabels[trans.status].label}
                                             </Badge>
                                         </td>
+                                        {(canDelete || canViewHistory) && (
+                                            <td className="p-3" onClick={(e) => e.stopPropagation()}>
+                                                <div className="flex items-center justify-end gap-1">
+                                                    {canViewHistory && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-8 w-8 text-violet-600 hover:bg-violet-50"
+                                                            title="Lịch sử sửa"
+                                                            onClick={() => onViewHistory(trans)}
+                                                        >
+                                                            <History className="h-4 w-4" />
+                                                        </Button>
+                                                    )}
+                                                    {canDelete && (
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-8 w-8 text-rose-600 hover:bg-rose-50"
+                                                            title="Xóa phiếu"
+                                                            disabled={loading}
+                                                            onClick={() => onDelete(trans.id)}
+                                                        >
+                                                            <Trash2 className="h-4 w-4" />
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        )}
                                     </tr>
                                     {isExpanded && (
                                         <tr className="bg-[#f8faff] border-b animate-in fade-in slide-in-from-top-1 duration-200">
-                                            <td colSpan={10} className="p-6">
+                                            <td colSpan={(canDelete || canViewHistory) ? 12 : 11} className="p-6">
                                                 <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
                                                     <div className="space-y-4">
                                                         <div>
@@ -787,11 +912,22 @@ function TransactionTable({
                                                     </div>
 
                                                     <div className="flex flex-col justify-end items-end gap-3 pb-2">
-                                                        <div className="flex gap-2">
+                                                        <div className="flex flex-wrap justify-end gap-2">
                                                             <Button variant="outline" size="sm" className="h-9 px-4 gap-2 font-bold shadow-sm">
                                                                 <Printer className="h-4 w-4" />
                                                                 In
                                                             </Button>
+                                                            {canViewHistory && (
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-9 px-4 gap-2 font-bold text-violet-700 hover:bg-violet-50 border-violet-200 shadow-sm"
+                                                                    onClick={(e) => { e.stopPropagation(); onViewHistory(trans); }}
+                                                                >
+                                                                    <History className="h-4 w-4" />
+                                                                    Lịch sử sửa
+                                                                </Button>
+                                                            )}
                                                             {(canEdit || canDelete) && (
                                                                 <>
                                                                     {canEdit && (
@@ -808,7 +944,7 @@ function TransactionTable({
                                                                             onClick={(e) => { e.stopPropagation(); onDelete(trans.id); }}
                                                                         >
                                                                             <Trash2 className="h-4 w-4" />
-                                                                            Hủy bỏ
+                                                                            Xóa
                                                                         </Button>
                                                                     )}
                                                                 </>
@@ -879,6 +1015,7 @@ export function FinancePage({ currentUser, initialTab = 'income', onTabChange }:
         const typedTab = tab as 'income' | 'expense';
         setActiveTab(typedTab);
         setCategoryFilter('all'); // Reset category when switching tabs to avoid showing 0 counts for mismatched categories
+        setSelectedIds([]);
         if (onTabChange) {
             onTabChange(typedTab);
         }
@@ -898,6 +1035,20 @@ export function FinancePage({ currentUser, initialTab = 'income', onTabChange }:
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(false);
     const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const [showEditHistory, setShowEditHistory] = useState(false);
+    const [editHistoryLogs, setEditHistoryLogs] = useState<any[]>([]);
+    const [editHistoryLoading, setEditHistoryLoading] = useState(false);
+    const [editHistoryTitle, setEditHistoryTitle] = useState('Lịch sử sửa');
+    const isAdmin = currentUser.role === 'admin';
+
+    const handleToggleSelect = (id: string) => {
+        setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    };
+
+    const handleToggleSelectAll = (ids: string[]) => {
+        setSelectedIds((prev) => (prev.length === ids.length && ids.every((id) => prev.includes(id)) ? [] : ids));
+    };
 
     const handleInvoiceStatusChange = async (
         invoiceId: string,
@@ -1094,11 +1245,66 @@ export function FinancePage({ currentUser, initialTab = 'income', onTabChange }:
         try {
             await transactionsApi.updateStatus(id, 'cancelled');
             toast.success('Đã hủy phiếu thành công');
+            setSelectedIds((prev) => prev.filter((x) => x !== id));
             fetchTransactions();
         } catch (error: any) {
             toast.error(error.response?.data?.message || 'Lỗi khi hủy phiếu');
         } finally {
             setActionLoading(false);
+        }
+    };
+
+    const handleBulkDelete = async () => {
+        if (selectedIds.length === 0) return;
+        if (!confirm(`Bạn có chắc muốn hủy ${selectedIds.length} phiếu đã chọn?`)) return;
+
+        setActionLoading(true);
+        try {
+            try {
+                const res = await transactionsApi.bulkDelete(selectedIds);
+                toast.success(res.data.message || `Đã hủy ${selectedIds.length} phiếu`);
+            } catch (bulkErr: any) {
+                // Fallback nếu server chưa có route bulk-delete
+                if (bulkErr.response?.status === 404) {
+                    await Promise.all(selectedIds.map((id) => transactionsApi.updateStatus(id, 'cancelled')));
+                    toast.success(`Đã hủy ${selectedIds.length} phiếu`);
+                } else {
+                    throw bulkErr;
+                }
+            }
+            setSelectedIds([]);
+            fetchTransactions();
+        } catch (error: any) {
+            toast.error(error.response?.data?.message || 'Lỗi khi xóa phiếu');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const formatHistoryValue = (field: string, value: any) => {
+        if (value == null || value === '') return '—';
+        if (field === 'amount') return formatCurrency(Number(value) || 0);
+        if (field === 'payment_method') return paymentMethodLabels[value as keyof typeof paymentMethodLabels] || String(value);
+        if (field === 'date') return formatDate(String(value));
+        return String(value);
+    };
+
+    const handleViewHistory = async (trans?: Transaction | null) => {
+        if (!isAdmin) return;
+        setShowEditHistory(true);
+        setEditHistoryLoading(true);
+        setEditHistoryLogs([]);
+        setEditHistoryTitle(trans?.code ? `Lịch sử sửa — ${trans.code}` : `Lịch sử sửa phiếu ${activeTab === 'income' ? 'thu' : 'chi'}`);
+        try {
+            const res = trans?.id
+                ? await transactionsApi.getEditLogsById(trans.id)
+                : await transactionsApi.getEditLogs({ type: activeTab, limit: 100 });
+            setEditHistoryLogs(res.data.data?.logs || []);
+        } catch (error: any) {
+            toast.error(error.response?.data?.message || 'Lỗi khi tải lịch sử sửa');
+            setShowEditHistory(false);
+        } finally {
+            setEditHistoryLoading(false);
         }
     };
 
@@ -1425,9 +1631,15 @@ export function FinancePage({ currentUser, initialTab = 'income', onTabChange }:
                                     <TransactionTable
                                         transactions={currentTransactions}
                                         canEdit={incomeActions.canEdit}
-                                        canDelete={incomeActions.canDelete}
+                                        canDelete={incomeActions.canDelete || isAdmin}
+                                        canViewHistory={isAdmin}
+                                        selectedIds={selectedIds}
+                                        onToggleSelect={handleToggleSelect}
+                                        onToggleSelectAll={() => handleToggleSelectAll(currentTransactions.map((t) => t.id))}
                                         onDelete={handleDelete}
+                                        onBulkDelete={handleBulkDelete}
                                         onView={setSelectedTransaction}
+                                        onViewHistory={handleViewHistory}
                                         onCustomerClick={handleCustomerClick}
                                         onInvoiceClick={handleOpenInvoiceDetail}
                                         loading={actionLoading}
@@ -1445,9 +1657,15 @@ export function FinancePage({ currentUser, initialTab = 'income', onTabChange }:
                                     <TransactionTable
                                         transactions={currentTransactions}
                                         canEdit={expenseActions.canEdit}
-                                        canDelete={expenseActions.canDelete}
+                                        canDelete={expenseActions.canDelete || isAdmin}
+                                        canViewHistory={isAdmin}
+                                        selectedIds={selectedIds}
+                                        onToggleSelect={handleToggleSelect}
+                                        onToggleSelectAll={() => handleToggleSelectAll(currentTransactions.map((t) => t.id))}
                                         onDelete={handleDelete}
+                                        onBulkDelete={handleBulkDelete}
                                         onView={setSelectedTransaction}
+                                        onViewHistory={handleViewHistory}
                                         onCustomerClick={handleCustomerClick}
                                         onInvoiceClick={handleOpenInvoiceDetail}
                                         loading={actionLoading}
@@ -1481,6 +1699,73 @@ export function FinancePage({ currentUser, initialTab = 'income', onTabChange }:
                 onPayButtonClick={() => {}}
                 canEdit={incomeActions.canEdit}
             />
+
+            {/* Edit history dialog (admin) */}
+            <Dialog open={showEditHistory} onOpenChange={setShowEditHistory}>
+                <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <History className="h-5 w-5 text-violet-600" />
+                            {editHistoryTitle}
+                        </DialogTitle>
+                        <DialogDescription>
+                            Chỉ admin mới xem được lịch sử chỉnh sửa phiếu thu/chi.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="flex-1 overflow-y-auto min-h-0 pr-1">
+                        {editHistoryLoading ? (
+                            <div className="py-12 flex flex-col items-center justify-center gap-3">
+                                <Loader2 className="h-8 w-8 animate-spin text-violet-600" />
+                                <p className="text-sm text-muted-foreground">Đang tải lịch sử...</p>
+                            </div>
+                        ) : editHistoryLogs.length === 0 ? (
+                            <div className="py-12 text-center text-muted-foreground">
+                                <History className="h-12 w-12 mx-auto mb-3 opacity-20" />
+                                <p className="font-medium">Chưa có lịch sử sửa</p>
+                                <p className="text-sm opacity-70 mt-1">Lịch sử sẽ xuất hiện khi có chỉnh sửa phiếu.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                {editHistoryLogs.map((log) => (
+                                    <div key={log.id} className="rounded-lg border bg-slate-50/80 p-3 space-y-2">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                <Badge variant="outline" className="font-mono shrink-0">
+                                                    {log.transaction_code || '—'}
+                                                </Badge>
+                                                <span className="text-sm font-medium truncate">
+                                                    {log.edited_by_user?.name || 'Không rõ'}
+                                                </span>
+                                            </div>
+                                            <span className="text-xs text-muted-foreground shrink-0">
+                                                {formatDateTime(log.created_at)}
+                                            </span>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            {(Array.isArray(log.changes) ? log.changes : []).map((change: any, idx: number) => (
+                                                <div key={idx} className="text-sm grid grid-cols-[100px_1fr] gap-2">
+                                                    <span className="font-semibold text-slate-600">{change.label || change.field}</span>
+                                                    <span className="text-slate-700">
+                                                        <span className="text-rose-600 line-through mr-2">
+                                                            {formatHistoryValue(change.field, change.old_value)}
+                                                        </span>
+                                                        <span className="text-emerald-700 font-medium">
+                                                            {formatHistoryValue(change.field, change.new_value)}
+                                                        </span>
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setShowEditHistory(false)}>Đóng</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* Global Loader for Invoice Fetching */}
             {loadingInvoice && (
