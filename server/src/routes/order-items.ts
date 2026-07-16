@@ -884,7 +884,8 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
                 status: 'completed',
                 completed_at: new Date().toISOString(),
                 current_phase: 'after_sale',
-                phase_stage: 'after1'
+                phase_stage: 'after1',
+                after_sale_stage: 'after1',
             })
             .eq('id', id)
             .select('*, order:orders(id, order_code, sales_id, customer:customers(name))')
@@ -902,7 +903,8 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
                     completed_at: new Date().toISOString(),
                     notes: notes || null,
                     current_phase: 'after_sale',
-                    phase_stage: 'after1'
+                    phase_stage: 'after1',
+                    after_sale_stage: 'after1',
                 })
                 .eq('id', id)
                 .select('*, order_product:order_products(order:orders(id, order_code, sales_id, customer:customers(name)))')
@@ -924,7 +926,8 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
                     status: 'completed',
                     completed_at: new Date().toISOString(),
                     current_phase: 'after_sale',
-                    phase_stage: 'after1'
+                    phase_stage: 'after1',
+                    after_sale_stage: 'after1',
                 })
                 .eq('id', id)
                 .select('*, order:orders(id, order_code, sales_id, customer:customers(name))')

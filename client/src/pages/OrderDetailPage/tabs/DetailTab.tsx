@@ -187,9 +187,9 @@ export function DetailTab({
                 <div className={cn('space-y-4 md:space-y-6', !isPhoneView && 'lg:col-span-2')}>
                     {/* Customer Info */}
                     <Card>
-                        <CardHeader className="pb-2 md:pb-3">
-                            <CardTitle className="text-sm md:text-base flex items-center gap-2">
-                                <UserIcon className="h-4 w-4 text-primary" />
+                        <CardHeader className="pb-3 md:pb-4">
+                            <CardTitle className="text-base md:text-lg font-bold flex items-center gap-2">
+                                <UserIcon className="h-5 w-5 text-primary" />
                                 Thông tin khách hàng
                             </CardTitle>
                         </CardHeader>
@@ -201,8 +201,8 @@ export function DetailTab({
                                     </AvatarFallback>
                                 </Avatar>
                                 <div className="flex-1">
-                                    <p className="font-semibold text-lg">{order.customer?.name || 'N/A'}</p>
-                                    <p className="text-muted-foreground">
+                                    <p className="font-bold text-xl">{order.customer?.name || 'N/A'}</p>
+                                    <p className="text-muted-foreground text-base">
                                         <CustomerPhone phone={order.customer?.phone} />
                                     </p>
                                 </div>
@@ -241,32 +241,32 @@ export function DetailTab({
                         if (groups.length === 0) return null;
                         return (
                             <Card>
-                                <CardHeader className="pb-3">
+                                <CardHeader className="pb-4">
                                     <div className="flex items-center justify-between">
-                                        <CardTitle className="text-base flex items-center gap-2">
-                                            <Package className="h-4 w-4 text-primary" />
+                                        <CardTitle className="text-lg font-bold flex items-center gap-2">
+                                            <Package className="h-5 w-5 text-primary" />
                                             Chi tiết sản phẩm/dịch vụ
                                         </CardTitle>
-                                        <span className="text-xs font-medium text-muted-foreground">
+                                        <span className="text-sm font-semibold text-muted-foreground">
                                             {order.items!.length} mục
                                         </span>
                                     </div>
                                 </CardHeader>
                                 <CardContent className="p-0">
                                     {isPhoneView && (
-                                        <div className="space-y-2 p-3 md:hidden">
+                                        <div className="space-y-3 p-4 md:hidden">
                                             {order.items!.map((item) => (
                                                 <div
                                                     key={item.id}
-                                                    className="rounded-lg border bg-muted/20 p-2.5"
+                                                    className="rounded-lg border bg-muted/20 p-3.5"
                                                 >
                                                     <div className="flex items-start justify-between gap-2">
-                                                        <p className="text-sm font-semibold leading-tight">{item.item_name}</p>
-                                                        <Badge className={cn('shrink-0 text-[10px]', getItemTypeColor(item.item_type))}>
+                                                        <p className="text-base font-bold leading-tight">{item.item_name}</p>
+                                                        <Badge className={cn('shrink-0 text-xs', getItemTypeColor(item.item_type))}>
                                                             {getItemTypeLabel(item.item_type)}
                                                         </Badge>
                                                     </div>
-                                                    <div className="mt-1.5 flex items-center justify-between text-xs text-muted-foreground">
+                                                    <div className="mt-2 flex items-center justify-between text-sm text-muted-foreground">
                                                         <span>SL: {item.quantity}</span>
                                                         <span className="font-semibold text-foreground">
                                                             {formatCurrency((item.total_price || 0) + (item.surcharge_amount || 0))}
@@ -275,14 +275,14 @@ export function DetailTab({
                                                     {(((item as any).due_at) || ((item as any).condition_before) || ((item as any).product_condition_before)) && (
                                                         <div className="mt-1.5 space-y-1">
                                                             {(item as any).due_at && (
-                                                                <div className="flex items-center gap-1 text-[11px] text-blue-700">
-                                                                    <Calendar className="h-3 w-3 shrink-0" />
+                                                                <div className="flex items-center gap-1 text-xs text-blue-700 font-medium">
+                                                                    <Calendar className="h-4 w-4 shrink-0" />
                                                                     <span>Hạn trả đồ: {formatDateTime((item as any).due_at)}</span>
                                                                 </div>
                                                             )}
                                                             {((item as any).condition_before || (item as any).product_condition_before) && (
-                                                                <div className="flex items-start gap-1 text-[11px] text-muted-foreground">
-                                                                    <FileText className="h-3 w-3 shrink-0 mt-0.5" />
+                                                                <div className="flex items-start gap-1 text-sm text-muted-foreground font-medium">
+                                                                    <FileText className="h-4 w-4 shrink-0 mt-0.5" />
                                                                     <span className="leading-tight">
                                                                         Tình trạng ban đầu: {(item as any).condition_before || (item as any).product_condition_before}
                                                                     </span>
@@ -295,17 +295,17 @@ export function DetailTab({
                                         </div>
                                     )}
                                     <div className="hidden overflow-x-auto md:block">
-                                        <table className="w-full text-[15px] table-fixed">
+                                        <table className="w-full text-sm table-fixed">
                                             <thead className="bg-muted/40">
                                                 <tr className="border-b">
-                                                    <th className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground w-[112px] min-w-[112px]">Ảnh</th>
-                                                    <th className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Loại</th>
-                                                    <th className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tên</th>
-                                                    <th className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground w-[150px]">Tình trạng</th>
-                                                    <th className="text-left px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground w-[150px]">Ghi chú</th>
-                                                    <th className="text-center px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground w-14">SL</th>
-                                                    <th className="text-right px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Đơn giá</th>
-                                                    <th className="text-right px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Thành tiền</th>
+                                                    <th className="text-left px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground w-[112px] min-w-[112px]">Ảnh</th>
+                                                    <th className="text-left px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground">Loại</th>
+                                                    <th className="text-left px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground">Tên</th>
+                                                    <th className="text-left px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground w-[150px]">Tình trạng</th>
+                                                    <th className="text-left px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground w-[150px]">Ghi chú</th>
+                                                    <th className="text-center px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground w-14">SL</th>
+                                                    <th className="text-right px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground">Đơn giá</th>
+                                                    <th className="text-right px-4 py-3 text-sm font-bold uppercase tracking-wider text-foreground">Thành tiền</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-border/70">
@@ -318,7 +318,7 @@ export function DetailTab({
                                                         return (
                                                             <React.Fragment key={gi}>
                                                                 <tr className="bg-primary/[0.04] hover:bg-primary/[0.07] border-l-[3px] border-l-primary transition-colors">
-                                                                    <td className="p-3 align-top w-[112px] min-w-[112px]">
+                                                                    <td className="p-4 align-top w-[112px] min-w-[112px]">
                                                                         {isCustomerProductItem(product) ? (
                                                                             <OrderItemPhotos
                                                                                 item={product}
@@ -340,19 +340,19 @@ export function DetailTab({
                                                                             </div>
                                                                         )}
                                                                     </td>
-                                                                    <td className="p-3 align-top">
+                                                                    <td className="p-4 align-top">
                                                                         <Badge className={getItemTypeColor('product')}>
                                                                             {getCustomerProductTypeLabel((product as any).product_type)}
                                                                         </Badge>
                                                                     </td>
-                                                                    <td className="p-3 font-semibold align-top">
+                                                                    <td className="p-4 font-semibold align-top">
                                                                         <div className="flex flex-wrap items-center gap-2">
-                                                                            <span className="text-base text-foreground">{product.item_name}</span>
+                                                                            <span className="text-base font-bold text-foreground">{product.item_name}</span>
                                                                         </div>
                                                                         {/* Per-product due date */}
                                                                         {(product as any).due_at && (
                                                                             <div className="mt-1">
-                                                                                <Badge variant="outline" className="text-[11px] py-0.5 px-1.5 h-auto bg-blue-50 text-blue-700 border-blue-200 gap-1">
+                                                                                <Badge variant="outline" className="text-xs py-1 px-2 h-auto bg-blue-50 text-blue-700 border-blue-200 gap-1 font-medium">
                                                                                     <Calendar className="h-2.5 w-2.5" />
                                                                                     Hạn trả: {formatDateTime((product as any).due_at)}
                                                                                 </Badge>
@@ -367,7 +367,7 @@ export function DetailTab({
                                                                                         : (s.value || 0);
                                                                                     return (
                                                                                         <div key={idx} className="flex items-center gap-1.5">
-                                                                                            <Badge variant="outline" className="text-[11px] py-0.5 px-2 h-auto bg-orange-50/80 text-orange-700 border-0 rounded-full font-medium">
+                                                                                            <Badge variant="outline" className="text-xs py-1 px-2 h-auto bg-orange-50/80 text-orange-700 border-0 rounded-full font-medium">
                                                                                                 +{s.label}{s.isPercent ? ` (${s.value}%)` : ''}: {formatCurrency(surchargeAmount)}
                                                                                             </Badge>
                                                                                         </div>
@@ -378,16 +378,16 @@ export function DetailTab({
                                                                         {(product as any).sales?.length > 0 && (
                                                                             <div className="flex flex-wrap gap-1 mt-1">
                                                                                 {(product as any).sales.map((s: any, idx: number) => (
-                                                                                    <Badge key={idx} variant="outline" className="text-[11px] py-0 h-5 px-2 bg-amber-50/80 text-amber-700 border-0 rounded-full font-medium">
+                                                                                    <Badge key={idx} variant="outline" className="text-xs py-1 h-6 px-2 bg-amber-50/80 text-amber-700 border-0 rounded-full font-medium">
                                                                                         Sale: {s.sale?.name || s.name} ({s.commission}%)
                                                                                     </Badge>
                                                                                 ))}
                                                                             </div>
                                                                         )}
                                                                     </td>
-                                                                    <td className="p-3 align-top">
+                                                                    <td className="p-4 align-top">
                                                                         {(product as any).product_condition_before && (
-                                                                            <div className="flex items-start gap-1.5 text-sm text-muted-foreground">
+                                                                            <div className="flex items-start gap-1.5 text-sm text-muted-foreground font-medium">
                                                                                 <FileText className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-600/70" />
                                                                                 <span className="whitespace-pre-wrap leading-relaxed">
                                                                                     {(product as any).product_condition_before}
@@ -395,15 +395,15 @@ export function DetailTab({
                                                                             </div>
                                                                         )}
                                                                     </td>
-                                                                    <td className="p-3 align-top">
+                                                                    <td className="p-4 align-top">
                                                                         {isCustomerProductItem(product) && renderItemNote(product)}
                                                                     </td>
-                                                                    <td className="p-3 text-center align-top tabular-nums font-medium">{product.quantity}</td>
-                                                                    <td className="p-3 text-right align-top text-xs italic text-muted-foreground/60">gộp dịch vụ</td>
-                                                                    <td className="p-3 text-right font-bold align-top">
-                                                                        <div className="text-primary tabular-nums text-base">{formatCurrency(groupTotal)}</div>
+                                                                    <td className="p-4 text-center align-top tabular-nums font-bold">{product.quantity}</td>
+                                                                    <td className="p-4 text-right align-top text-sm italic text-muted-foreground/70">gộp dịch vụ</td>
+                                                                    <td className="p-4 text-right font-bold align-top">
+                                                                        <div className="text-primary tabular-nums text-lg font-bold">{formatCurrency(groupTotal)}</div>
                                                                         {productSurcharge > 0 && (
-                                                                            <div className="text-[11px] text-orange-600 font-normal mt-0.5 tabular-nums">
+                                                                            <div className="text-xs text-orange-600 font-normal mt-0.5 tabular-nums">
                                                                                 (phụ phí: +{formatCurrency(productSurcharge)})
                                                                             </div>
                                                                         )}
@@ -411,7 +411,7 @@ export function DetailTab({
                                                                 </tr>
                                                                 {group.services.map((svc, si) => (
                                                                     <tr key={`${gi}-s-${si}`} className="hover:bg-muted/30 transition-colors">
-                                                                        <td className="py-2 pl-6 pr-3 w-[72px] border-l-2 border-border/60">
+                                                                        <td className="py-3 pl-8 pr-4 w-[72px] border-l-2 border-border/60">
                                                                             {(svc.service?.image || svc.product?.image || (svc as any).product?.image) ? (
                                                                                 <button
                                                                                     type="button"
@@ -426,13 +426,13 @@ export function DetailTab({
                                                                                 </div>
                                                                             )}
                                                                         </td>
-                                                                        <td className="py-2 pl-2 pr-3">
+                                                                        <td className="py-3 pl-4 pr-4">
                                                                             <Badge className={getItemTypeColor(svc.item_type)}>
                                                                                 {getItemTypeLabel(svc.item_type)}
                                                                             </Badge>
                                                                         </td>
-                                                                        <td className="py-2 pl-2 pr-3 text-foreground">
-                                                                            <div className="text-[15px]">{svc.item_name}</div>
+                                                                        <td className="py-3 pl-4 pr-4 text-foreground">
+                                                                            <div className="text-base font-semibold">{svc.item_name}</div>
                                                                             {svc.surcharges && svc.surcharges.length > 0 && (
                                                                                 <div className="flex flex-wrap gap-1 mt-1">
                                                                                     {svc.surcharges.map((s: any, idx: number) => (
@@ -458,7 +458,7 @@ export function DetailTab({
                                                                             {(svc as any).sales?.length > 0 && (
                                                                                 <div className="flex flex-wrap gap-1 mt-0.5">
                                                                                     {(svc as any).sales.map((s: any, idx: number) => (
-                                                                                        <Badge key={idx} variant="outline" className="text-[11px] py-0 h-5 px-2 bg-amber-50/80 text-amber-700 border-0 rounded-full font-medium">
+                                                                                        <Badge key={idx} variant="outline" className="text-xs py-1 h-6 px-2 bg-amber-50/80 text-amber-700 border-0 rounded-full font-medium">
                                                                                             Sale: {s.sale?.name || s.name} ({s.commission}%)
                                                                                         </Badge>
                                                                                     ))}
@@ -526,7 +526,7 @@ export function DetailTab({
                                                                 {(item as any).sales?.length > 0 && (
                                                                     <div className="flex flex-wrap gap-1 mt-0.5">
                                                                         {(item as any).sales.map((s: any, idx: number) => (
-                                                                            <Badge key={idx} variant="outline" className="text-[11px] py-0 h-5 px-2 bg-amber-50/80 text-amber-700 border-0 rounded-full font-medium">
+                                                                            <Badge key={idx} variant="outline" className="text-xs py-1 h-6 px-2 bg-amber-50/80 text-amber-700 border-0 rounded-full font-medium">
                                                                                 Sale: {s.sale?.name || s.name} ({s.commission}%)
                                                                             </Badge>
                                                                         ))}

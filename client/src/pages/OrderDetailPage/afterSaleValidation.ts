@@ -1,7 +1,7 @@
 import type { OrderItem } from '@/hooks/useOrders';
 import { toast } from 'sonner';
 
-function parsePhotoList(value: unknown): string[] {
+export function parsePhotoList(value: unknown): string[] {
     if (Array.isArray(value)) {
         return value.filter((url): url is string => typeof url === 'string' && url.length > 0);
     }
@@ -23,6 +23,24 @@ export type After1FormOverride = {
     completion_photos?: string[];
 };
 
+/** Giữ ảnh/người chụp đã lưu ở bước trước nếu form hiện tại chưa điền lại. */
+export function resolveAfter1CompletionData(
+    product: Pick<OrderItem, 'completion_photos' | 'aftersale_receiver_name'> | null | undefined,
+    formOverride?: After1FormOverride,
+): { photos: string[]; receiver: string } {
+    const formPhotos = formOverride?.completion_photos;
+    const photos =
+        formPhotos && formPhotos.length > 0
+            ? formPhotos
+            : parsePhotoList(product?.completion_photos);
+    const receiver = (
+        formOverride?.aftersale_receiver_name?.trim()
+        || (product as any)?.aftersale_receiver_name?.trim()
+        || ''
+    );
+    return { photos, receiver };
+}
+
 /**
  * Ảnh hoàn thiện → Kiểm nợ
  * Mỗi sản phẩm trong cùng đơn phải điền độc lập — nhận dữ liệu từ chính sản phẩm (product/item), không dùng chung cấp đơn.
@@ -32,8 +50,7 @@ export function getAfter1ToDebtValidationErrors(
     formOverride?: After1FormOverride,
 ): string[] {
     const errors: string[] = [];
-    const receiver = (formOverride?.aftersale_receiver_name ?? (product as any)?.aftersale_receiver_name ?? '').trim();
-    const photos = formOverride?.completion_photos ?? parsePhotoList(product?.completion_photos);
+    const { photos, receiver } = resolveAfter1CompletionData(product, formOverride);
 
     if (!receiver) {
         errors.push('Chọn "Người chụp After"');
@@ -52,13 +69,18 @@ export type After1DebtFormOverride = {
 
 /**
  * Kiểm nợ → Đóng gói & Giao hàng
- * Không bắt buộc tick kiểm nợ / người thu tiền — chỉ cần mở form (các field vẫn lưu được nếu điền).
+ * Bắt buộc tick "Xác nhận đã kiểm nợ" trước khi chuyển bước.
  */
 export function getAfter1DebtToAfter2ValidationErrors(
-    _product?: Pick<OrderItem, 'debt_checked' | 'debt_checked_by_name'> | null,
-    _formOverride?: After1DebtFormOverride,
+    product?: Pick<OrderItem, 'debt_checked' | 'debt_checked_by_name'> | null,
+    formOverride?: After1DebtFormOverride,
 ): string[] {
-    return [];
+    const errors: string[] = [];
+    const debtChecked = formOverride?.debt_checked ?? !!(product as any)?.debt_checked;
+    if (!debtChecked) {
+        errors.push('Tick "Xác nhận đã kiểm nợ"');
+    }
+    return errors;
 }
 
 export function showAfterSaleValidationToast(errors: string[]): void {

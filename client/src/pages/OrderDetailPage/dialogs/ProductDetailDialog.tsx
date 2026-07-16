@@ -11,7 +11,7 @@ import {
     ShoppingBag, Tag, FileText, Package, Truck, Wrench, Camera,
     User as UserIcon, MessageSquare, BookOpen,
     History, Save, Loader2, Heart, ShieldCheck, ClipboardList, Sparkles,
-    ThumbsUp, ThumbsDown, Calendar, XCircle, Maximize2, Clock, ChevronDown, Receipt
+    ThumbsUp, ThumbsDown, Calendar, XCircle, Maximize2, Clock, ChevronDown, Receipt, X
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { WorkflowLogDetailDialog } from '@/components/orders/workflow/WorkflowLogDetailDialog';
@@ -39,6 +39,7 @@ import {
 import {
     getAfter1DebtToAfter2ValidationErrors,
     getAfter1ToDebtValidationErrors,
+    resolveAfter1CompletionData,
     showAfterSaleValidationToast,
 } from '../afterSaleValidation';
 import { getWorkflowRequestLogDisplay, isWorkflowRequestLogAction } from '../workflowRequestLog';
@@ -616,7 +617,9 @@ export function ProductDetailDialog({
         if (roomId === 'after1') {
             return getAfter1ToDebtValidationErrors(item, {
                 aftersale_receiver_name: formData.aftersale_receiver_name ?? undefined,
-                completion_photos: Array.isArray(formData.completion_photos) ? formData.completion_photos : [],
+                completion_photos: Array.isArray(formData.completion_photos) && formData.completion_photos.length > 0
+                    ? formData.completion_photos
+                    : undefined,
             });
         }
         if (roomId === 'after1_debt') {
@@ -832,37 +835,41 @@ export function ProductDetailDialog({
     const handleSave = async () => {
         const itemForValidation = product || services[0];
 
-        if (isAftersale && onConfirmAndMove) {
-            if (roomId === 'after1') {
-                const errors = getAfter1ToDebtValidationErrors(itemForValidation, {
-                    aftersale_receiver_name: formData.aftersale_receiver_name ?? undefined,
-                    completion_photos: Array.isArray(formData.completion_photos)
-                        ? formData.completion_photos
-                        : [],
-                });
-                if (errors.length > 0) {
-                    showAfterSaleValidationToast(errors);
-                    return;
-                }
+        // Ảnh hoàn thiện → Kiểm nợ: luôn validate khi Lưu (kể cả mở từ click card)
+        if (isAftersale && roomId === 'after1') {
+            const errors = getAfter1ToDebtValidationErrors(itemForValidation, {
+                aftersale_receiver_name: formData.aftersale_receiver_name ?? undefined,
+                completion_photos: Array.isArray(formData.completion_photos) && formData.completion_photos.length > 0
+                    ? formData.completion_photos
+                    : undefined,
+            });
+            if (errors.length > 0) {
+                showAfterSaleValidationToast(errors);
+                return;
+            }
+        }
+
+        // Kiểm nợ → Đóng gói: bắt buộc tick "Xác nhận đã kiểm nợ"
+        if (isAftersale && roomId.startsWith('after1_debt')) {
+            const debtErrors = getAfter1DebtToAfter2ValidationErrors(itemForValidation, {
+                debt_checked: formData.debt_checked,
+                debt_checked_by_name: formData.debt_checked_by_name ?? undefined,
+            });
+            if (debtErrors.length > 0) {
+                showAfterSaleValidationToast(debtErrors);
+                return;
             }
         }
 
         // Validation: per-SP phiếu thu — bắt buộc ảnh bill khi số tiền > 0
         if (isAftersale && (roomId.startsWith('after1_debt') || roomId === 'after4')) {
             const receiptErrors: string[] = [];
-            const nameLookup = new Map<string, string>();
-            for (const item of [
-                ...(order?.customer_items || []),
-                ...(order?.sale_items || []),
-                ...(order?.items || []),
-            ] as any[]) {
-                if (item?.id) {
-                    nameLookup.set(item.id, item.name || item.item_name || item.id);
-                }
-            }
-            for (const [productId, receipt] of Object.entries(debtReceiptsByProduct)) {
-                if (Number(receipt.amount) > 0 && !(receipt.photos?.length > 0)) {
-                    receiptErrors.push(`Chụp ảnh bill cho phiếu thu "${nameLookup.get(productId) || productId}"`);
+            for (const detail of handoffSelectedDetails) {
+                const receipt = debtReceiptsByProduct[detail.id];
+                if (!receipt || Number(receipt.amount) <= 0) continue;
+                const photos = resolveReceiptPhotos(receipt, detail.id);
+                if (photos.length === 0) {
+                    receiptErrors.push(`Chụp ảnh bill cho phiếu thu "${detail.name}"`);
                 }
             }
             if (receiptErrors.length > 0) {
@@ -886,9 +893,45 @@ export function ProductDetailDialog({
             return;
         }
 
+        // Đóng gói → Feedback: validate đủ field + ảnh trước khi tự chuyển bước
+        if (isAftersale && roomId.startsWith('after2') && !onConfirmAndMove) {
+            const packPhotos = Array.isArray(formData.packaging_photos) ? formData.packaging_photos : [];
+            const isPickup = (formData.delivery_type || (order as any)?.delivery_type) === 'pickup';
+            const areFieldsOk = !!(
+                formData.delivery_creator_name
+                && formData.delivery_shipper_phone
+                && formData.delivery_received_at
+                && (isPickup ? formData.delivery_staff_name : formData.delivery_carrier)
+            );
+            const after2Errors: string[] = [];
+            if (!areFieldsOk) {
+                after2Errors.push(
+                    isPickup
+                        ? 'Nhập đầy đủ: NV Tạo đơn, SĐT Liên hệ, NV Giao đồ và Thời gian nhận đồ'
+                        : 'Nhập đầy đủ: NV Tạo đơn, SĐT ship, NV vận chuyển (đơn vị) và Thời gian khách nhận'
+                );
+            }
+            if (packPhotos.length === 0) {
+                after2Errors.push('Upload ít nhất một "Ảnh đóng gói/trả đồ"');
+            }
+            if (after2Errors.length > 0) {
+                showAfterSaleValidationToast(after2Errors);
+                return;
+            }
+        }
+
         setSaving(true);
         try {
             const itemId = product?.id || services[0]?.id;
+            const itemForSave = product || services[0];
+            const resolvedAfter1 = resolveAfter1CompletionData(itemForSave, {
+                aftersale_receiver_name: formData.aftersale_receiver_name ?? undefined,
+                completion_photos: Array.isArray(formData.completion_photos) && formData.completion_photos.length > 0
+                    ? formData.completion_photos
+                    : undefined,
+            });
+            const effectiveCompletionPhotos = resolvedAfter1.photos;
+            const effectiveAftersaleReceiver = resolvedAfter1.receiver || formData.aftersale_receiver_name;
             const isDebtConfirmFlow = isAftersale && roomId.startsWith('after1_debt');
             const isDebtConfirm = isDebtConfirmFlow && !onConfirmAndMove;
             const receiptCollectorNames = Object.values(debtReceiptsByProduct)
@@ -928,7 +971,8 @@ export function ProductDetailDialog({
                     : (itemId ? [itemId] : []);
 
                 if (isDebtConfirm && selectedIds.length > 0) {
-                    // Chuyển từng SP đã tick bàn giao → after2 khi xác nhận (không chuyển lúc tick — tránh 400)
+                    // Phiếu thu: tạo theo từng SP đã tick bàn giao.
+                    // Kanban: CHỈ chuyển bước đúng SP đang mở dialog — không kéo SP khác trong cùng HĐ.
                     for (const selectedId of selectedIds) {
                         const sourceItem = [
                             ...(order?.customer_items || []),
@@ -946,24 +990,62 @@ export function ProductDetailDialog({
                         const currentStage = sourceItem
                             ? (optimisticAfterSaleStages[selectedId] ?? resolveItemAfterSaleStage(sourceItem))
                             : 'after1_debt';
-                        // Cho phép after1 hoặc after1_debt → after2 kèm debt_checked (server đã nới rule này)
-                        const shouldMoveToAfter2 = currentStage === 'after1_debt' || currentStage === 'after1';
+                        const isOpenedProduct = selectedId === itemId;
+                        // Chỉ SP đang mở mới được chuyển Đóng gói; SP tick khác chỉ ghi nhận thu nợ
+                        const shouldMoveToAfter2 =
+                            isOpenedProduct
+                            && (currentStage === 'after1_debt' || currentStage === 'after1');
 
                         await onUpdateItemAfterSaleData(selectedId, isCustomer, {
                             debt_checked: true,
                             debt_checked_notes: notes,
                             debt_checked_by_name: collectorName || undefined,
                             ...(shouldMoveToAfter2 ? { stage: 'after2' } : {}),
-                            ...(selectedId === itemId ? {
-                                completion_photos: formData.completion_photos,
+                            ...(isOpenedProduct ? {
+                                completion_photos: effectiveCompletionPhotos,
                                 packaging_photos: formData.packaging_photos,
-                                aftersale_receiver_name: formData.aftersale_receiver_name,
+                                aftersale_receiver_name: effectiveAftersaleReceiver,
                             } : {}),
                         });
                     }
+
+                    // Nếu SP đang mở chưa nằm trong danh sách tick (vd. bill = 0) vẫn chuyển bước riêng nó
+                    if (itemId && !selectedIds.includes(itemId)) {
+                        const openedItem = [
+                            ...(order?.customer_items || []),
+                            ...(order?.sale_items || []),
+                            ...(order?.items || []),
+                        ].find((it: any) => it?.id === itemId) as any;
+                        const openedStage = openedItem
+                            ? (optimisticAfterSaleStages[itemId] ?? resolveItemAfterSaleStage(openedItem))
+                            : 'after1_debt';
+                        if (openedStage === 'after1_debt' || openedStage === 'after1') {
+                            await onUpdateItemAfterSaleData(itemId, !!product, {
+                                debt_checked: true,
+                                debt_checked_notes: (formData as any).debt_checked_notes,
+                                debt_checked_by_name: collectorName || undefined,
+                                stage: 'after2',
+                                completion_photos: effectiveCompletionPhotos,
+                                packaging_photos: formData.packaging_photos,
+                                aftersale_receiver_name: effectiveAftersaleReceiver,
+                            });
+                        }
+                    }
                 } else if (itemId) {
+                    // Lưu từ click card (không kéo): tự chuyển sang cột kanban kế tiếp
+                    const autoNextStage =
+                        isAftersale && !onConfirmAndMove
+                            ? (roomId === 'after1'
+                                ? 'after1_debt'
+                                : roomId.startsWith('after1_debt')
+                                    ? 'after2'
+                                    : roomId.startsWith('after2')
+                                        ? 'after3'
+                                        : undefined)
+                            : undefined;
+
                     await onUpdateItemAfterSaleData(itemId, !!product, {
-                        completion_photos: formData.completion_photos,
+                        completion_photos: effectiveCompletionPhotos,
                         packaging_photos: formData.packaging_photos,
                         shipping_photos: formData.packaging_photos, // mapping alias if needed
                         delivery_carrier: formData.delivery_carrier,
@@ -973,7 +1055,7 @@ export function ProductDetailDialog({
                         delivery_shipper_phone: formData.delivery_shipper_phone,
                         delivery_staff_name: formData.delivery_staff_name,
                         delivery_received_at: formData.delivery_received_at,
-                        aftersale_receiver_name: formData.aftersale_receiver_name,
+                        aftersale_receiver_name: effectiveAftersaleReceiver,
                         debt_checked: roomId.startsWith('after1_debt') ? true : formData.debt_checked,
                         debt_checked_notes: (formData as any).debt_checked_notes,
                         debt_checked_by_name: collectorName || formData.debt_checked_by_name,
@@ -981,6 +1063,7 @@ export function ProductDetailDialog({
                         ...(roomId.startsWith('after1_debt') && onConfirmAndMove
                             ? { stage: 'after2' }
                             : {}),
+                        ...(autoNextStage ? { stage: autoNextStage } : {}),
                     });
                 }
             }
@@ -1037,6 +1120,7 @@ export function ProductDetailDialog({
                         }
                         for (const [productId, receipt] of receiptEntries) {
                             const productLabel = nameLookup.get(productId);
+                            const paymentPhotos = resolveReceiptPhotos(receipt, productId);
                             await ordersApi.createPayment(order.id, {
                                 content: 'Thanh toán đơn hàng',
                                 amount: Number(receipt.amount),
@@ -1048,7 +1132,7 @@ export function ProductDetailDialog({
                                     receipt.notes?.trim() || null,
                                 ].filter(Boolean).join(' — '),
                                 payment_method: receipt.payment_method || 'cash',
-                                image_url: receipt.photos?.[0] || undefined,
+                                image_url: paymentPhotos[0] || undefined,
                                 order_product_id: productId,
                             });
                         }
@@ -1086,15 +1170,27 @@ export function ProductDetailDialog({
             if (onConfirmAndMove) {
                 await onConfirmAndMove();
                 onOpenChange(false);
-            } else if (roomId.startsWith('after1_debt')) {
-                toast.success('Đã xác nhận kiểm nợ — chuyển sang Đóng gói & Giao hàng');
+                if (isAftersale && setActiveTab) setActiveTab('aftersale');
+            } else if (isAftersale && (roomId === 'after1' || roomId.startsWith('after1_debt') || roomId.startsWith('after2'))) {
+                const successMsg =
+                    roomId === 'after1'
+                        ? 'Đã lưu — chuyển sang Kiểm nợ'
+                        : roomId.startsWith('after1_debt')
+                            ? 'Đã xác nhận kiểm nợ — chuyển sang Đóng gói & Giao hàng'
+                            : 'Đã lưu — chuyển sang Nhắn HD Bảo Quản & Feedback';
+                toast.success(successMsg);
                 if (onReloadOrder) await onReloadOrder();
                 onOpenChange(false);
+                if (setActiveTab) setActiveTab('aftersale');
                 return;
             }
 
             toast.success('Đã cập nhật thông tin thành công');
             if (onReloadOrder) await onReloadOrder();
+            if (isAftersale) {
+                onOpenChange(false);
+                if (setActiveTab) setActiveTab('aftersale');
+            }
         } catch (error: any) {
             // updateItemAfterSaleData đã toast chi tiết nếu lỗi API; tránh toast trùng
             if (!error?.response?.data?.message) {
@@ -1537,14 +1633,15 @@ export function ProductDetailDialog({
         [invoiceProductDetails],
     );
 
-    // Chỉ những SP còn dư nợ (collectDue > 0) mới được đưa vào danh sách bàn giao / tạo phiếu thu
+    // Chỉ SP đang ở Kiểm nợ (after1_debt) và còn cần thu mới hiện trong bàn giao đợt này.
+    // SP đã thanh toán / đã sang Đóng gói (after2+) không còn trong danh sách.
     const handoffEligibleProducts = useMemo(() => {
         const collectDueById = new Map(billableProductDetails.map((d) => [d.id, d.collectDue]));
         return uniqueItems.filter(
             (item) =>
                 (item as any).is_customer_item &&
                 item.item_type !== 'service' &&
-                ['after1_debt', 'after2', 'after3', 'after4'].includes(getItemAfterSaleStage(item)) &&
+                getItemAfterSaleStage(item) === 'after1_debt' &&
                 (collectDueById.get(item.id) ?? 0) > 0
         );
     }, [uniqueItems, optimisticAfterSaleStages, billableProductDetails]);
@@ -1564,8 +1661,7 @@ export function ProductDetailDialog({
     }, [debtReceiptsByProduct]);
 
     /**
-     * Seed phiếu thu cho SP đã ở after2+ khi mở dialog — không xoá draft tick local.
-     * SP đã thu hết nợ (collectDue <= 0) thì không seed, và tự bỏ tick nếu đang có draft cũ.
+     * Dọn draft phiếu thu: SP đã thu hết nợ hoặc đã qua bước Kiểm nợ (after2+) — không còn trong bàn giao.
      */
     useEffect(() => {
         if (!open || (!roomId.startsWith('after1_debt') && roomId !== 'after4')) return;
@@ -1573,36 +1669,69 @@ export function ProductDetailDialog({
         setDebtReceiptsByProduct((prev) => {
             let changed = false;
             const next: Record<string, DebtProductReceipt> = { ...prev };
-            for (const detail of invoiceProductDetails) {
-                if (detail.collectDue <= 0) {
-                    if (next[detail.id]) {
-                        delete next[detail.id];
-                        changed = true;
-                    }
-                    continue;
-                }
-                if (['after2', 'after3', 'after4'].includes(detail.afterSaleStage) && !next[detail.id]) {
-                    next[detail.id] = {
-                        amount: detail.collectDue,
-                        payment_method: 'cash',
-                        photos: [],
-                        collector_name: formData.debt_checked_by_name || user?.name || '',
-                        notes: '',
-                    };
+            for (const id of Object.keys(next)) {
+                const detail = invoiceProductDetails.find((d) => d.id === id);
+                const stage = detail?.afterSaleStage
+                    ?? getItemAfterSaleStage(uniqueItems.find((i) => i.id === id) || { id });
+                const collectDue = detail?.collectDue ?? 0;
+                if (collectDue <= 0 || stage !== 'after1_debt') {
+                    delete next[id];
                     changed = true;
                 }
             }
             return changed ? next : prev;
         });
-    }, [open, roomId, order?.id, invoiceProductDetails]);
+    }, [open, roomId, order?.id, invoiceProductDetails, uniqueItems, optimisticAfterSaleStages]);
+
+    const resolveReceiptPhotos = useCallback((
+        receipt: DebtProductReceipt | undefined,
+        productId?: string,
+    ): string[] => {
+        const direct = (receipt?.photos || []).filter((url): url is string => typeof url === 'string' && url.length > 0);
+        if (direct.length > 0) return direct;
+
+        const orderPhotos = parsePhotoUrls((order as any)?.debt_payment_photos);
+        if (orderPhotos.length > 0) return orderPhotos;
+
+        const formPhotos = parsePhotoUrls((formData as any)?.debt_payment_photos);
+        if (formPhotos.length > 0) return formPhotos;
+
+        if (productId && order) {
+            const item = [
+                ...(order.customer_items || []),
+                ...(order.sale_items || []),
+                ...(order.items || []),
+            ].find((row: any) => row?.id === productId) as any;
+            const itemPhotos = parsePhotoUrls(item?.debt_payment_photos);
+            if (itemPhotos.length > 0) return itemPhotos;
+        }
+
+        return [];
+    }, [order, formData]);
 
     const updateDebtReceipt = useCallback((productId: string, patch: Partial<DebtProductReceipt>) => {
         setDebtReceiptsByProduct((prev) => {
-            const current = prev[productId];
-            if (!current) return prev;
-            return { ...prev, [productId]: { ...current, ...patch } };
+            const detail = invoiceProductDetails.find((d) => d.id === productId);
+            const current = prev[productId] || {
+                amount: detail?.collectDue || 0,
+                payment_method: 'cash' as const,
+                photos: resolveReceiptPhotos(undefined, productId),
+                collector_name: formData.debt_checked_by_name || user?.name || '',
+                notes: '',
+            };
+            const nextReceipt = { ...current, ...patch };
+            return { ...prev, [productId]: nextReceipt };
         });
-    }, []);
+        if (patch.photos?.length) {
+            setFormData((prev) => ({
+                ...prev,
+                debt_payment_photos: [...new Set([
+                    ...parsePhotoUrls((prev as any).debt_payment_photos),
+                    ...patch.photos!.filter(Boolean),
+                ])],
+            } as any));
+        }
+    }, [invoiceProductDetails, resolveReceiptPhotos, formData.debt_checked_by_name, user?.name]);
 
     const isHandoffChecked = useCallback((item: any) => {
         return !!debtReceiptsByProduct[item.id];
@@ -2003,7 +2132,30 @@ export function ProductDetailDialog({
                                             </ul>
                                         </div>
                                     )}
-                                    {(roomId.startsWith('after1') || roomId.startsWith('after4')) && (
+                                    {roomId.startsWith('after1_debt') && completionImages.length > 0 && (
+                                        <div className="rounded-2xl border border-purple-100 bg-purple-50/40 p-4 space-y-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <p className="text-[11px] font-black text-purple-800 uppercase tracking-tight">
+                                                    Ảnh hoàn thiện đã lưu
+                                                </p>
+                                                <Badge variant="outline" className="text-[9px] bg-white text-purple-600 border-purple-200">
+                                                    {completionImages.length} ảnh/video
+                                                </Badge>
+                                            </div>
+                                            <p className="text-[10px] text-purple-600/90">
+                                                Giữ kết quả từ bước Ảnh hoàn thiện — không cần tải lại.
+                                            </p>
+                                            <MultiMediaUpload
+                                                value={completionImages}
+                                                onChange={noopMediaChange}
+                                                disabled
+                                                bucket="orders"
+                                                folder="completion"
+                                            />
+                                        </div>
+                                    )}
+
+                                    {(roomId === 'after1' || roomId === 'after4') && (
                                         <div className="space-y-3">
                                             {/* Received Product Photos */}
                                             <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 shadow-sm space-y-3">
@@ -2050,12 +2202,12 @@ export function ProductDetailDialog({
                                                         </div>
                                                     </div>
                                                     <Badge variant="outline" className="text-[9px] bg-white text-purple-600 border-purple-200">
-                                                        {(formData.completion_photos?.length || 0)} ảnh/video
+                                                        {completionImages.length} ảnh/video
                                                     </Badge>
                                                 </div>
 
                                                 <MultiMediaUpload
-                                                    value={Array.isArray(formData.completion_photos) ? formData.completion_photos : []}
+                                                    value={completionImages}
                                                     onChange={handleCompletionPhotosChange}
                                                     bucket="orders"
                                                     folder="completion"
@@ -2185,12 +2337,13 @@ export function ProductDetailDialog({
                                                         </TabsTrigger>
                                                         {handoffSelectedDetails.map((detail) => {
                                                             const receipt = debtReceiptsByProduct[detail.id];
-                                                            const needsPhoto = Number(receipt?.amount) > 0 && !(receipt?.photos?.length > 0);
+                                                            const needsPhoto = Number(receipt?.amount) > 0 && resolveReceiptPhotos(receipt, detail.id).length === 0;
+                                                            const tabValue = `receipt-${detail.id}`;
                                                             return (
                                                                 <TabsTrigger
                                                                     key={detail.id}
-                                                                    value={`receipt-${detail.id}`}
-                                                                    className="text-[11px] px-2.5 py-1.5 max-w-[180px]"
+                                                                    value={tabValue}
+                                                                    className="group/tab relative text-[11px] pl-2.5 pr-7 py-1.5 max-w-[200px]"
                                                                 >
                                                                     <Receipt className="h-3 w-3 mr-1 shrink-0" />
                                                                     <span className="truncate">Phiếu thu — {detail.name}</span>
@@ -2201,6 +2354,40 @@ export function ProductDetailDialog({
                                                                             {formatCurrency(receipt.amount)}
                                                                         </span>
                                                                     ) : null}
+                                                                    <span
+                                                                        role="button"
+                                                                        tabIndex={0}
+                                                                        aria-label={`Đóng tab phiếu thu ${detail.name}`}
+                                                                        className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-4 w-4 items-center justify-center rounded-full text-gray-400 hover:bg-rose-100 hover:text-rose-600"
+                                                                        onClick={(e) => {
+                                                                            e.preventDefault();
+                                                                            e.stopPropagation();
+                                                                            setDebtReceiptsByProduct((prev) => {
+                                                                                const next = { ...prev };
+                                                                                delete next[detail.id];
+                                                                                return next;
+                                                                            });
+                                                                            if (debtHandoffTab === tabValue) {
+                                                                                setDebtHandoffTab('handoff');
+                                                                            }
+                                                                        }}
+                                                                        onKeyDown={(e) => {
+                                                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                                                e.preventDefault();
+                                                                                e.stopPropagation();
+                                                                                setDebtReceiptsByProduct((prev) => {
+                                                                                    const next = { ...prev };
+                                                                                    delete next[detail.id];
+                                                                                    return next;
+                                                                                });
+                                                                                if (debtHandoffTab === tabValue) {
+                                                                                    setDebtHandoffTab('handoff');
+                                                                                }
+                                                                            }
+                                                                        }}
+                                                                    >
+                                                                        <X className="h-3 w-3" />
+                                                                    </span>
                                                                 </TabsTrigger>
                                                             );
                                                         })}
@@ -2215,7 +2402,7 @@ export function ProductDetailDialog({
                                                         <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-1 custom-scrollbar">
                                                             {handoffEligibleProducts.length === 0 ? (
                                                                 <p className="text-[10px] text-gray-400 italic py-2 text-center">
-                                                                    Chưa có SP nào ở bước Kiểm nợ để bàn giao đợt này.
+                                                                    Không còn SP nào ở Kiểm nợ cần bàn giao / thu nợ đợt này.
                                                                 </p>
                                                             ) : null}
                                                             {handoffEligibleProducts.map(item => (
@@ -2236,17 +2423,17 @@ export function ProductDetailDialog({
                                                                                         toast.error('Sản phẩm này đã thu hết nợ — không cần tạo phiếu thu');
                                                                                         return;
                                                                                     }
+                                                                                    const existingPhotos = resolveReceiptPhotos(undefined, item.id);
                                                                                     setDebtReceiptsByProduct((prev) => ({
                                                                                         ...prev,
                                                                                         [item.id]: prev[item.id] || {
                                                                                             amount: detail.collectDue,
                                                                                             payment_method: 'cash',
-                                                                                            photos: [],
+                                                                                            photos: existingPhotos,
                                                                                             collector_name: formData.debt_checked_by_name || user?.name || '',
                                                                                             notes: '',
                                                                                         },
                                                                                     }));
-                                                                                    setFormData((prev) => ({ ...prev, debt_checked: true }));
                                                                                     setDebtHandoffTab(`receipt-${item.id}`);
                                                                                     return;
                                                                                 }
@@ -2290,6 +2477,7 @@ export function ProductDetailDialog({
                                                         </div>
                                                         <p className="mt-1 text-[10px] text-blue-600/90 leading-snug">
                                                             Sau khi tích SP, mở tab Phiếu thu để điền số tiền và upload ảnh bill.
+                                                            Chỉ SP đang mở form mới chuyển bước Đóng gói — SP khác trong HĐ giữ nguyên cột.
                                                         </p>
                                                     </div>
 
@@ -2301,7 +2489,7 @@ export function ProductDetailDialog({
                                                     />
                                                     <Label htmlFor="debt_checked" className="text-sm font-semibold cursor-pointer">
                                                         Xác nhận đã kiểm nợ
-                                                        <span className="ml-1 text-[10px] font-normal text-muted-foreground">(tự tick khi chọn SP bàn giao)</span>
+                                                        <span className="ml-1 text-rose-500">*</span>
                                                     </Label>
                                                 </div>
                                                 <div className="space-y-2">
@@ -2320,10 +2508,11 @@ export function ProductDetailDialog({
                                                         const receipt = debtReceiptsByProduct[detail.id] || {
                                                             amount: detail.collectDue,
                                                             payment_method: 'cash' as const,
-                                                            photos: [] as string[],
+                                                            photos: resolveReceiptPhotos(undefined, detail.id),
                                                             collector_name: formData.debt_checked_by_name || user?.name || '',
                                                             notes: '',
                                                         };
+                                                        const receiptPhotos = resolveReceiptPhotos(receipt, detail.id);
                                                         return (
                                                             <TabsContent key={detail.id} value={`receipt-${detail.id}`} className="mt-3 space-y-3">
                                                                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-2">
@@ -2404,7 +2593,7 @@ export function ProductDetailDialog({
                                                                         Chụp ảnh khách đã chuyển khoản hoặc chụp tiền mặt làm bằng chứng
                                                                     </p>
                                                                     <MultiMediaUpload
-                                                                        value={receipt.photos || []}
+                                                                        value={receiptPhotos}
                                                                         onChange={(urls) => updateDebtReceipt(detail.id, { photos: urls })}
                                                                         bucket="orders"
                                                                         folder="debt-payment"
@@ -2852,9 +3041,11 @@ export function ProductDetailDialog({
                                             >
                                                 {saving ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <Save className="h-5 w-5 mr-2" />}
                                                 {roomId.startsWith('after1_debt')
-                                                    ? 'Xác nhận kiểm nợ & Lưu'
+                                                    ? 'Xác nhận kiểm nợ & chuyển bước'
                                                     : roomId.startsWith('after2')
-                                                    ? 'Xác nhận trả phụ kiện & Lưu'
+                                                    ? 'Xác nhận trả phụ kiện & chuyển bước'
+                                                    : roomId === 'after1'
+                                                    ? 'Lưu & chuyển Kiểm nợ'
                                                     : 'Cập nhật thông tin'}
                                             </Button>
                                         </div>

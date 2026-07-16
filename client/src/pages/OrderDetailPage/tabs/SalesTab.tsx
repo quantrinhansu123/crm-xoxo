@@ -26,7 +26,6 @@ import {
     getItemTypeColor,
 } from '../utils';
 import { BackwardMoveDialog } from '@/components/orders/BackwardMoveDialog';
-import { ForwardMoveDialog } from '@/components/orders/ForwardMoveDialog';
 import { ImageIcon } from 'lucide-react';
 import { UpsellDialog } from '@/components/orders/UpsellDialog';
 
@@ -364,13 +363,6 @@ export function SalesTab({
     const [searchTerm, setSearchTerm] = useState('');
     const [pendingMove, setPendingMove] = useState<{ group: any; targetStepId: string } | null>(null);
     const [backwardDialogOpen, setBackwardDialogOpen] = useState(false);
-    const [pendingForwardMove, setPendingForwardMove] = useState<{
-        itemsToUpdate: OrderItem[];
-        newStatus: string;
-        stepLabel: string;
-        group: any;
-    } | null>(null);
-    const [forwardDialogOpen, setForwardDialogOpen] = useState(false);
     const [viewLogData, setViewLogData] = useState<{ reason?: string; photos?: string[]; itemName?: string } | null>(null);
     const [upsellGroup, setUpsellGroup] = useState<any>(null);
     const [mobileSalesStep, setMobileSalesStep] = useState('step1');
@@ -412,27 +404,7 @@ export function SalesTab({
         }
     };
 
-    const confirmSalesForwardMove = async (notes: string, photos: string[]) => {
-        if (!pendingForwardMove) return;
-        const { itemsToUpdate, newStatus, stepLabel, group } = pendingForwardMove;
-        try {
-            for (const item of itemsToUpdate) {
-                await updateOrderItemStatus(item.id, newStatus, undefined, photos, notes);
-            }
-            toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
-            if (newStatus === 'step5') {
-                onTabChange?.('workflow');
-            } else {
-                onProductCardClick?.(group, newStatus);
-            }
-            if (order?.id) fetchKanbanLogs(order.id);
-        } catch {
-            reloadOrder();
-            toast.error('Lỗi khi cập nhật trạng thái');
-        }
-    };
-
-    /** Dùng chung cho drag-drop desktop và mobile — luôn bắt buộc form khi chuyển bước chiều xuôi */
+    /** Dùng chung cho drag-drop desktop và mobile. */
     const handleSalesDragEnd = async (result: DropResult) => {
         if (!result.destination || result.destination.droppableId === result.source.droppableId) return;
         if (rejectNonSequentialKanbanMove(
@@ -513,9 +485,21 @@ export function SalesTab({
             }
         }
 
-        // Không còn validate riêng nào — vẫn bắt buộc xác nhận (ghi chú + ảnh) trước khi chuyển bước
-        setPendingForwardMove({ itemsToUpdate, newStatus, stepLabel, group });
-        setForwardDialogOpen(true);
+        try {
+            for (const item of itemsToUpdate) {
+                await updateOrderItemStatus(item.id, newStatus);
+            }
+            toast.success(`Đã chuyển nhóm sang: ${stepLabel}`);
+            if (newStatus === 'step5') {
+                onTabChange?.('workflow');
+            } else {
+                onProductCardClick?.(group, newStatus);
+            }
+            if (order?.id) fetchKanbanLogs(order.id);
+        } catch {
+            reloadOrder();
+            toast.error('Lỗi khi cập nhật trạng thái');
+        }
     };
 
     const hasSalesItem = workflowKanbanGroups?.some(g => {
@@ -968,17 +952,6 @@ export function SalesTab({
                 onConfirm={handleBackwardMoveConfirm}
                 itemName={pendingMove?.group?.product?.item_name || pendingMove?.group?.services?.[0]?.item_name}
                 mode="create"
-            />
-
-            <ForwardMoveDialog
-                open={forwardDialogOpen}
-                onClose={() => {
-                    setForwardDialogOpen(false);
-                    setPendingForwardMove(null);
-                }}
-                onConfirm={confirmSalesForwardMove}
-                itemName={pendingForwardMove?.group?.product?.item_name || pendingForwardMove?.group?.services?.[0]?.item_name}
-                targetStepLabel={pendingForwardMove?.stepLabel}
             />
 
             <BackwardMoveDialog

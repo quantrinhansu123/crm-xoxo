@@ -692,7 +692,7 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                             assigned_at: s.assigned_at,
                             is_customer_item: true, // Mark as customer item for grouping in OrderDetailPage
                             sales_step_data: product.sales_step_data, // Inherit from parent product
-                            after_sale_stage: s.after_sale_stage ?? product.after_sale_stage ?? null,
+                            after_sale_stage: s.after_sale_stage ?? null,
                             care_warranty_flow: s.care_warranty_flow ?? product.care_warranty_flow ?? null,
                             care_warranty_stage: s.care_warranty_stage ?? product.care_warranty_stage ?? null,
                             warranty_code: product.warranty_code || null,
@@ -705,8 +705,8 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                                 id: product.id,
                                 image: product.images?.[0] || null
                             },
-                            current_phase: s.current_phase || product.current_phase || null,
-                            phase_stage: s.phase_stage || product.phase_stage || null
+                            current_phase: s.current_phase || null,
+                            phase_stage: s.phase_stage || null
                         });
                     }
                 }

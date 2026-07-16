@@ -146,9 +146,23 @@ export function getGroupAfterSaleStage(group: {
     product?: { current_phase?: string | null; phase_stage?: string | null; after_sale_stage?: string | null } | null;
     services?: { current_phase?: string | null; phase_stage?: string | null; after_sale_stage?: string | null }[];
 }): string | null {
-    if (group.product?.current_phase === 'after_sale') {
-        return getItemAfterSaleStage(group.product);
+    const afterStages = new Set(['after1', 'after1_debt', 'after2', 'after3', 'after4']);
+
+    // Luôn lấy stage của đúng product head — không lấy stage service (tránh 1 SP kéo theo SP khác cùng HĐ)
+    if (group.product) {
+        const phase = group.product.current_phase;
+        if (phase === 'care' || phase === 'warranty') return null;
+
+        const after = group.product.after_sale_stage;
+        const pStage = group.product.phase_stage;
+        const inAfterSale =
+            phase === 'after_sale'
+            || (!!after && afterStages.has(after))
+            || (!!pStage && afterStages.has(pStage));
+
+        return inAfterSale ? getItemAfterSaleStage(group.product) : null;
     }
+
     const svc = (group.services || []).find((s) => s.current_phase === 'after_sale');
     return svc ? getItemAfterSaleStage(svc) : null;
 }

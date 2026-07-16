@@ -18,6 +18,8 @@ import type { WorkflowKanbanGroup } from '../types';
 import { getGroupAfterSaleStage } from '../constants';
 import {
     getAfter1ToDebtValidationErrors,
+    getAfter1DebtToAfter2ValidationErrors,
+    parsePhotoList,
     showAfterSaleValidationToast,
 } from '../afterSaleValidation';
 import {
@@ -59,6 +61,9 @@ const AFTER_COLS = [
     { id: 'after3', title: 'Nhắn HD Bảo Quản & Feedback', color: 'text-purple-700', slaDurationMs: 5 * 24 * 60 * 60 * 1000 }, // 5 ngày
     { id: 'after4', title: 'Lưu Trữ', color: 'text-green-700', slaDurationMs: null },
 ] as const;
+
+// Tạm bật riêng cho đơn test; chỉ cho phép lùi về đúng một bước liền kề.
+const TEMP_AFTERSALE_BACKWARD_ORDER_ID = '913e05cd-b65d-4d80-9f38-664f693e7a40';
 
 type AfterColId = typeof AFTER_COLS[number]['id'];
 
@@ -477,6 +482,7 @@ const AftersaleCard = memo(({
                             draggableId={draggableId}
                             onMove={onAfterSaleMove}
                             sourceIndex={index}
+                            allowBackward={order.id === TEMP_AFTERSALE_BACKWARD_ORDER_ID}
                             embedded
                         />
                     )}
@@ -603,15 +609,20 @@ export function AftersaleTab({
 
     const handleAfterSaleDragEnd = (result: DropResult) => {
         if (!order || !result.destination || result.destination.droppableId === result.source.droppableId) return;
+        const allowBackward = order.id === TEMP_AFTERSALE_BACKWARD_ORDER_ID;
         if (rejectNonSequentialKanbanMove(
             AFTER_SALE_COLUMN_IDS,
             result.source.droppableId,
-            result.destination.droppableId
+            result.destination.droppableId,
+            { allowBackward }
         )) {
             return;
         }
         const newStage = result.destination.droppableId as string;
         const itemId = result.draggableId;
+        const sourceIdx = AFTER_SALE_COLUMN_IDS.indexOf(result.source.droppableId as any);
+        const destinationIdx = AFTER_SALE_COLUMN_IDS.indexOf(newStage as any);
+        const isBackwardMove = destinationIdx < sourceIdx;
 
         // Find the group/product being dragged
         const draggedGroup = groups.find(g => g.product?.id === itemId);
@@ -647,8 +658,8 @@ export function AftersaleTab({
         }
 
         if (result.source.droppableId === 'after1_debt' && newStage === 'after2') {
-            // Mở form Kiểm nợ / Phiếu thu — không chặn cứng bằng ảnh CK cấp đơn
-            // (ảnh bill nằm trên tab Phiếu thu theo SP, ghi vào order khi Lưu)
+            // Bắt buộc đã tick "Xác nhận đã kiểm nợ" — nếu chưa thì mở form, không chuyển bước
+            const debtErrors = getAfter1DebtToAfter2ValidationErrors(draggedGroup.product);
             const moveAction = async () => {
                 const api = isCustomerItem
                     ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage, debt_checked: true })
@@ -661,6 +672,15 @@ export function AftersaleTab({
                 fetchKanbanLogs(order.id);
                 toast.success(`Đã chuyển sản phẩm "${draggedGroup.product?.item_name}" sang bước mới`);
             };
+            if (debtErrors.length > 0) {
+                showAfterSaleValidationToast(debtErrors);
+                if (onOpenProductDialogWithMove) {
+                    onOpenProductDialogWithMove(draggedGroup, 'after1_debt', moveAction, newStage);
+                } else {
+                    onProductCardClick(draggedGroup, 'after1_debt');
+                }
+                return;
+            }
             if (onOpenProductDialogWithMove) {
                 onOpenProductDialogWithMove(draggedGroup, 'after1_debt', moveAction, newStage);
             } else {
@@ -671,7 +691,8 @@ export function AftersaleTab({
 
         // Add validation for transition from after2 to after3
         if (result.source.droppableId === 'after2' && newStage === 'after3') {
-            const arePhotosOk = draggedGroup.product.packaging_photos && draggedGroup.product.packaging_photos.length > 0;
+            const packPhotos = parsePhotoList(draggedGroup.product.packaging_photos);
+            const arePhotosOk = packPhotos.length > 0;
             const accessoriesReturned = !!(draggedGroup.product as any)?.sales_step_data?.after2_accessories_returned_checked;
             const productAny = draggedGroup.product as any;
             const isPickup = (productAny.delivery_type || order.delivery_type) === 'pickup';
@@ -715,8 +736,8 @@ export function AftersaleTab({
         // Không còn validate riêng nào — chuyển bước ngay, không cần hỏi xác nhận
         const itemName = draggedGroup.product?.item_name;
         const apiPromise = isCustomerItem
-            ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage })
-            : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage });
+            ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage, allow_step_back: isBackwardMove })
+            : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage, allow_step_back: isBackwardMove });
 
         apiPromise
             .then(() => {
@@ -745,7 +766,10 @@ export function AftersaleTab({
                             After sale – Quy trình sau kỹ thuật
                         </CardTitle>
                         <p className="hidden text-sm text-muted-foreground md:block">
-                            Ảnh → Kiểm nợ → Đóng gói & Giao hàng → Nhắn HD & Feedback → Lưu trữ. Chỉ chuyển tiến từng bước, không kéo ngược.
+                            Ảnh → Kiểm nợ → Đóng gói & Giao hàng → Nhắn HD & Feedback → Lưu trữ.
+                            {order.id === TEMP_AFTERSALE_BACKWARD_ORDER_ID
+                                ? ' Tạm cho phép lùi một bước để kiểm thử.'
+                                : ' Chỉ chuyển tiến từng bước, không kéo ngược.'}
                         </p>
                         <p className="text-xs text-muted-foreground md:hidden">
                             Vuốt ngang: Ảnh hoàn thiện → Kiểm nợ → Đóng gói → Feedback → Lưu trữ
@@ -1001,4 +1025,3 @@ export function AftersaleTab({
         </TabsContent>
     );
 }
-
