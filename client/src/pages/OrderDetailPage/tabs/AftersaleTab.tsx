@@ -28,7 +28,6 @@ import {
 } from '@/components/kanban/mobileKanban';
 import { rejectNonSequentialKanbanMove, AFTER_SALE_COLUMN_IDS } from '@/lib/kanbanSequential';
 import { parseProductImages } from '../components/OrderItemPhotos';
-import { ForwardMoveDialog } from '@/components/orders/ForwardMoveDialog';
 
 interface AftersaleTabProps {
     order: Order | null;
@@ -76,10 +75,9 @@ function useSLACountdown(
     stageId: AfterColId,
     slaDurationMs: number | null,
     aftersaleLogs: any[],
-    fallbackDate: string | undefined
+    fallbackDate: string | undefined,
+    now: number,
 ): { remainingMs: number | null; enteredAt: Date | null } {
-    const [now, setNow] = useState(() => Date.now());
-
     const enteredAt = React.useMemo(() => {
         if (!slaDurationMs) return null;
         const matchingLog = aftersaleLogs
@@ -89,12 +87,6 @@ function useSLACountdown(
         if (fallbackDate) return new Date(fallbackDate);
         return null;
     }, [stageId, slaDurationMs, aftersaleLogs, fallbackDate]);
-
-    useEffect(() => {
-        if (!slaDurationMs || !enteredAt) return;
-        const interval = setInterval(() => setNow(Date.now()), stageId === 'after1' ? 1000 : 60000);
-        return () => clearInterval(interval);
-    }, [slaDurationMs, enteredAt, stageId]);
 
     if (!slaDurationMs || !enteredAt) return { remainingMs: null, enteredAt: null };
     return { remainingMs: enteredAt.getTime() + slaDurationMs - now, enteredAt };
@@ -139,6 +131,7 @@ const AftersaleCard = memo(({
     isPhoneView = false,
     afterColumns = [],
     onAfterSaleMove,
+    now,
 }: {
     group: WorkflowKanbanGroup;
     index: number;
@@ -151,6 +144,7 @@ const AftersaleCard = memo(({
     isPhoneView?: boolean;
     afterColumns?: MobileKanbanColumn[];
     onAfterSaleMove?: (result: DropResult) => void;
+    now: number;
 }) => {
     const product = group.product;
     const draggableId = product?.id || `group-${index}`;
@@ -166,7 +160,7 @@ const AftersaleCard = memo(({
         productItem?.service?.image;
     const previewImages = (productImages.length > 0 ? productImages : productImage ? [productImage] : []).slice(0, 4);
 
-    const { remainingMs } = useSLACountdown(col.id, col.slaDurationMs, aftersaleLogs, order.updated_at);
+    const { remainingMs } = useSLACountdown(col.id, col.slaDurationMs, aftersaleLogs, order.updated_at, now);
     const slaDisplay = remainingMs !== null ? formatSLACountdown(remainingMs, col.id) : null;
     const isLate = slaDisplay?.isLate ?? (product?.due_at && new Date(product.due_at) < new Date());
 
@@ -514,21 +508,27 @@ export function AftersaleTab({
     if (!order) return null;
 
     const [mobileAfterCol, setMobileAfterCol] = useState<string>('after1');
-    const [pendingAftersaleMove, setPendingAftersaleMove] = useState<{
-        itemId: string;
-        isCustomerItem: boolean;
-        newStage: string;
-        fromStage: string;
-        itemName?: string;
-        group?: WorkflowKanbanGroup;
-    } | null>(null);
-    const [aftersaleForwardDialogOpen, setAftersaleForwardDialogOpen] = useState(false);
     const mobileScrollRef = useRef<HTMLDivElement>(null);
     const mobileAfterInitializedRef = useRef(false);
-    const afterColumns: MobileKanbanColumn[] = AFTER_COLS.map((c) => ({
+    const [kanbanNow, setKanbanNow] = useState(() => Date.now());
+    const afterColumns = React.useMemo<MobileKanbanColumn[]>(() => AFTER_COLS.map((c) => ({
         id: c.id,
         title: AFTER_COL_TAB_LABELS[c.id],
-    }));
+    })), []);
+
+    useEffect(() => {
+        const interval = window.setInterval(() => setKanbanNow(Date.now()), 15000);
+        return () => window.clearInterval(interval);
+    }, []);
+
+    const groupsByAfterColumn = React.useMemo(() => {
+        const mapped = Object.fromEntries(AFTER_COLS.map((col) => [col.id, [] as WorkflowKanbanGroup[]])) as Record<AfterColId, WorkflowKanbanGroup[]>;
+        for (const group of groups) {
+            const stage = getGroupAfterSaleStage(group) as AfterColId;
+            if (mapped[stage]) mapped[stage].push(group);
+        }
+        return mapped;
+    }, [groups]);
 
     const scrollToAfterColumn = useCallback((colId: string) => {
         setMobileAfterCol(colId);
@@ -561,8 +561,8 @@ export function AftersaleTab({
     }, [groups]);
 
     const getColGroupCount = useCallback(
-        (id: string) => groups.filter((g) => getGroupAfterSaleStage(g) === id).length,
-        [groups]
+        (id: string) => groupsByAfterColumn[id as AfterColId]?.length || 0,
+        [groupsByAfterColumn]
     );
 
     useEffect(() => {
@@ -712,25 +712,11 @@ export function AftersaleTab({
             }
         }
 
-        // Không còn validate riêng nào — vẫn bắt buộc xác nhận (ghi chú + ảnh) trước khi chuyển bước
-        setPendingAftersaleMove({
-            itemId,
-            isCustomerItem,
-            newStage,
-            fromStage: result.source.droppableId as string,
-            itemName: draggedGroup.product?.item_name,
-            group: draggedGroup,
-        });
-        setAftersaleForwardDialogOpen(true);
-    };
-
-    const confirmAftersaleMove = (notes: string, photos: string[]) => {
-        if (!order || !pendingAftersaleMove) return;
-        const { itemId, isCustomerItem, newStage, itemName, group } = pendingAftersaleMove;
-
+        // Không còn validate riêng nào — chuyển bước ngay, không cần hỏi xác nhận
+        const itemName = draggedGroup.product?.item_name;
         const apiPromise = isCustomerItem
-            ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage, move_notes: notes, move_photos: photos })
-            : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage, move_notes: notes, move_photos: photos });
+            ? orderProductsApi.updateAfterSaleData(itemId, { stage: newStage })
+            : orderItemsApi.updateAfterSaleData(itemId, { stage: newStage });
 
         apiPromise
             .then(() => {
@@ -742,9 +728,6 @@ export function AftersaleTab({
             .then(() => fetchKanbanLogs(order.id))
             .then(() => {
                 toast.success(`Đã chuyển "${itemName}" sang ${getAfterSaleStageLabel(newStage)}`);
-                if (group && newStage !== 'after4') {
-                    onProductCardClick(group, newStage);
-                }
             })
             .catch((e: any) => {
                 reloadOrder();
@@ -784,9 +767,7 @@ export function AftersaleTab({
                                     className="flex snap-x snap-mandatory gap-3 overflow-x-auto overflow-y-visible overscroll-x-contain overscroll-y-auto pb-2 no-scrollbar -mx-1 px-1 [touch-action:pan-x_pan-y]"
                                 >
                                     {AFTER_COLS.map((col) => {
-                                        const colGroups = groups.filter(
-                                            (g) => getGroupAfterSaleStage(g) === col.id
-                                        );
+                                        const colGroups = groupsByAfterColumn[col.id] || [];
                                         return (
                                             <div
                                                 key={col.id}
@@ -827,6 +808,7 @@ export function AftersaleTab({
                                                                     isPhoneView
                                                                     afterColumns={afterColumns}
                                                                     onAfterSaleMove={handleAfterSaleDragEnd}
+                                                                    now={kanbanNow}
                                                                 />
                                                             ))}
                                                             {provided.placeholder}
@@ -845,9 +827,7 @@ export function AftersaleTab({
                             </div>
                             <div className="hidden gap-4 overflow-x-auto pb-4 md:flex">
                                 {AFTER_COLS.map((col) => {
-                                    const colGroups = groups.filter(
-                                        (g) => getGroupAfterSaleStage(g) === col.id
-                                    );
+                                    const colGroups = groupsByAfterColumn[col.id] || [];
                                     return (
                                         <div key={col.id} className="flex w-[300px] shrink-0 flex-col">
                                             <div className="flex justify-between items-center mb-4 px-2">
@@ -879,6 +859,7 @@ export function AftersaleTab({
                                                                 onProductCardClick={onProductCardClick}
                                                                 getSLADisplay={getSLADisplay}
                                                                 onFeedbackAction={handleFeedbackAction}
+                                                                now={kanbanNow}
                                                             />
                                                         ))}
                                                         {provided.placeholder}
@@ -1017,14 +998,6 @@ export function AftersaleTab({
                     </CardContent>
                 </Card>
             </div>
-            <ForwardMoveDialog
-                open={aftersaleForwardDialogOpen}
-                onClose={() => setAftersaleForwardDialogOpen(false)}
-                onConfirm={confirmAftersaleMove}
-                itemName={pendingAftersaleMove?.itemName || 'sản phẩm'}
-                currentStepLabel={pendingAftersaleMove ? getAfterSaleStageLabel(pendingAftersaleMove.fromStage) : undefined}
-                targetStepLabel={pendingAftersaleMove ? getAfterSaleStageLabel(pendingAftersaleMove.newStage) : undefined}
-            />
         </TabsContent>
     );
 }

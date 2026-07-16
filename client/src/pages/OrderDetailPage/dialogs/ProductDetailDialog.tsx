@@ -64,6 +64,7 @@ type DebtProductReceipt = {
     amount: number;
     payment_method: 'cash' | 'transfer' | 'zalopay';
     photos: string[];
+    collector_name?: string;
     notes?: string;
 };
 
@@ -871,9 +872,9 @@ export function ProductDetailDialog({
         }
 
         // Kiểm nợ → Đóng gói: bắt buộc chọn ≥1 SP bàn giao (+ ảnh bill nếu thu tiền > 0 đã check ở trên)
-        // Không bắt buộc tick "Xác nhận đã kiểm nợ" / Người thu tiền — lưu nếu có điền.
         if (isAftersale && roomId.startsWith('after1_debt') && !onConfirmAndMove) {
-            if (Object.keys(debtReceiptsByProduct).length === 0) {
+            const hasBillableHandoff = invoiceProductDetails.some((d) => d.collectDue > 0);
+            if (hasBillableHandoff && Object.keys(debtReceiptsByProduct).length === 0) {
                 showAfterSaleValidationToast(['Chọn ít nhất 1 sản phẩm trong "Danh sách bàn giao đợt này"']);
                 return;
             }
@@ -890,8 +891,12 @@ export function ProductDetailDialog({
             const itemId = product?.id || services[0]?.id;
             const isDebtConfirmFlow = isAftersale && roomId.startsWith('after1_debt');
             const isDebtConfirm = isDebtConfirmFlow && !onConfirmAndMove;
+            const receiptCollectorNames = Object.values(debtReceiptsByProduct)
+                .map((r) => (r.collector_name || '').trim())
+                .filter(Boolean);
             const collectorName =
-                (formData.debt_checked_by_name || '').trim()
+                receiptCollectorNames[0]
+                || (formData.debt_checked_by_name || '').trim()
                 || user?.name?.trim()
                 || '';
 
@@ -1038,6 +1043,7 @@ export function ProductDetailDialog({
                                 notes: [
                                     `Thu nợ cho đơn ${order.order_code || order.id}`,
                                     productLabel ? `SP: ${productLabel}` : null,
+                                    receipt.collector_name?.trim() ? `Người thu: ${receipt.collector_name.trim()}` : null,
                                     `(Bước: ${getAfterSaleStageLabel(roomId)})`,
                                     receipt.notes?.trim() || null,
                                 ].filter(Boolean).join(' — '),
@@ -1469,17 +1475,6 @@ export function ProductDetailDialog({
         optimisticAfterSaleStages[item.id] ?? resolveItemAfterSaleStage(item);
     const isItemReadyToReturn = (item: any) => ['after2', 'after3', 'after4'].includes(getItemAfterSaleStage(item));
 
-    const handoffEligibleProducts = useMemo(
-        () =>
-            uniqueItems.filter(
-                (item) =>
-                    (item as any).is_customer_item &&
-                    item.item_type !== 'service' &&
-                    ['after1_debt', 'after2', 'after3', 'after4'].includes(getItemAfterSaleStage(item))
-            ),
-        [uniqueItems, optimisticAfterSaleStages]
-    );
-
     const invoiceProductDetails = useMemo(() => {
         if (!order) return [];
 
@@ -1536,8 +1531,26 @@ export function ProductDetailDialog({
         });
     }, [order, uniqueItems, optimisticAfterSaleStages]);
 
+    // SP còn cần thu (bill > 0) — ẩn SP đã thu hết / bill = 0 khỏi danh sách bàn giao
+    const billableProductDetails = useMemo(
+        () => invoiceProductDetails.filter((d) => d.collectDue > 0),
+        [invoiceProductDetails],
+    );
+
+    // Chỉ những SP còn dư nợ (collectDue > 0) mới được đưa vào danh sách bàn giao / tạo phiếu thu
+    const handoffEligibleProducts = useMemo(() => {
+        const collectDueById = new Map(billableProductDetails.map((d) => [d.id, d.collectDue]));
+        return uniqueItems.filter(
+            (item) =>
+                (item as any).is_customer_item &&
+                item.item_type !== 'service' &&
+                ['after1_debt', 'after2', 'after3', 'after4'].includes(getItemAfterSaleStage(item)) &&
+                (collectDueById.get(item.id) ?? 0) > 0
+        );
+    }, [uniqueItems, optimisticAfterSaleStages, billableProductDetails]);
+
     const handoffSelectedDetails = useMemo(() => {
-        return invoiceProductDetails.filter((detail) => !!debtReceiptsByProduct[detail.id]);
+        return invoiceProductDetails.filter((detail) => !!debtReceiptsByProduct[detail.id] && detail.collectDue > 0);
     }, [invoiceProductDetails, debtReceiptsByProduct]);
 
     const handoffCollectAmount = useMemo(() => {
@@ -1550,7 +1563,10 @@ export function ProductDetailDialog({
         return Object.values(debtReceiptsByProduct).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
     }, [debtReceiptsByProduct]);
 
-    /** Seed phiếu thu cho SP đã ở after2+ khi mở dialog — không xoá draft tick local. */
+    /**
+     * Seed phiếu thu cho SP đã ở after2+ khi mở dialog — không xoá draft tick local.
+     * SP đã thu hết nợ (collectDue <= 0) thì không seed, và tự bỏ tick nếu đang có draft cũ.
+     */
     useEffect(() => {
         if (!open || (!roomId.startsWith('after1_debt') && roomId !== 'after4')) return;
 
@@ -1558,11 +1574,19 @@ export function ProductDetailDialog({
             let changed = false;
             const next: Record<string, DebtProductReceipt> = { ...prev };
             for (const detail of invoiceProductDetails) {
+                if (detail.collectDue <= 0) {
+                    if (next[detail.id]) {
+                        delete next[detail.id];
+                        changed = true;
+                    }
+                    continue;
+                }
                 if (['after2', 'after3', 'after4'].includes(detail.afterSaleStage) && !next[detail.id]) {
                     next[detail.id] = {
                         amount: detail.collectDue,
                         payment_method: 'cash',
                         photos: [],
+                        collector_name: formData.debt_checked_by_name || user?.name || '',
                         notes: '',
                     };
                     changed = true;
@@ -2080,7 +2104,7 @@ export function ProductDetailDialog({
                                                     <div className="space-y-2 pt-2 border-t border-purple-50">
                                                         <Label className="text-[10px] font-black text-purple-700 uppercase">Chi tiết hóa đơn theo sản phẩm:</Label>
                                                         <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
-                                                            {invoiceProductDetails.length > 0 ? invoiceProductDetails.map(item => (
+                                                            {billableProductDetails.length > 0 ? billableProductDetails.map(item => (
                                                                 <div key={item.id} className="rounded-xl border border-purple-100 bg-purple-50/20 p-2.5 space-y-2">
                                                                     <div className="flex items-start justify-between gap-2">
                                                                         <div className="min-w-0">
@@ -2208,12 +2232,17 @@ export function ProductDetailDialog({
                                                                                         return;
                                                                                     }
                                                                                     const detail = invoiceProductDetails.find((d) => d.id === item.id);
+                                                                                    if (!detail || detail.collectDue <= 0) {
+                                                                                        toast.error('Sản phẩm này đã thu hết nợ — không cần tạo phiếu thu');
+                                                                                        return;
+                                                                                    }
                                                                                     setDebtReceiptsByProduct((prev) => ({
                                                                                         ...prev,
                                                                                         [item.id]: prev[item.id] || {
-                                                                                            amount: detail?.collectDue ?? 0,
+                                                                                            amount: detail.collectDue,
                                                                                             payment_method: 'cash',
                                                                                             photos: [],
+                                                                                            collector_name: formData.debt_checked_by_name || user?.name || '',
                                                                                             notes: '',
                                                                                         },
                                                                                     }));
@@ -2285,19 +2314,6 @@ export function ProductDetailDialog({
                                                     />
                                                 </div>
 
-                                                <div className="space-y-2">
-                                                    <Label className="text-xs font-bold text-gray-500 uppercase flex items-center gap-1.5">
-                                                        Người thu tiền
-                                                    </Label>
-                                                    <StaffNameSelect
-                                                        className="bg-white h-9"
-                                                        value={formData.debt_checked_by_name || ''}
-                                                        onValueChange={(val) => setFormData(prev => ({ ...prev, debt_checked_by_name: val }))}
-                                                        users={moneyCollectorUsers}
-                                                        placeholder="Chọn hoặc gõ tìm nhân viên..."
-                                                        disabled={isInputDisabled}
-                                                    />
-                                                </div>
                                                     </TabsContent>
 
                                                     {handoffSelectedDetails.map((detail) => {
@@ -2305,6 +2321,7 @@ export function ProductDetailDialog({
                                                             amount: detail.collectDue,
                                                             payment_method: 'cash' as const,
                                                             photos: [] as string[],
+                                                            collector_name: formData.debt_checked_by_name || user?.name || '',
                                                             notes: '',
                                                         };
                                                         return (
@@ -2354,6 +2371,18 @@ export function ProductDetailDialog({
                                                                             </SelectContent>
                                                                         </Select>
                                                                     </div>
+                                                                </div>
+
+                                                                <div className="space-y-1.5">
+                                                                    <Label className="text-[10px] font-bold text-gray-500 uppercase">NGƯỜI THU TIỀN:</Label>
+                                                                    <StaffNameSelect
+                                                                        className="bg-white h-10"
+                                                                        value={receipt.collector_name || ''}
+                                                                        onValueChange={(val) => updateDebtReceipt(detail.id, { collector_name: val })}
+                                                                        users={moneyCollectorUsers}
+                                                                        placeholder="Chọn hoặc gõ tìm nhân viên..."
+                                                                        disabled={isInputDisabled}
+                                                                    />
                                                                 </div>
 
                                                                 <div className="flex justify-between items-center">
