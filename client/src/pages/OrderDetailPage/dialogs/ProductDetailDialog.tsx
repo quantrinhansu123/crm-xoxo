@@ -502,7 +502,7 @@ export function ProductDetailDialog({
                 delivery_payment_method: (item as any)?.delivery_payment_method || order.delivery_payment_method || 'cash',
                 debt_collect_amount: 0,
                 debt_payment_method: 'cash',
-                debt_payment_photos: parsePhotos((order as any).debt_payment_photos),
+                debt_payment_photos: [],
                 accessories_returned_checked: !!((item as any)?.sales_step_data?.after2_accessories_returned_checked),
             } as any);
             
@@ -1683,31 +1683,13 @@ export function ProductDetailDialog({
         });
     }, [open, roomId, order?.id, invoiceProductDetails, uniqueItems, optimisticAfterSaleStages]);
 
+    /** Chỉ lấy ảnh đã gắn vào đúng phiếu thu SP này — không kế thừa ảnh cũ cấp đơn/form. */
     const resolveReceiptPhotos = useCallback((
         receipt: DebtProductReceipt | undefined,
-        productId?: string,
+        _productId?: string,
     ): string[] => {
-        const direct = (receipt?.photos || []).filter((url): url is string => typeof url === 'string' && url.length > 0);
-        if (direct.length > 0) return direct;
-
-        const orderPhotos = parsePhotoUrls((order as any)?.debt_payment_photos);
-        if (orderPhotos.length > 0) return orderPhotos;
-
-        const formPhotos = parsePhotoUrls((formData as any)?.debt_payment_photos);
-        if (formPhotos.length > 0) return formPhotos;
-
-        if (productId && order) {
-            const item = [
-                ...(order.customer_items || []),
-                ...(order.sale_items || []),
-                ...(order.items || []),
-            ].find((row: any) => row?.id === productId) as any;
-            const itemPhotos = parsePhotoUrls(item?.debt_payment_photos);
-            if (itemPhotos.length > 0) return itemPhotos;
-        }
-
-        return [];
-    }, [order, formData]);
+        return (receipt?.photos || []).filter((url): url is string => typeof url === 'string' && url.length > 0);
+    }, []);
 
     const updateDebtReceipt = useCallback((productId: string, patch: Partial<DebtProductReceipt>) => {
         setDebtReceiptsByProduct((prev) => {
@@ -1715,23 +1697,14 @@ export function ProductDetailDialog({
             const current = prev[productId] || {
                 amount: detail?.collectDue || 0,
                 payment_method: 'cash' as const,
-                photos: resolveReceiptPhotos(undefined, productId),
+                photos: [],
                 collector_name: formData.debt_checked_by_name || user?.name || '',
                 notes: '',
             };
             const nextReceipt = { ...current, ...patch };
             return { ...prev, [productId]: nextReceipt };
         });
-        if (patch.photos?.length) {
-            setFormData((prev) => ({
-                ...prev,
-                debt_payment_photos: [...new Set([
-                    ...parsePhotoUrls((prev as any).debt_payment_photos),
-                    ...patch.photos!.filter(Boolean),
-                ])],
-            } as any));
-        }
-    }, [invoiceProductDetails, resolveReceiptPhotos, formData.debt_checked_by_name, user?.name]);
+    }, [invoiceProductDetails, formData.debt_checked_by_name, user?.name]);
 
     const isHandoffChecked = useCallback((item: any) => {
         return !!debtReceiptsByProduct[item.id];
@@ -2423,13 +2396,12 @@ export function ProductDetailDialog({
                                                                                         toast.error('Sản phẩm này đã thu hết nợ — không cần tạo phiếu thu');
                                                                                         return;
                                                                                     }
-                                                                                    const existingPhotos = resolveReceiptPhotos(undefined, item.id);
                                                                                     setDebtReceiptsByProduct((prev) => ({
                                                                                         ...prev,
                                                                                         [item.id]: prev[item.id] || {
                                                                                             amount: detail.collectDue,
                                                                                             payment_method: 'cash',
-                                                                                            photos: existingPhotos,
+                                                                                            photos: [],
                                                                                             collector_name: formData.debt_checked_by_name || user?.name || '',
                                                                                             notes: '',
                                                                                         },
@@ -2508,7 +2480,7 @@ export function ProductDetailDialog({
                                                         const receipt = debtReceiptsByProduct[detail.id] || {
                                                             amount: detail.collectDue,
                                                             payment_method: 'cash' as const,
-                                                            photos: resolveReceiptPhotos(undefined, detail.id),
+                                                            photos: [],
                                                             collector_name: formData.debt_checked_by_name || user?.name || '',
                                                             notes: '',
                                                         };
