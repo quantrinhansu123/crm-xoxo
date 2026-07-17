@@ -242,7 +242,9 @@ const AftersaleCard = memo(({
                     onClick={() => onProductCardClick(group, col.id)}
                 >
                     <div className="flex justify-between items-center gap-2 mb-2">
-                        <span className="text-xs font-semibold text-gray-400">#{order.order_code}</span>
+                        <span className="text-xs font-semibold text-gray-400">
+                            #{order.order_code}{(group.product as any)?.warranty_code || (group.product as any)?.care_warranty_flow === 'warranty' ? 'BH' : ''}
+                        </span>
                         {slaDisplay && (
                             <span className={cn(
                                 "flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0",

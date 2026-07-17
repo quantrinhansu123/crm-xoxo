@@ -1609,7 +1609,14 @@ export function ProductDetailDialog({
 
         const buildDetail = (item: any, services: any[], name: string, code?: string) => {
             // HD Bảo hành: khách đã thanh toán & cầm về ở chu kỳ trước — chu kỳ bảo hành thu 0đ.
-            const isWarranty = item?.care_warranty_flow === 'warranty' || !!item?.warranty_code;
+            // Kiểm tra cả product head và services vì dữ liệu cũ có thể chỉ lưu cờ bảo hành ở một cấp.
+            const warrantyCandidates = [item, product, group?.product, ...services, ...(group?.services || [])];
+            const isWarranty = warrantyCandidates.some((row: any) =>
+                row?.care_warranty_flow === 'warranty'
+                || row?.current_phase === 'warranty'
+                || String(row?.care_warranty_stage || row?.phase_stage || '').startsWith('war')
+                || String(row?.warranty_code || '').startsWith('HDBH')
+            );
             const serviceLines = services.map((service: any) => {
                 const quantity = Number(service.quantity || 1);
                 const amount = Number(service.total_price ?? service.unit_price ?? service.service?.price ?? service.package?.price ?? 0) * quantity;
@@ -1710,6 +1717,11 @@ export function ProductDetailDialog({
                 const stage = detail?.afterSaleStage
                     ?? getItemAfterSaleStage(uniqueItems.find((i) => i.id === id) || { id });
                 const collectDue = detail?.collectDue ?? 0;
+                // Draft có thể được tạo trước khi dữ liệu bảo hành reload; bảo hành luôn thu 0đ.
+                if (detail?.isWarranty && Number(next[id]?.amount) !== 0) {
+                    next[id] = { ...next[id], amount: 0 };
+                    changed = true;
+                }
                 if ((collectDue <= 0 && !detail?.isWarranty) || stage !== 'after1_debt') {
                     delete next[id];
                     changed = true;
@@ -2537,8 +2549,9 @@ export function ProductDetailDialog({
                                                                             <Input
                                                                                 type="text"
                                                                                 className="h-10 text-lg font-black text-red-600 bg-white border-red-200"
-                                                                                value={(receipt.amount || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") || "0"}
+                                                                                value={(detail.isWarranty ? 0 : (receipt.amount || 0)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") || "0"}
                                                                                 onChange={(e) => {
+                                                                                    if (detail.isWarranty) return;
                                                                                     const val = e.target.value.replace(/\./g, "");
                                                                                     if (/^\d*$/.test(val)) {
                                                                                         updateDebtReceipt(detail.id, {
@@ -2546,6 +2559,7 @@ export function ProductDetailDialog({
                                                                                         });
                                                                                     }
                                                                                 }}
+                                                                                disabled={isInputDisabled || detail.isWarranty}
                                                                             />
                                                                             <span className="absolute right-3 top-1/2 -translate-y-1/2 font-bold text-gray-400">đ</span>
                                                                         </div>
@@ -2585,7 +2599,10 @@ export function ProductDetailDialog({
                                                                 <div className="flex justify-between items-center">
                                                                     <span className="text-xs font-black text-purple-900 uppercase tracking-tight">Cần thu còn lại (đơn):</span>
                                                                     <span className="font-black text-lg text-gray-500">
-                                                                        {formatCurrency((order.remaining_debt ?? (order.total_amount - (order.paid_amount || 0))) - receiptCollectTotal)}
+                                                                        {formatCurrency(detail.isWarranty
+                                                                            ? 0
+                                                                            : Math.max(0, (order.remaining_debt ?? (order.total_amount - (order.paid_amount || 0))) - receiptCollectTotal)
+                                                                        )}
                                                                     </span>
                                                                 </div>
 

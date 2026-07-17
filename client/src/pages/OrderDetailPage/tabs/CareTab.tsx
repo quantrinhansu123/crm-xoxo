@@ -80,7 +80,9 @@ const CareCard = memo(({
                     onClick={() => onProductCardClick(group, col.id)}
                 >
                     <div className="flex justify-between items-start mb-2">
-                        <span className="text-xs font-semibold text-gray-400">#{order.order_code}</span>
+                        <span className="text-xs font-semibold text-gray-400">
+                            #{order.order_code}{(productItem as any)?.warranty_code || (productItem as any)?.care_warranty_flow === 'warranty' ? 'BH' : ''}
+                        </span>
                     </div>
 
                     <div className="space-y-2 mb-3">

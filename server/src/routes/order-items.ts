@@ -107,13 +107,8 @@ function derivePhaseFromStatus(status: string): { current_phase: string; phase_s
     if (['assigned', 'in_progress', 'processing'].includes(status)) {
         return { current_phase: 'workflow', phase_stage: 'room_active' };
     }
-    if (status === 'completed') {
-        return { current_phase: 'workflow', phase_stage: 'done' };
-    }
-    if (status === 'delivered') {
-        return { current_phase: 'after_sale', phase_stage: 'after1' };
-    }
-    if (status === 'after_sale') {
+    // Hoàn thành hạng mục → vào After sale (after1), không giữ workflow/done
+    if (status === 'completed' || status === 'delivered' || status === 'after_sale') {
         return { current_phase: 'after_sale', phase_stage: 'after1' };
     }
     return { current_phase: 'sales', phase_stage: 'step1' };
@@ -677,9 +672,19 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
         const phaseTable = entityType === 'order_item' ? 'order_items'
             : entityType === 'order_product_service' ? 'order_product_services'
             : 'order_products';
-        await supabaseAdmin.from(phaseTable)
-            .update({ current_phase, phase_stage })
+        const phaseUpdate: Record<string, unknown> = { current_phase, phase_stage };
+        if (current_phase === 'after_sale' && entityType !== 'order_product_service') {
+            phaseUpdate.after_sale_stage = 'after1';
+        }
+        const { error: phaseErr } = await supabaseAdmin.from(phaseTable)
+            .update(phaseUpdate)
             .eq('id', id);
+        if (phaseErr && phaseUpdate.after_sale_stage) {
+            // order_product_services có thể không có after_sale_stage
+            await supabaseAdmin.from(phaseTable)
+                .update({ current_phase, phase_stage })
+                .eq('id', id);
+        }
 
         res.json({
             status: 'success',
@@ -2579,7 +2584,10 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                 stage === 'after2'
                 && (oldStage === 'after1' || oldStage === 'after1_debt')
                 && debt_checked === true;
-            if (!isSingleStepBack && !isDebtCheckAdvance) {
+            const isEnterAfterSaleFromWorkflow =
+                stage === 'after1'
+                && currentItem?.current_phase !== 'after_sale';
+            if (!isSingleStepBack && !isDebtCheckAdvance && !isEnterAfterSaleFromWorkflow) {
                 assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
             }
         }

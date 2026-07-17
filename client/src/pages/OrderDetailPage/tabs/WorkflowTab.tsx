@@ -74,6 +74,13 @@ const WorkflowCard = memo(({
 
     const leadItem = group.services.find((s) => getItemCurrentStep(s.id)) ?? group.services[0];
     const workflowActionItem = group.product || leadItem;
+    const isWarranty = !!(
+        productItem?.care_warranty_flow === 'warranty'
+        || productItem?.warranty_code
+        || (leadItem as any)?.care_warranty_flow === 'warranty'
+        || (leadItem as any)?.warranty_code
+        || String(productItem?.warranty_code || '').startsWith('HDBH')
+    );
     // Isolation logic: only use orderExtensionRequest if it's truly global (no item IDs)
     const extensionRequest = productItem?.extension_request || (leadItem as any)?.extension_request || orderExtensionRequest;
     const stepDeadline = leadItem ? getStepDeadlineDisplay(leadItem.id) : { label: 'N/A', dueAt: null };
@@ -123,7 +130,16 @@ const WorkflowCard = memo(({
                     onClick={() => onCardClick(group, roomId)}
                 >
                     <div className="flex min-w-0 justify-between items-start mb-2">
-                        <span className="text-xs font-semibold text-gray-400">#{orderCode ?? cardKey?.slice(0, 8)}</span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-xs font-semibold text-gray-400">
+                                #{orderCode ?? cardKey?.slice(0, 8)}{isWarranty ? 'BH' : ''}
+                            </span>
+                            {isWarranty && (
+                                <Badge className="bg-orange-100 text-orange-700 border-orange-300 text-[10px] px-1 h-4 hover:bg-orange-100 shrink-0">
+                                    BH
+                                </Badge>
+                            )}
+                        </div>
                     </div>
 
                     <div className="min-w-0 space-y-2 mb-3">

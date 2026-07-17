@@ -885,7 +885,11 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                 stage === 'after2'
                 && (oldStage === 'after1' || oldStage === 'after1_debt')
                 && debt_checked === true;
-            if (!isSingleStepBack && !isDebtCheckAdvance) {
+            // Hoàn thành kỹ thuật / chu kỳ bảo hành: luôn được vào lại after1 dù after_sale_stage cũ là after4
+            const isEnterAfterSaleFromWorkflow =
+                stage === 'after1'
+                && currentItem?.current_phase !== 'after_sale';
+            if (!isSingleStepBack && !isDebtCheckAdvance && !isEnterAfterSaleFromWorkflow) {
                 assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
             }
         }

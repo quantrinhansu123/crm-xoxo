@@ -159,7 +159,7 @@ const SalesCard = memo(({
                     )}
                     <div className="flex justify-between items-start mb-2">
                         <div className="flex items-center gap-2">
-                            <span className="text-xs font-semibold text-gray-400">#{order.order_code}</span>
+                            <span className="text-xs font-semibold text-gray-400">#{order.order_code}{isWarranty ? 'BH' : ''}</span>
                             {isWarranty && (
                                 <Badge className="bg-orange-100 text-orange-700 border-orange-300 text-[10px] px-1 h-4 hover:bg-orange-100">
                                     BH
