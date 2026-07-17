@@ -696,7 +696,7 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
         if (orderIdForLog && entityType && (oldStatus !== status)) {
             try {
                 let logReason = reason || null;
-                let logNotes = sanitizeHistoryNotes(notes);
+                let logNotes: string | null = sanitizeHistoryNotes(notes) || null;
                 let logPhotos = normalizeMediaRefs(photos);
 
                 if (!logReason && !logNotes && logPhotos.length === 0 && oldStatus?.startsWith('step')) {
@@ -706,7 +706,7 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
                     logNotes = extracted.notes || null;
                     logPhotos = extracted.photos;
                 } else if (logPhotos.length > 0 && !logNotes) {
-                    logNotes = summarizeMediaUpload(logPhotos, '');
+                    logNotes = summarizeMediaUpload(logPhotos, '') || null;
                 }
 
                 await supabaseAdmin.from('order_item_status_log').insert({
