@@ -303,6 +303,7 @@ export function OrderDetailPage() {
     const [failItemId, setFailItemId] = useState<string>('');
     const [showConfirmDoneDialog, setShowConfirmDoneDialog] = useState(false);
     const [confirmDoneItemIds, setConfirmDoneItemIds] = useState<string[]>([]);
+    const [confirmDoneProductId, setConfirmDoneProductId] = useState<string | null>(null);
     const [isV2ServiceForDone, setIsV2ServiceForDone] = useState(false);
 
     const [showProductDialog, setShowProductDialog] = useState(false);
@@ -604,10 +605,10 @@ export function OrderDetailPage() {
         if (!leadItem) return;
 
         if (targetRoomId === 'done') {
-            const itemIds = [...group.services.map(s => s.id)];
-            if (group.product?.id) itemIds.push(group.product.id);
-            setConfirmDoneItemIds(itemIds);
-            setIsV2ServiceForDone(group.services.some(s => s.item_type === 'service' || s.item_type === 'package'));
+            // Chỉ complete dịch vụ — product head V2 cập nhật riêng (tránh 404 /order-items/:productId/complete)
+            setConfirmDoneItemIds(group.services.map(s => s.id).filter(Boolean));
+            setConfirmDoneProductId(group.product?.id || null);
+            setIsV2ServiceForDone(group.services.some(s => s.item_type === 'service' || s.item_type === 'package') || !!group.product?.is_customer_item);
             setShowConfirmDoneDialog(true);
         } else if (targetRoomId === 'fail') {
             setFailItemId(leadItem.id);
@@ -1415,6 +1416,7 @@ export function OrderDetailPage() {
                 open={showConfirmDoneDialog}
                 onOpenChange={setShowConfirmDoneDialog}
                 itemIds={confirmDoneItemIds}
+                productId={confirmDoneProductId}
                 isV2Service={isV2ServiceForDone}
                 onSuccess={async () => {
                     const updated = await reloadOrder();

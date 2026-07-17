@@ -584,7 +584,12 @@ export function AftersaleTab({
     const handleFeedbackAction = (group: WorkflowKanbanGroup, flow: 'care' | 'warranty') => {
         if (!order || !group.product) return;
         const itemId = group.product.id;
-        const isCustomerItem = !!group.product.is_customer_item;
+        // V2 product head luôn nằm ở order_products (is_customer_item / product_code)
+        const isCustomerItem = !!(
+            group.product.is_customer_item ||
+            (group.product as any).product_code ||
+            (group.product as any).item_code
+        );
         
         const payload = { 
             stage: 'after4', 
@@ -596,14 +601,13 @@ export function AftersaleTab({
             ? orderProductsApi.updateAfterSaleData(itemId, payload)
             : orderItemsApi.updateAfterSaleData(itemId, payload);
 
-        toast.success(`Đã chuyển sản phẩm sang ${flow === 'care' ? 'Lưu trữ' : 'Bảo hành'}`);
-
         apiPromise.then(() => {
+            toast.success(`Đã chuyển sản phẩm sang ${flow === 'care' ? 'Lưu trữ' : 'Bảo hành'}`);
             reloadOrder();
             fetchKanbanLogs(order.id);
         }).catch((e: any) => {
             reloadOrder();
-            toast.error(e?.response?.data?.message || 'Lỗi cập nhật');
+            toast.error(e?.response?.data?.message || e?.message || 'Lỗi cập nhật');
         });
     };
 
@@ -628,7 +632,11 @@ export function AftersaleTab({
         const draggedGroup = groups.find(g => g.product?.id === itemId);
         if (!draggedGroup || !draggedGroup.product) return;
 
-        const isCustomerItem = !!draggedGroup.product.is_customer_item;
+        const isCustomerItem = !!(
+            draggedGroup.product.is_customer_item ||
+            (draggedGroup.product as any).product_code ||
+            (draggedGroup.product as any).item_code
+        );
 
         if (result.source.droppableId === 'after1' && newStage === 'after1_debt') {
             const validationErrors = getAfter1ToDebtValidationErrors(draggedGroup.product);

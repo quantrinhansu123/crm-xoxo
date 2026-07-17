@@ -946,6 +946,21 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
             throw new ApiError('Không tìm thấy hạng mục', 404);
         }
 
+        // Normalize nested order relation (object | array | missing)
+        const nestedOrder = Array.isArray(item.order) ? item.order[0] : item.order;
+        if (nestedOrder && !item.order_id) {
+            item.order = nestedOrder;
+        } else if (!nestedOrder && item.order_id) {
+            const { data: ord } = await supabaseAdmin
+                .from('orders')
+                .select('id, order_code, sales_id, customer:customers(name)')
+                .eq('id', item.order_id)
+                .maybeSingle();
+            if (ord) item.order = ord;
+        } else if (nestedOrder) {
+            item.order = nestedOrder;
+        }
+
         // 3. Mark all workflow steps for this item as 'completed'
         // This ensures the progress bar and Kanban details are correct
         const stepFilter = isV2 ? { order_product_service_id: id } : { order_item_id: id };
@@ -991,19 +1006,22 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
                     user_id: item.order.sales_id,
                     type: 'item_completed',
                     title: 'Dịch vụ đã hoàn thành',
-                    content: 'Dịch vụ "' + item.item_name + '" trong đơn ' + item.order.order_code + ' đã được hoàn thành',
+                    content: 'Dịch vụ "' + (item.item_name || item.name || '') + '" trong đơn ' + item.order.order_code + ' đã được hoàn thành',
                     data: {
                         order_id: item.order.id,
                         order_code: item.order.order_code,
                         item_id: item.id,
-                        item_name: item.item_name
+                        item_name: item.item_name || item.name
                     },
                     is_read: false
                 });
         }
 
         // Check and potentially complete the order
-        const allRelatedCompleted = await checkAndCompleteOrder(item.order.id);
+        const orderIdForComplete = item.order?.id || item.order_id;
+        const allRelatedCompleted = orderIdForComplete
+            ? await checkAndCompleteOrder(orderIdForComplete)
+            : false;
 
         res.json({
             status: 'success',

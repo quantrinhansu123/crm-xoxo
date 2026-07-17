@@ -938,7 +938,14 @@ export function WorkflowTab({
                                                                         itemName: groupName
                                                                     });
                                                                 } else {
-                                                                    setSelectedLogDetail(log);
+                                                                    const matchedGroup = workflowKanbanGroups?.find(g =>
+                                                                        g.product?.id === log.entity_id || g.services.some(s => s.id === log.entity_id)
+                                                                    );
+                                                                    const stepSource = matchedGroup?.product || matchedGroup?.services?.[0];
+                                                                    setSelectedLogDetail({
+                                                                        ...log,
+                                                                        _sales_step_data: (stepSource as any)?.sales_step_data || null,
+                                                                    });
                                                                     setShowLogDetailDialog(true);
                                                                 }
                                                             }}

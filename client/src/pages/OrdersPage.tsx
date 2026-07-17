@@ -68,6 +68,7 @@ export function OrdersPage() {
     // Confirm done dialog states
     const [showConfirmDoneDialog, setShowConfirmDoneDialog] = useState(false);
     const [confirmDoneItemIds, setConfirmDoneItemIds] = useState<string[]>([]);
+    const [confirmDoneProductId, setConfirmDoneProductId] = useState<string | null>(null);
     const [isV2ServiceForDone, setIsV2ServiceForDone] = useState(false);
     const [orderToCheckStatus, setOrderToCheckStatus] = useState<string | null>(null);
 
@@ -100,13 +101,11 @@ export function OrdersPage() {
         order: Order,
         group: { product: OrderItem | null; services: OrderItem[] },
     ) => {
-        const itemIds: string[] = [];
-        if (group.product) itemIds.push(group.product.id);
-        group.services.forEach(s => itemIds.push(s.id));
-
-        setConfirmDoneItemIds(itemIds);
+        setConfirmDoneItemIds(group.services.map(s => s.id).filter(Boolean));
+        setConfirmDoneProductId(group.product?.id || null);
         setIsV2ServiceForDone(
-            group.services.some(s => s.item_type === 'service' || s.item_type === 'package'),
+            group.services.some(s => s.item_type === 'service' || s.item_type === 'package')
+            || !!(group.product as any)?.is_customer_item,
         );
         setOrderToCheckStatus(order.id);
         setShowConfirmDoneDialog(true);
@@ -723,6 +722,7 @@ export function OrdersPage() {
                 open={showConfirmDoneDialog}
                 onOpenChange={setShowConfirmDoneDialog}
                 itemIds={confirmDoneItemIds}
+                productId={confirmDoneProductId}
                 isV2Service={isV2ServiceForDone}
                 onSuccess={async () => {
                     await fetchOrders();

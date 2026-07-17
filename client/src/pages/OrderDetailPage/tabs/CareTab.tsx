@@ -197,7 +197,11 @@ export function CareTab({
         const group = groups.find(g => g.product?.id === itemId);
         if (!group || !group.product) return;
 
-        const isCustomerItem = !!(group.product as any).is_customer_item;
+        const isCustomerItem = !!(
+            (group.product as any).is_customer_item ||
+            (group.product as any).product_code ||
+            (group.product as any).item_code
+        );
 
         // Luôn yêu cầu xác nhận (ghi chú + ảnh) trước khi thực hiện chuyển bước xuôi
         setPendingCareMove({ itemId, isCustomerItem, toFlow, toStage, fromStage, productId: group.product.id, group });

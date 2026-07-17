@@ -14,8 +14,11 @@ import { toast } from 'sonner';
 interface ConfirmDoneDialogProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    /** ID dịch vụ / hạng mục cần complete (order_items hoặc order_product_services) */
     itemIds: string[];
-    isV2Service: boolean; // items vs services
+    /** ID sản phẩm V2 (order_products) — không gọi /order-items/:id/complete */
+    productId?: string | null;
+    isV2Service: boolean;
     onSuccess: () => void;
 }
 
@@ -23,27 +26,54 @@ export function ConfirmDoneDialog({
     open,
     onOpenChange,
     itemIds,
+    productId,
     isV2Service,
     onSuccess,
 }: ConfirmDoneDialogProps) {
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async () => {
-        if (!itemIds || itemIds.length === 0) return;
+        const serviceIds = (itemIds || []).filter((id) => id && id !== productId);
+        if (serviceIds.length === 0 && !productId) return;
+
         setLoading(true);
         try {
-            // Completing all items in the group
-            await Promise.all(itemIds.map(id =>
-                orderItemsApi.complete(id, isV2Service ? 'Hoàn thành dịch vụ' : 'Hoàn thành hạng mục')
-            ));
+            // Chỉ complete dịch vụ/hạng mục — product head V2 không tồn tại trên /order-items/:id/complete
+            for (const id of serviceIds) {
+                await orderItemsApi.complete(
+                    id,
+                    isV2Service ? 'Hoàn thành dịch vụ' : 'Hoàn thành hạng mục'
+                );
+            }
 
-            const count = isV2Service ? (itemIds.length > 1 ? itemIds.length - 1 : 1) : itemIds.length;
+            // Đưa sản phẩm V2 vào after-sale (kanban After sale đọc stage trên product head)
+            if (productId) {
+                try {
+                    await orderProductsApi.updateAfterSaleData(productId, {
+                        stage: 'after1',
+                    });
+                } catch (productErr: any) {
+                    // Fallback: đánh dấu delivered/completed nếu after-sale-data lỗi
+                    const status = productErr?.response?.status;
+                    if (status === 404 || status === 400) {
+                        await orderProductsApi.updateStatus(productId, 'delivered');
+                    } else {
+                        throw productErr;
+                    }
+                }
+            }
+
+            const count = serviceIds.length || 1;
             const label = isV2Service ? 'dịch vụ' : 'hạng mục';
             toast.success(`Sản phẩm đã hoàn thành ${count} ${label}`);
             onSuccess();
             onOpenChange(false);
         } catch (error: any) {
-            toast.error(error.message || 'Có lỗi xảy ra khi hoàn thành');
+            const msg =
+                error?.response?.data?.message ||
+                error?.message ||
+                'Có lỗi xảy ra khi hoàn thành';
+            toast.error(msg);
         } finally {
             setLoading(false);
         }

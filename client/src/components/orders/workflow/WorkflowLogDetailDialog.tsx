@@ -21,6 +21,7 @@ import {
     getCareWarrantyStageLabel,
 } from '@/pages/OrderDetailPage/constants';
 import { enrichSalesTransitionLog } from '@/lib/salesStepLogContent';
+import { getDriveThumbnailUrl, isDriveUrl } from '@/lib/driveMedia';
 
 interface WorkflowLogDetailDialogProps {
     open: boolean;
@@ -55,6 +56,13 @@ function parseAssignmentNotes(notes: string) {
     });
 
     return { reason, note, deadline, technician };
+}
+
+function photoSrc(url: string): string {
+    if (isDriveUrl(url)) {
+        return getDriveThumbnailUrl(url) || url;
+    }
+    return url;
 }
 
 export function WorkflowLogDetailDialog({
@@ -103,13 +111,20 @@ export function WorkflowLogDetailDialog({
         return 'bg-blue-100 text-blue-700 hover:bg-blue-100';
     })();
 
-    const displayReason = enrichedLog.reason || reason || (enrichedLog.action === 'backward_move' ? 'Lùi bước' : '');
-    const displayNote = enrichedLog.notes && !isWorkflowStep ? enrichedLog.notes : note;
-    const displayPhotos = Array.isArray(enrichedLog.photos) ? enrichedLog.photos : [];
+    const displayReason = (enrichedLog.reason || reason || (enrichedLog.action === 'backward_move' ? 'Lùi bước' : '') || '').toString().trim();
+    const rawNote = (enrichedLog.notes && !isWorkflowStep ? enrichedLog.notes : note) || '';
+    const displayNote = rawNote.toString().trim();
+    const displayPhotos = Array.isArray(enrichedLog.photos)
+        ? enrichedLog.photos.filter((u: unknown): u is string => typeof u === 'string' && u.length > 0)
+        : [];
+    const hasContent = !!(displayReason || displayNote || displayPhotos.length > 0);
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-md bg-white border-2">
+            <DialogContent
+                className="max-w-md bg-white border-2 z-[200]"
+                overlayClassName="z-[200]"
+            >
                 <DialogHeader>
                     <div className="flex items-center gap-2 mb-2 flex-wrap">
                         <Badge className={cn('text-[10px] font-bold px-2 py-0.5', badgeClass)}>
@@ -163,7 +178,7 @@ export function WorkflowLogDetailDialog({
 
                         {displayReason && (
                             <div className="space-y-1.5">
-                                <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">Lý do</h4>
+                                <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">Nội dung</h4>
                                 <p className="text-sm font-bold text-gray-800 leading-relaxed px-1">{displayReason}</p>
                             </div>
                         )}
@@ -206,22 +221,30 @@ export function WorkflowLogDetailDialog({
                                 <div className="grid grid-cols-2 gap-2">
                                     {displayPhotos.map((photo: string, idx: number) => (
                                         <a
-                                            key={idx}
+                                            key={`${photo}-${idx}`}
                                             href={photo}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="aspect-square rounded-xl overflow-hidden border-2 border-white shadow-sm hover:ring-2 hover:ring-primary/20 transition-all bg-gray-50"
                                         >
-                                            <img src={photo} alt="" className="w-full h-full object-cover" />
+                                            <img
+                                                src={photoSrc(photo)}
+                                                alt={`Bằng chứng ${idx + 1}`}
+                                                className="w-full h-full object-cover"
+                                                loading="lazy"
+                                            />
                                         </a>
                                     ))}
                                 </div>
                             </div>
                         )}
 
-                        {!displayReason && !displayNote && displayPhotos.length === 0 && isTransitionLog && (
+                        {!hasContent && isTransitionLog && (
                             <p className="text-sm text-muted-foreground italic px-1">
                                 Không có ghi chú hoặc ảnh đính kèm cho lần chuyển bước này.
+                                {enrichedLog._enriched_from_step
+                                    ? ' (Chưa lưu form bước trước khi chuyển.)'
+                                    : ''}
                             </p>
                         )}
                     </div>

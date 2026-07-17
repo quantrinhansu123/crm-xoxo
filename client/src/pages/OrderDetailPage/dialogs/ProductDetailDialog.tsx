@@ -880,7 +880,7 @@ export function ProductDetailDialog({
 
         // Kiểm nợ → Đóng gói: bắt buộc chọn ≥1 SP bàn giao (+ ảnh bill nếu thu tiền > 0 đã check ở trên)
         if (isAftersale && roomId.startsWith('after1_debt') && !onConfirmAndMove) {
-            const hasBillableHandoff = invoiceProductDetails.some((d) => d.collectDue > 0);
+            const hasBillableHandoff = invoiceProductDetails.some((d) => d.collectDue > 0 || d.isWarranty);
             if (hasBillableHandoff && Object.keys(debtReceiptsByProduct).length === 0) {
                 showAfterSaleValidationToast(['Chọn ít nhất 1 sản phẩm trong "Danh sách bàn giao đợt này"']);
                 return;
@@ -1406,10 +1406,35 @@ export function ProductDetailDialog({
     );
 
     const openLogDetail = (log: any) => {
-        const item = (product || services[0]) as { sales_step_data?: Record<string, unknown> } | undefined;
+        const item = (product || services[0]) as any;
+        const entityId = log?.entity_id || item?.id;
+        const fromOrderItem = order
+            ? [
+                ...(order.customer_items || []),
+                ...(order.sale_items || []),
+                ...(order.items || []),
+            ].find((row: any) => row?.id === entityId || row?.id === item?.id)
+            : null;
+
+        const parentProductId = item?.product?.id || (fromOrderItem as any)?.product?.id;
+        const parentFromOrder = parentProductId && order
+            ? [
+                ...(order.customer_items || []),
+                ...(order.items || []),
+            ].find((row: any) => row?.id === parentProductId)
+            : null;
+
+        const mergedStepData = {
+            ...((parentFromOrder as any)?.sales_step_data || {}),
+            ...((fromOrderItem as any)?.sales_step_data || {}),
+            ...(item?.sales_step_data || {}),
+            ...((formData as any)?.sales_step_data || {}),
+            ...(stepData || {}),
+        };
+
         setSelectedLogDetail({
             ...log,
-            _sales_step_data: item?.sales_step_data || null,
+            _sales_step_data: Object.keys(mergedStepData).length > 0 ? mergedStepData : null,
         });
         setShowLogDetailDialog(true);
     };
@@ -1575,6 +1600,8 @@ export function ProductDetailDialog({
         if (!order) return [];
 
         const buildDetail = (item: any, services: any[], name: string, code?: string) => {
+            // HD Bảo hành: khách đã thanh toán & cầm về ở chu kỳ trước — chu kỳ bảo hành thu 0đ.
+            const isWarranty = item?.care_warranty_flow === 'warranty' || !!item?.warranty_code;
             const serviceLines = services.map((service: any) => {
                 const quantity = Number(service.quantity || 1);
                 const amount = Number(service.total_price ?? service.unit_price ?? service.service?.price ?? service.package?.price ?? 0) * quantity;
@@ -1584,7 +1611,7 @@ export function ProductDetailDialog({
                     name: service.item_name || service.service?.name || service.package?.name || 'Dịch vụ',
                     amount,
                     deposit,
-                    collectDue: Math.max(0, amount - deposit),
+                    collectDue: isWarranty ? 0 : Math.max(0, amount - deposit),
                 };
             });
             const serviceTotal = serviceLines.reduce((sum, s) => sum + s.amount, 0);
@@ -1596,12 +1623,13 @@ export function ProductDetailDialog({
                 id: item.id,
                 name,
                 code,
+                isWarranty,
                 afterSaleStage: getItemAfterSaleStage(item),
                 services: serviceLines,
                 surchargeTotal,
                 depositTotal,
                 total,
-                collectDue: Math.max(0, total - depositTotal),
+                collectDue: isWarranty ? 0 : Math.max(0, total - depositTotal),
             };
         };
 
@@ -1627,27 +1655,27 @@ export function ProductDetailDialog({
         });
     }, [order, uniqueItems, optimisticAfterSaleStages]);
 
-    // SP còn cần thu (bill > 0) — ẩn SP đã thu hết / bill = 0 khỏi danh sách bàn giao
+    // SP cần bàn giao đợt này: còn tiền phải thu (bill > 0) HOẶC HD bảo hành (thu 0đ nhưng vẫn phải trả khách).
     const billableProductDetails = useMemo(
-        () => invoiceProductDetails.filter((d) => d.collectDue > 0),
+        () => invoiceProductDetails.filter((d) => d.collectDue > 0 || d.isWarranty),
         [invoiceProductDetails],
     );
 
     // Chỉ SP đang ở Kiểm nợ (after1_debt) và còn cần thu mới hiện trong bàn giao đợt này.
     // SP đã thanh toán / đã sang Đóng gói (after2+) không còn trong danh sách.
     const handoffEligibleProducts = useMemo(() => {
-        const collectDueById = new Map(billableProductDetails.map((d) => [d.id, d.collectDue]));
+        const eligibleIds = new Set(billableProductDetails.map((d) => d.id));
         return uniqueItems.filter(
             (item) =>
                 (item as any).is_customer_item &&
                 item.item_type !== 'service' &&
                 getItemAfterSaleStage(item) === 'after1_debt' &&
-                (collectDueById.get(item.id) ?? 0) > 0
+                eligibleIds.has(item.id)
         );
     }, [uniqueItems, optimisticAfterSaleStages, billableProductDetails]);
 
     const handoffSelectedDetails = useMemo(() => {
-        return invoiceProductDetails.filter((detail) => !!debtReceiptsByProduct[detail.id] && detail.collectDue > 0);
+        return invoiceProductDetails.filter((detail) => !!debtReceiptsByProduct[detail.id] && (detail.collectDue > 0 || detail.isWarranty));
     }, [invoiceProductDetails, debtReceiptsByProduct]);
 
     const handoffCollectAmount = useMemo(() => {
@@ -1674,7 +1702,7 @@ export function ProductDetailDialog({
                 const stage = detail?.afterSaleStage
                     ?? getItemAfterSaleStage(uniqueItems.find((i) => i.id === id) || { id });
                 const collectDue = detail?.collectDue ?? 0;
-                if (collectDue <= 0 || stage !== 'after1_debt') {
+                if ((collectDue <= 0 && !detail?.isWarranty) || stage !== 'after1_debt') {
                     delete next[id];
                     changed = true;
                 }
@@ -2263,9 +2291,9 @@ export function ProductDetailDialog({
                                                                                     )}
                                                                                 </div>
                                                                             ))}
-                                                                            {item.depositTotal > 0 && (
+                                                                            {(item.depositTotal > 0 || item.isWarranty) && (
                                                                                 <div className="flex justify-between gap-2 border-t border-purple-100 pt-1 text-[10px] font-bold text-purple-800">
-                                                                                    <span>Cần thu SP này</span>
+                                                                                    <span>{item.isWarranty ? 'Cần thu SP này (bảo hành)' : 'Cần thu SP này'}</span>
                                                                                     <span className="tabular-nums">{formatCurrency(item.collectDue)}</span>
                                                                                 </div>
                                                                             )}
@@ -2392,7 +2420,7 @@ export function ProductDetailDialog({
                                                                                         return;
                                                                                     }
                                                                                     const detail = invoiceProductDetails.find((d) => d.id === item.id);
-                                                                                    if (!detail || detail.collectDue <= 0) {
+                                                                                    if (!detail || (detail.collectDue <= 0 && !detail.isWarranty)) {
                                                                                         toast.error('Sản phẩm này đã thu hết nợ — không cần tạo phiếu thu');
                                                                                         return;
                                                                                     }
