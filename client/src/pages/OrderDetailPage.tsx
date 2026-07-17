@@ -602,18 +602,23 @@ export function OrderDetailPage() {
         if (!group) return;
 
         const leadItem = group.services.find((s) => getItemCurrentStep(s.id)) ?? group.services[0];
-        if (!leadItem) return;
+        // Cho phép kéo SP (chỉ có product head) sang Hoàn thành / Thất bại
+        if (!leadItem && !group.product) return;
 
         if (targetRoomId === 'done') {
             // Chỉ complete dịch vụ — product head V2 cập nhật riêng (tránh 404 /order-items/:productId/complete)
             setConfirmDoneItemIds(group.services.map(s => s.id).filter(Boolean));
             setConfirmDoneProductId(group.product?.id || null);
-            setIsV2ServiceForDone(group.services.some(s => s.item_type === 'service' || s.item_type === 'package') || !!group.product?.is_customer_item);
+            setIsV2ServiceForDone(
+                group.services.some(s => s.item_type === 'service' || s.item_type === 'package')
+                || !!group.product?.is_customer_item
+            );
             setShowConfirmDoneDialog(true);
         } else if (targetRoomId === 'fail') {
-            setFailItemId(leadItem.id);
+            setFailItemId(leadItem?.id || group.product!.id);
             setShowFailDialog(true);
         } else {
+            if (!leadItem) return;
             const room = [...TECH_ROOMS].find(r => r.id === targetRoomId);
             if (room) {
                 setMoveStepItemId(leadItem.id);

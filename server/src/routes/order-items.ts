@@ -904,25 +904,63 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
         // Try V2 service
         if (!item) {
             isV2 = true;
-            const { data: v2Item, error: v2Error } = await supabaseAdmin
+            const v2UpdateFull: Record<string, unknown> = {
+                status: 'completed',
+                completed_at: new Date().toISOString(),
+                notes: notes || null,
+                current_phase: 'after_sale',
+                phase_stage: 'after1',
+                after_sale_stage: 'after1',
+            };
+            let { data: v2Item, error: v2Error } = await supabaseAdmin
                 .from('order_product_services')
-                .update({
-                    status: 'completed',
-                    completed_at: new Date().toISOString(),
-                    notes: notes || null,
-                    current_phase: 'after_sale',
-                    phase_stage: 'after1',
-                    after_sale_stage: 'after1',
-                })
+                .update(v2UpdateFull)
                 .eq('id', id)
                 .select('*, order_product:order_products(order:orders(id, order_code, sales_id, customer:customers(name)))')
                 .maybeSingle();
 
+            // Một số DB chưa có after_sale_stage trên order_product_services → retry không cột đó
+            if (!v2Item && v2Error) {
+                console.error('[CompleteItem] V2 service update failed, retry without after_sale_stage:', v2Error.message);
+                const retry = await supabaseAdmin
+                    .from('order_product_services')
+                    .update({
+                        status: 'completed',
+                        completed_at: new Date().toISOString(),
+                        notes: notes || null,
+                        current_phase: 'after_sale',
+                        phase_stage: 'after1',
+                    })
+                    .eq('id', id)
+                    .select('*, order_product:order_products(order:orders(id, order_code, sales_id, customer:customers(name)))')
+                    .maybeSingle();
+                v2Item = retry.data;
+                v2Error = retry.error;
+            }
+
             if (v2Item) {
                 item = {
                     ...v2Item,
-                    order: v2Item.order_product?.order
+                    order: Array.isArray(v2Item.order_product?.order)
+                        ? v2Item.order_product.order[0]
+                        : v2Item.order_product?.order,
                 };
+                // Đưa product head sang after-sale khi hoàn thành dịch vụ
+                const productId = v2Item.order_product_id || v2Item.order_product?.id;
+                if (productId) {
+                    await supabaseAdmin
+                        .from('order_products')
+                        .update({
+                            status: 'completed',
+                            completed_at: new Date().toISOString(),
+                            current_phase: 'after_sale',
+                            phase_stage: 'after1',
+                            after_sale_stage: 'after1',
+                        })
+                        .eq('id', productId);
+                }
+            } else if (v2Error) {
+                console.error('[CompleteItem] V2 service still failing:', v2Error.message);
             }
         }
 

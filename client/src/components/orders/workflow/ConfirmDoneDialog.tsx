@@ -22,6 +22,31 @@ interface ConfirmDoneDialogProps {
     onSuccess: () => void;
 }
 
+async function completeOneService(id: string, isV2: boolean, notes: string) {
+    if (isV2) {
+        try {
+            await orderProductsApi.completeService(id, notes);
+            return;
+        } catch (err: any) {
+            // Fallback sang order-items (cùng ID dịch vụ V2)
+            if (err?.response?.status !== 404 && err?.response?.status !== 500) throw err;
+        }
+    }
+    await orderItemsApi.complete(id, notes);
+}
+
+async function moveProductToAfterSale(productId: string) {
+    // Ưu tiên after-sale-data (set after_sale_stage); fallback status delivered
+    try {
+        await orderProductsApi.updateAfterSaleData(productId, { stage: 'after1' });
+        return;
+    } catch (err: any) {
+        const status = err?.response?.status;
+        if (status !== 404 && status !== 400 && status !== 500) throw err;
+    }
+    await orderProductsApi.updateStatus(productId, 'delivered');
+}
+
 export function ConfirmDoneDialog({
     open,
     onOpenChange,
@@ -33,33 +58,44 @@ export function ConfirmDoneDialog({
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async () => {
-        const serviceIds = (itemIds || []).filter((id) => id && id !== productId);
+        const serviceIds = [...new Set((itemIds || []).filter((id) => id && id !== productId))];
         if (serviceIds.length === 0 && !productId) return;
 
         setLoading(true);
         try {
-            // Chỉ complete dịch vụ/hạng mục — product head V2 không tồn tại trên /order-items/:id/complete
+            const notes = isV2Service ? 'Hoàn thành dịch vụ' : 'Hoàn thành hạng mục';
+            const errors: string[] = [];
+
             for (const id of serviceIds) {
-                await orderItemsApi.complete(
-                    id,
-                    isV2Service ? 'Hoàn thành dịch vụ' : 'Hoàn thành hạng mục'
-                );
+                try {
+                    await completeOneService(id, isV2Service, notes);
+                } catch (err: any) {
+                    const msg = err?.response?.data?.message || err?.message || `Lỗi hoàn thành ${id}`;
+                    errors.push(msg);
+                }
             }
 
-            // Đưa sản phẩm V2 vào after-sale (kanban After sale đọc stage trên product head)
             if (productId) {
                 try {
-                    await orderProductsApi.updateAfterSaleData(productId, {
-                        stage: 'after1',
-                    });
-                } catch (productErr: any) {
-                    // Fallback: đánh dấu delivered/completed nếu after-sale-data lỗi
-                    const status = productErr?.response?.status;
-                    if (status === 404 || status === 400) {
-                        await orderProductsApi.updateStatus(productId, 'delivered');
-                    } else {
-                        throw productErr;
+                    await moveProductToAfterSale(productId);
+                } catch (err: any) {
+                    // Nếu đã complete hết dịch vụ thì product có thể đã được server kéo sang after-sale
+                    if (serviceIds.length === 0) {
+                        throw err;
                     }
+                    console.warn('[ConfirmDone] product after-sale update soft-fail:', err);
+                }
+            }
+
+            if (errors.length > 0 && errors.length === serviceIds.length && !productId) {
+                throw new Error(errors[0]);
+            }
+            if (errors.length > 0 && serviceIds.length > 0 && errors.length === serviceIds.length) {
+                // Mọi dịch vụ fail — thử chỉ đưa product sang after-sale
+                if (productId) {
+                    await moveProductToAfterSale(productId);
+                } else {
+                    throw new Error(errors[0]);
                 }
             }
 

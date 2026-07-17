@@ -186,6 +186,7 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
             updateData.delivered_at = new Date().toISOString();
             updateData.current_phase = 'after_sale';
             updateData.phase_stage = 'after1';
+            updateData.after_sale_stage = 'after1';
         }
 
         const { data: product, error } = await supabaseAdmin
@@ -559,14 +560,16 @@ router.patch('/services/:serviceId/complete', authenticate, async (req: Authenti
             .update({
                 status: 'completed',
                 completed_at: new Date().toISOString(),
-                notes: notes || null
+                notes: notes || null,
+                current_phase: 'after_sale',
+                phase_stage: 'after1',
             })
             .eq('id', serviceId)
             .select()
             .single();
 
         if (error) {
-            throw new ApiError('Không thể hoàn thành dịch vụ', 500);
+            throw new ApiError('Không thể hoàn thành dịch vụ: ' + error.message, 500);
         }
 
         const context = await getServiceNotificationContext(serviceId);
@@ -597,17 +600,19 @@ router.patch('/services/:serviceId/complete', authenticate, async (req: Authenti
 
         const allCompleted = allServices?.every(s => s.status === 'completed' || s.status === 'cancelled');
 
-        // If all services completed, update product status and check parent order
+        // If all services completed, update product status + after-sale
         if (allCompleted) {
             await supabaseAdmin
                 .from('order_products')
                 .update({
                     status: 'completed',
-                    completed_at: new Date().toISOString()
+                    completed_at: new Date().toISOString(),
+                    current_phase: 'after_sale',
+                    phase_stage: 'after1',
+                    after_sale_stage: 'after1',
                 })
                 .eq('id', service.order_product_id);
 
-            // Check if parent order can be completed
             const { data: op } = await supabaseAdmin
                 .from('order_products')
                 .select('order_id')
@@ -909,14 +914,21 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
 
         // Đồng bộ bước xuống dịch vụ của đúng sản phẩm này (không đụng SP khác trên đơn)
         if (stage !== undefined && care_warranty_flow === undefined && product?.id) {
-            await supabaseAdmin
+            const svcUpdate: Record<string, unknown> = {
+                current_phase: 'after_sale',
+                phase_stage: stage,
+            };
+            const { error: svcErr } = await supabaseAdmin
                 .from('order_product_services')
-                .update({
-                    current_phase: 'after_sale',
-                    phase_stage: stage,
-                    after_sale_stage: stage,
-                })
+                .update({ ...svcUpdate, after_sale_stage: stage })
                 .eq('order_product_id', id);
+            if (svcErr) {
+                // DB có thể chưa có after_sale_stage trên services
+                await supabaseAdmin
+                    .from('order_product_services')
+                    .update(svcUpdate)
+                    .eq('order_product_id', id);
+            }
         }
 
         // 🔔 WH1: Fire webhook — Lưu thông tin nhận đồ (khi sales_step_data được cập nhật)
