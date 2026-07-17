@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { formatDateTime } from '@/lib/utils';
-import { User, Clock, MessageSquare, Wrench, Calendar, ArrowLeft } from 'lucide-react';
+import { User, Clock, MessageSquare, Wrench, Calendar, ArrowLeft, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
     getWorkflowRequestLogDisplay,
@@ -21,7 +21,8 @@ import {
     getCareWarrantyStageLabel,
 } from '@/pages/OrderDetailPage/constants';
 import { enrichSalesTransitionLog } from '@/lib/salesStepLogContent';
-import { getDriveThumbnailUrl, isDriveUrl } from '@/lib/driveMedia';
+import { getDriveThumbnailUrl, getDriveViewUrl, isDriveUrl } from '@/lib/driveMedia';
+import { mediaRefLabel, sanitizeHistoryNotes } from '@/lib/historyLog';
 
 interface WorkflowLogDetailDialogProps {
     open: boolean;
@@ -40,7 +41,8 @@ function getLogStepLabel(val: string | null | undefined): string {
 function parseAssignmentNotes(notes: string) {
     if (!notes) return { reason: '', note: '', deadline: '', technician: '' };
 
-    const lines = notes.split('\n');
+    const clean = sanitizeHistoryNotes(notes);
+    const lines = clean.split('\n');
     const reason = lines[0] || '';
     let note = '';
     let deadline = '';
@@ -48,10 +50,12 @@ function parseAssignmentNotes(notes: string) {
 
     lines.forEach((line, idx) => {
         if (line.startsWith('Lưu ý: ')) note = line.replace('Lưu ý: ', '');
-        else if (line.startsWith('Hạn hoàn thành: ')) deadline = line.replace('Hạn hoàn thành: ', '');
-        else if (line.startsWith('Kỹ thuật viên: ')) technician = line.replace('Kỹ thuật viên: ', '');
-        else if (idx > 0 && !line.startsWith('Ảnh bằng chứng: ')) {
-            // giữ nguyên reason dòng đầu
+        else if (line.startsWith('Hạn hoàn thành: ') || line.startsWith('Hạn: ')) {
+            deadline = line.replace(/^Hạn( hoàn thành)?:\s*/i, '');
+        } else if (line.startsWith('Kỹ thuật viên: ') || line.startsWith('KTV: ')) {
+            technician = line.replace(/^(Kỹ thuật viên|KTV):\s*/i, '');
+        } else if (idx > 0) {
+            note = note ? `${note}\n${line}` : line;
         }
     });
 
@@ -63,6 +67,10 @@ function photoSrc(url: string): string {
         return getDriveThumbnailUrl(url) || url;
     }
     return url;
+}
+
+function openMediaUrl(url: string): string {
+    return getDriveViewUrl(url) || url;
 }
 
 export function WorkflowLogDetailDialog({
@@ -111,12 +119,15 @@ export function WorkflowLogDetailDialog({
         return 'bg-blue-100 text-blue-700 hover:bg-blue-100';
     })();
 
+    // History nhẹ: không dump toàn bộ form Sale vào chi tiết log
     const displayReason = (enrichedLog.reason || reason || (enrichedLog.action === 'backward_move' ? 'Lùi bước' : '') || '').toString().trim();
     const rawNote = (enrichedLog.notes && !isWorkflowStep ? enrichedLog.notes : note) || '';
-    const displayNote = rawNote.toString().trim();
+    const displayNote = sanitizeHistoryNotes(rawNote.toString());
     const displayPhotos = Array.isArray(enrichedLog.photos)
         ? enrichedLog.photos.filter((u: unknown): u is string => typeof u === 'string' && u.length > 0)
         : [];
+    const showReasonBlock = !!displayReason;
+    const showNoteBlock = !!displayNote && displayNote !== displayReason;
     const hasContent = !!(displayReason || displayNote || displayPhotos.length > 0);
 
     return (
@@ -176,14 +187,14 @@ export function WorkflowLogDetailDialog({
                             )}
                         </div>
 
-                        {displayReason && (
+                        {showReasonBlock && (
                             <div className="space-y-1.5">
-                                <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">Nội dung</h4>
+                                <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">Loại thao tác</h4>
                                 <p className="text-sm font-bold text-gray-800 leading-relaxed px-1">{displayReason}</p>
                             </div>
                         )}
 
-                        {displayNote && displayNote !== displayReason && (
+                        {showNoteBlock && (
                             <div className="space-y-1.5">
                                 <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">Ghi chú</h4>
                                 <div className="bg-orange-50/50 p-3 rounded-xl border border-orange-100 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
@@ -214,37 +225,45 @@ export function WorkflowLogDetailDialog({
                         )}
 
                         {displayPhotos.length > 0 && (
-                            <div className="space-y-3">
+                            <div className="space-y-2">
                                 <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">
-                                    Ảnh bằng chứng ({displayPhotos.length})
+                                    Media trên Drive ({displayPhotos.length})
                                 </h4>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {displayPhotos.map((photo: string, idx: number) => (
-                                        <a
-                                            key={`${photo}-${idx}`}
-                                            href={photo}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="aspect-square rounded-xl overflow-hidden border-2 border-white shadow-sm hover:ring-2 hover:ring-primary/20 transition-all bg-gray-50"
-                                        >
-                                            <img
-                                                src={photoSrc(photo)}
-                                                alt={`Bằng chứng ${idx + 1}`}
-                                                className="w-full h-full object-cover"
-                                                loading="lazy"
-                                            />
-                                        </a>
-                                    ))}
-                                </div>
+                                <ul className="space-y-1.5 rounded-xl border border-gray-100 bg-gray-50/70 p-2">
+                                    {displayPhotos.map((photo: string, idx: number) => {
+                                        const label = mediaRefLabel(photo, idx);
+                                        const href = openMediaUrl(photo);
+                                        const thumb = photoSrc(photo);
+                                        return (
+                                            <li key={`${photo}-${idx}`}>
+                                                <a
+                                                    href={href}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-primary hover:bg-white transition-colors"
+                                                >
+                                                    <img
+                                                        src={thumb}
+                                                        alt=""
+                                                        className="h-8 w-8 rounded object-cover border border-gray-200 bg-white shrink-0"
+                                                        loading="lazy"
+                                                    />
+                                                    <span className="flex-1 truncate font-medium">{label}</span>
+                                                    <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                                                </a>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                                <p className="text-[10px] text-muted-foreground px-1">
+                                    Bấm link để mở ảnh/video trên Google Drive.
+                                </p>
                             </div>
                         )}
 
                         {!hasContent && isTransitionLog && (
                             <p className="text-sm text-muted-foreground italic px-1">
-                                Không có ghi chú hoặc ảnh đính kèm cho lần chuyển bước này.
-                                {enrichedLog._enriched_from_step
-                                    ? ' (Chưa lưu form bước trước khi chuyển.)'
-                                    : ''}
+                                Không có ghi chú hoặc media đính kèm cho lần chuyển bước này.
                             </p>
                         )}
                     </div>

@@ -981,11 +981,15 @@ export function WorkflowTab({
                                                             )}
                                                             {log.photos && log.photos.length > 0 && (
                                                                 <div className="flex flex-wrap gap-1 mt-1 pt-1 border-t border-blue-100/50">
-                                                                    {log.photos.map((url: string, idx: number) => (
-                                                                        <a key={idx} href={url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>
-                                                                            <img src={url} alt={`Evidence ${idx}`} className="h-8 w-8 object-cover rounded shadow-sm border border-gray-200" />
-                                                                        </a>
-                                                                    ))}
+                                                                    <a
+                                                                        href={log.photos[0]}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        onClick={e => e.stopPropagation()}
+                                                                        className="text-[10px] font-semibold text-primary hover:underline"
+                                                                    >
+                                                                        {log.photos.length} media trên Drive →
+                                                                    </a>
                                                                 </div>
                                                             )}
                                                         </div>
@@ -995,11 +999,15 @@ export function WorkflowTab({
                                                             <span>{log.notes}</span>
                                                             {log.photos && log.photos.length > 0 && (
                                                                 <div className="flex flex-wrap gap-1 mt-1 pt-1 border-t border-red-100">
-                                                                    {log.photos.map((url: string, idx: number) => (
-                                                                        <a key={idx} href={url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>
-                                                                            <img src={url} alt={`Evidence ${idx}`} className="h-8 w-8 object-cover rounded shadow-sm border border-red-200" />
-                                                                        </a>
-                                                                    ))}
+                                                                    <a
+                                                                        href={log.photos[0]}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        onClick={e => e.stopPropagation()}
+                                                                        className="text-[10px] font-semibold text-red-700 hover:underline"
+                                                                    >
+                                                                        {log.photos.length} media trên Drive →
+                                                                    </a>
                                                                 </div>
                                                             )}
                                                         </div>

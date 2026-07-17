@@ -1,24 +1,31 @@
+import {
+    buildLightweightHistoryNote,
+    mediaRefLabel,
+    normalizeMediaRefs,
+    sanitizeHistoryNotes,
+    summarizeMediaUpload,
+} from './historyLog';
+
 export interface SalesStepLogContent {
     reason: string;
     notes: string;
     photos: string[];
 }
 
+export interface SalesStepField {
+    label: string;
+    value: string;
+}
+
+const SALES_STEP_TITLES: Record<string, string> = {
+    step1: 'Nhận đồ & Chụp ảnh',
+    step2: 'Gắn Tags & Form túi/Shoestree',
+    step3: 'Trao đổi kỹ thuật',
+    step4: 'Chốt gói / Chờ duyệt',
+};
+
 function asPhotoArray(val: unknown): string[] {
-    if (Array.isArray(val)) {
-        return val.filter((u): u is string => typeof u === 'string' && u.length > 0);
-    }
-    if (typeof val === 'string' && val.trim()) {
-        try {
-            const parsed = JSON.parse(val);
-            if (Array.isArray(parsed)) {
-                return parsed.filter((u): u is string => typeof u === 'string' && u.length > 0);
-            }
-        } catch {
-            return [val];
-        }
-    }
-    return [];
+    return normalizeMediaRefs(val);
 }
 
 function normalizeSalesStepData(
@@ -36,6 +43,10 @@ function normalizeSalesStepData(
     return salesStepData;
 }
 
+/**
+ * Snapshot nhẹ khi rời bước Sale: ghi chú ngắn + link Drive refs.
+ * Form đầy đủ vẫn nằm trên entity — history không dump toàn bộ field.
+ */
 export function extractSalesStepLogContent(
     fromStatus: string | null | undefined,
     salesStepData: Record<string, unknown> | string | null | undefined
@@ -47,59 +58,124 @@ export function extractSalesStepLogContent(
 
     switch (fromStatus) {
         case 'step1': {
-            const receiver = typeof data.step1_receiver_name === 'string' ? data.step1_receiver_name : '';
-            const notes = typeof data.step1_notes === 'string' ? data.step1_notes : '';
             const photos = asPhotoArray(data.step1_evidence_photos);
-            const extras: string[] = [];
-            const shippingFee = Number(data.step1_shipping_fee) || 0;
-            if (shippingFee > 0) {
-                extras.push(`Phí ship: ${shippingFee.toLocaleString('vi-VN')}đ`);
-            }
-            if (data.step1_accessories_checked) {
-                extras.push('Đã xác nhận phụ kiện đi kèm');
-            }
-            if (typeof data.step1_payment_method === 'string' && data.step1_payment_method && shippingFee > 0) {
-                extras.push(`PT thanh toán ship: ${data.step1_payment_method}`);
-            }
+            const receiver = typeof data.step1_receiver_name === 'string' ? data.step1_receiver_name.trim() : '';
+            const userNote = sanitizeHistoryNotes(
+                typeof data.step1_notes === 'string' ? data.step1_notes : ''
+            );
             return {
-                reason: receiver ? `NV Sale nhận: ${receiver}` : 'Nhận đồ & Chụp ảnh',
-                notes: [notes, ...extras].filter(Boolean).join('\n'),
+                reason: 'Hoàn thành bước Nhận đồ & Chụp ảnh',
+                notes: buildLightweightHistoryNote([
+                    summarizeMediaUpload(photos, 'nhận đồ'),
+                    receiver ? `NV nhận: ${receiver}` : '',
+                    userNote,
+                ]),
                 photos,
             };
         }
-        case 'step2':
+        case 'step2': {
+            const tags = asPhotoArray(data.step2_tags_photos);
+            const form = asPhotoArray(data.step2_form_photos);
+            const photos = [...tags, ...form];
+            const parts: string[] = [];
+            if (tags.length) parts.push(summarizeMediaUpload(tags, 'tags'));
+            if (form.length) parts.push(summarizeMediaUpload(form, 'form túi/shoestree', 'thêm'));
             return {
-                reason: 'Gắn Tags & Form túi/Shoestree',
-                notes: '',
-                photos: [
-                    ...asPhotoArray(data.step2_tags_photos),
-                    ...asPhotoArray(data.step2_form_photos),
-                ],
-            };
-        case 'step3': {
-            const tech = typeof data.step3_technician_name === 'string' ? data.step3_technician_name : '';
-            const parts = [
-                typeof data.step3_work_details === 'string' ? data.step3_work_details : '',
-                typeof data.step3_work_location === 'string' ? `Vị trí: ${data.step3_work_location}` : '',
-                typeof data.step3_notes === 'string' ? data.step3_notes : '',
-            ].filter(Boolean);
-            return {
-                reason: tech ? `Trao đổi KT: ${tech}` : 'Trao đổi KT',
-                notes: parts.join('\n'),
-                photos: asPhotoArray(data.step3_photos),
+                reason: 'Hoàn thành bước Gắn Tags & Form',
+                notes: buildLightweightHistoryNote(parts),
+                photos,
             };
         }
-        case 'step4':
+        case 'step3': {
+            const photos = asPhotoArray(data.step3_photos);
+            const tech = typeof data.step3_technician_name === 'string' ? data.step3_technician_name.trim() : '';
+            const userNote = sanitizeHistoryNotes(
+                typeof data.step3_notes === 'string' ? data.step3_notes : ''
+            );
             return {
-                reason: 'Chốt gói / chờ duyệt',
-                notes: typeof data.step4_notes === 'string' ? data.step4_notes : '',
-                photos: asPhotoArray(data.step4_photos),
+                reason: 'Hoàn thành bước Trao đổi kỹ thuật',
+                notes: buildLightweightHistoryNote([
+                    tech ? `KT: ${tech}` : '',
+                    summarizeMediaUpload(photos, 'QC / trao đổi KT', 'thêm'),
+                    userNote,
+                ]),
+                photos,
             };
+        }
+        case 'step4': {
+            const photos = asPhotoArray(data.step4_photos);
+            const userNote = sanitizeHistoryNotes(
+                typeof data.step4_notes === 'string' ? data.step4_notes : ''
+            );
+            return {
+                reason: 'Hoàn thành bước Chốt gói / Chờ duyệt',
+                notes: buildLightweightHistoryNote([
+                    summarizeMediaUpload(photos, 'chốt gói', 'thêm'),
+                    userNote,
+                ]),
+                photos,
+            };
+        }
         default:
             return empty;
     }
 }
 
+/** Field đầy đủ — chỉ dùng khi mở form entity, không phải nguồn chính của history. */
+export function extractSalesStepFields(
+    fromStatus: string | null | undefined,
+    salesStepData: Record<string, unknown> | string | null | undefined
+): SalesStepField[] {
+    const data = normalizeSalesStepData(salesStepData);
+    if (!fromStatus || !fromStatus.startsWith('step')) return [];
+
+    const fields: SalesStepField[] = [];
+    const pushStr = (label: string, val: unknown) => {
+        if (typeof val === 'string' && val.trim()) fields.push({ label, value: val.trim() });
+    };
+
+    switch (fromStatus) {
+        case 'step1': {
+            pushStr('NV Sale nhận đồ', data.step1_receiver_name);
+            const fee = Number(data.step1_shipping_fee) || 0;
+            if (fee > 0) {
+                fields.push({ label: 'Phí ship', value: `${fee.toLocaleString('vi-VN')}đ` });
+                pushStr('PT thanh toán ship', data.step1_payment_method);
+            }
+            fields.push({
+                label: 'Phụ kiện đi kèm',
+                value: data.step1_accessories_checked ? 'Đã xác nhận' : 'Chưa xác nhận',
+            });
+            pushStr('Ghi chú', data.step1_notes);
+            break;
+        }
+        case 'step3': {
+            pushStr('Kỹ thuật viên', data.step3_technician_name);
+            pushStr('Chi tiết công việc', data.step3_work_details);
+            pushStr('Vị trí xử lý', data.step3_work_location);
+            pushStr('Ghi chú', data.step3_notes);
+            break;
+        }
+        case 'step4': {
+            pushStr('Ghi chú', data.step4_notes);
+            break;
+        }
+        default:
+            break;
+    }
+
+    return fields;
+}
+
+export function getSalesStepTitle(fromStatus: string | null | undefined): string | null {
+    if (!fromStatus) return null;
+    return SALES_STEP_TITLES[fromStatus] || null;
+}
+
+/**
+ * Enrich nhẹ: bổ sung reason/notes/photos ngắn nếu log thiếu.
+ * Không merge full form fields vào history display.
+ */
 export function enrichSalesTransitionLog(
     log: Record<string, unknown> | null | undefined,
     salesStepData?: Record<string, unknown> | string | null
@@ -107,16 +183,22 @@ export function enrichSalesTransitionLog(
     if (!log) return log;
 
     const fromStatus = (log.from_status || log.from_stage) as string | undefined;
-    if (!fromStatus?.startsWith('step')) return log;
+    if (!fromStatus?.startsWith('step')) {
+        return {
+            ...log,
+            notes: sanitizeHistoryNotes(typeof log.notes === 'string' ? log.notes : ''),
+            photos: normalizeMediaRefs(log.photos),
+        };
+    }
 
     const stepData = salesStepData ?? (log._sales_step_data as Record<string, unknown> | string | undefined);
     const extracted = extractSalesStepLogContent(fromStatus, stepData);
 
-    const existingPhotos = asPhotoArray(log.photos);
+    const existingPhotos = normalizeMediaRefs(log.photos);
     const mergedPhotos = [...new Set([...existingPhotos, ...extracted.photos])];
 
     const existingReason = typeof log.reason === 'string' ? log.reason.trim() : '';
-    const existingNotes = typeof log.notes === 'string' ? log.notes.trim() : '';
+    const existingNotes = sanitizeHistoryNotes(typeof log.notes === 'string' ? log.notes : '');
 
     return {
         ...log,
@@ -124,5 +206,9 @@ export function enrichSalesTransitionLog(
         notes: existingNotes || extracted.notes || null,
         photos: mergedPhotos,
         _enriched_from_step: fromStatus,
+        _step_title: getSalesStepTitle(fromStatus),
+        // Giữ fields cho debug/form — UI history không còn ưu tiên block này
+        _step_fields: extractSalesStepFields(fromStatus, stepData),
+        _media_labels: mergedPhotos.map((url, i) => mediaRefLabel(url, i)),
     };
 }

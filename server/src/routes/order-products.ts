@@ -22,6 +22,12 @@ import {
     clonePendingWorkflowStepsForService,
     isServiceActivelyInWorkflow,
 } from '../utils/warrantyReentryHelper.js';
+import {
+    buildLightweightHistoryNote,
+    normalizeMediaRefs,
+    sanitizeHistoryNotes,
+    summarizeMediaUpload,
+} from '../utils/historyLog.js';
 
 const router = Router();
 
@@ -925,6 +931,11 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
 
         // Record log if stage changed
         if (stage !== undefined && oldStage !== stage) {
+            const stagePhotos = normalizeMediaRefs(move_photos);
+            const stageNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(move_notes),
+                summarizeMediaUpload(stagePhotos, 'after-sale'),
+            ]) || null;
             try {
                 await supabaseAdmin.from('order_after_sale_stage_log').insert({
                     order_id: product.order_id,
@@ -933,8 +944,8 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                     from_stage: oldStage,
                     to_stage: stage,
                     created_by: userId,
-                    notes: move_notes || null,
-                    photos: Array.isArray(move_photos) && move_photos.length ? move_photos : null,
+                    notes: stageNotes,
+                    photos: stagePhotos.length ? stagePhotos : null,
                 });
             } catch (logErr) {
                 try {
@@ -961,10 +972,13 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             const flowType = newCareFlow === 'warranty' || ['war1', 'war2', 'war3'].includes(newCareStage)
                 ? 'warranty'
                 : 'care';
-            const careLogNotes = archivedReentryNotes ?? (move_notes || null);
-            const careLogPhotos = archivedReentryPhotos.length
-                ? archivedReentryPhotos
-                : (Array.isArray(move_photos) && move_photos.length ? move_photos : null);
+            const careLogPhotos = normalizeMediaRefs(
+                archivedReentryPhotos.length ? archivedReentryPhotos : move_photos
+            );
+            const careLogNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(archivedReentryNotes ?? move_notes),
+                summarizeMediaUpload(careLogPhotos, flowType === 'warranty' ? 'bảo hành' : 'chăm sóc'),
+            ]) || null;
             try {
                 const careRow: Record<string, unknown> = {
                     order_id: product.order_id,
@@ -975,7 +989,7 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                     flow_type: flowType,
                     created_by: userId ?? null,
                     notes: careLogNotes,
-                    photos: careLogPhotos,
+                    photos: careLogPhotos.length ? careLogPhotos : null,
                 };
                 await supabaseAdmin.from('order_care_warranty_log').insert(careRow);
             } catch (logErr) {
@@ -987,7 +1001,7 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                         flow_type: flowType,
                         created_by: userId ?? null,
                         notes: careLogNotes,
-                        photos: careLogPhotos,
+                        photos: careLogPhotos.length ? careLogPhotos : null,
                     });
                 } catch (fallbackErr) {
                     console.error('order_care_warranty_log insert error (order_product):', logErr, fallbackErr);

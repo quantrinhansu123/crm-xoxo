@@ -26,6 +26,12 @@ import {
     firePickupInfoWebhook,
 } from '../utils/orderStaffHelper.js';
 import { extractSalesStepLogContent } from '../utils/salesStepLogContent.js';
+import {
+    buildLightweightHistoryNote,
+    normalizeMediaRefs,
+    sanitizeHistoryNotes,
+    summarizeMediaUpload,
+} from '../utils/historyLog.js';
 
 function emitRequestWebhook(event: string, payload: Record<string, any>) {
     fireWebhook(event, payload);
@@ -685,8 +691,8 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
         if (orderIdForLog && entityType && (oldStatus !== status)) {
             try {
                 let logReason = reason || null;
-                let logNotes = notes || null;
-                let logPhotos = Array.isArray(photos) ? photos : [];
+                let logNotes = sanitizeHistoryNotes(notes);
+                let logPhotos = normalizeMediaRefs(photos);
 
                 if (!logReason && !logNotes && logPhotos.length === 0 && oldStatus?.startsWith('step')) {
                     const salesStepData = await resolveSalesStepData(entityType, id);
@@ -694,6 +700,8 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
                     logReason = extracted.reason || null;
                     logNotes = extracted.notes || null;
                     logPhotos = extracted.photos;
+                } else if (logPhotos.length > 0 && !logNotes) {
+                    logNotes = summarizeMediaUpload(logPhotos, '');
                 }
 
                 await supabaseAdmin.from('order_item_status_log').insert({
@@ -703,7 +711,7 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
                     from_status: oldStatus,
                     to_status: status,
                     reason: logReason,
-                    notes: logNotes,
+                    notes: logNotes || null,
                     photos: logPhotos,
                     created_by: userId ?? null
                 });
@@ -2208,10 +2216,16 @@ router.patch(['/:id/change-room', '/:id/transfer-room'], authenticate, async (re
             if (tech) techName = tech.name;
         }
 
-        const displayPhotos = (Array.isArray(photos) && photos.length > 0) ? `\nẢnh bằng chứng: ${photos.join(', ')}` : '';
-        const deadlineInfo = deadline_days ? `\nHạn hoàn thành: ${deadline_days} ngày` : '';
-        const techInfo = techName ? `\nKỹ thuật viên: ${techName}` : '';
-        const finalNotes = `${reason}${note ? `\nLưu ý: ${note}` : ''}${deadlineInfo}${techInfo}${displayPhotos}`;
+        // History nhẹ: ghi chú ngắn — link Drive chỉ lưu ở cột photos, không nhúng vào notes
+        const mediaRefs = normalizeMediaRefs(photos);
+        const mediaSummary = summarizeMediaUpload(mediaRefs, 'bằng chứng chuyển phòng');
+        const finalNotes = buildLightweightHistoryNote([
+            reason,
+            note ? `Lưu ý: ${note}` : '',
+            deadline_days ? `Hạn: ${deadline_days} ngày` : '',
+            techName ? `KTV: ${techName}` : '',
+            mediaSummary,
+        ]);
 
         // a. Map targetRoomId to a search pattern for department
         let deptSearch = '';
@@ -2337,11 +2351,11 @@ router.patch(['/:id/change-room', '/:id/transfer-room'], authenticate, async (re
                 step_name: `${fromRoom} ➔ ${toRoom}`,
                 step_order: finalStep.step_order,
                 notes: finalNotes,
-                photos: photos || [],
+                photos: mediaRefs,
                 created_by: userId,
                 technician_id: technician_id || null,
                 deadline_days: deadline_days || null,
-                reason: reason || null
+                reason: sanitizeHistoryNotes(reason) || null
             });
         }
 
@@ -2556,6 +2570,11 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
 
         // Record log if stage changed
         if (stage !== undefined && oldStage !== stage) {
+            const stagePhotos = normalizeMediaRefs(move_photos);
+            const stageNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(move_notes),
+                summarizeMediaUpload(stagePhotos, 'after-sale'),
+            ]) || null;
             try {
                 await supabaseAdmin.from('order_after_sale_stage_log').insert({
                     order_id: item.order_id,
@@ -2564,8 +2583,8 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                     from_stage: oldStage,
                     to_stage: stage,
                     created_by: userId,
-                    notes: move_notes || null,
-                    photos: Array.isArray(move_photos) && move_photos.length ? move_photos : null,
+                    notes: stageNotes,
+                    photos: stagePhotos.length ? stagePhotos : null,
                 });
             } catch (logErr) {
                 try {
@@ -2592,10 +2611,13 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             const flowType = newCareFlow === 'warranty' || ['war1', 'war2', 'war3'].includes(newCareStage)
                 ? 'warranty'
                 : 'care';
-            const careLogNotes = archivedReentryNotes ?? (move_notes || null);
-            const careLogPhotos = archivedReentryPhotos.length
-                ? archivedReentryPhotos
-                : (Array.isArray(move_photos) && move_photos.length ? move_photos : null);
+            const careLogPhotos = normalizeMediaRefs(
+                archivedReentryPhotos.length ? archivedReentryPhotos : move_photos
+            );
+            const careLogNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(archivedReentryNotes ?? move_notes),
+                summarizeMediaUpload(careLogPhotos, flowType === 'warranty' ? 'bảo hành' : 'chăm sóc'),
+            ]) || null;
             try {
                 await supabaseAdmin.from('order_care_warranty_log').insert({
                     order_id: item.order_id,
@@ -2606,7 +2628,7 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                     flow_type: flowType,
                     created_by: userId ?? null,
                     notes: careLogNotes,
-                    photos: careLogPhotos,
+                    photos: careLogPhotos.length ? careLogPhotos : null,
                 });
             } catch (logErr) {
                 try {
@@ -2617,7 +2639,7 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                         flow_type: flowType,
                         created_by: userId ?? null,
                         notes: careLogNotes,
-                        photos: careLogPhotos,
+                        photos: careLogPhotos.length ? careLogPhotos : null,
                     });
                 } catch (fallbackErr) {
                     console.error('order_care_warranty_log insert error (order_item):', logErr, fallbackErr);
