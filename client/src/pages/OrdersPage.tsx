@@ -143,7 +143,15 @@ export function OrdersPage() {
             return 'before_sale';
         }
 
-        // 2. Đã Lưu trữ (after4) hoặc đã vào Care/Warranty sau feedback — ẩn khỏi board /orders
+        // 2. Status care/warranty (set khi vào Lưu trữ) — luôn ẩn, không phụ thuộc field phụ trên list API
+        if (itemStatus && ['care', 'warranty', 'archived'].includes(itemStatus)) {
+            return null;
+        }
+        if (allItems.some((it) => it.status && ['care', 'warranty', 'archived'].includes(it.status))) {
+            return null;
+        }
+
+        // 3. Đã Lưu trữ (after4) hoặc đã vào Care/Warranty sau feedback — ẩn khỏi board /orders
         // Check mọi item trong group (product + service) vì list API đôi khi lệch phase trên service
         if (allItems.some((it) => isArchivedToCareWarranty(it as any))) {
             return null;
@@ -163,7 +171,11 @@ export function OrdersPage() {
         if (['assigned', 'in_progress', 'processing'].includes(itemStatus)) return 'in_progress';
 
         // 5. Completion / After sale statuses
-        if (['completed', 'done'].includes(itemStatus)) return 'done';
+        // completed + đơn after_sale: thuộc pipeline after-sale, không phải cột Đã hoàn thiện
+        if (['completed', 'done'].includes(itemStatus)) {
+            if (fallbackOrder.status === 'after_sale') return 'after_sale';
+            return 'done';
+        }
         if (['delivered', 'after_sale'].includes(itemStatus)) return 'after_sale';
 
         // 6. Fallback to order status
