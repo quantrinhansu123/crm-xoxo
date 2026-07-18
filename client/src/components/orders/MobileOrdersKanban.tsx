@@ -166,6 +166,18 @@ function MobileOrderCard({
     const saleName = shortenName(order.sales_user?.name || 'N/A');
     const showMarkDone = onMarkDone && !DONE_HIDDEN_COLUMNS.has(columnId);
     const isCompletedColumn = order.status === 'done' || order.status === 'after_sale';
+    const isWarranty =
+        product?.care_warranty_flow === 'warranty' ||
+        !!(product as any)?.warranty_code ||
+        services.some(s => s.care_warranty_flow === 'warranty');
+    const afterSaleStage =
+        (product as any)?.after_sale_stage ||
+        (product as any)?.phase_stage ||
+        (services[0] as any)?.after_sale_stage ||
+        null;
+    const needsDebtCollection =
+        columnId === 'after_sale' &&
+        (!afterSaleStage || afterSaleStage === 'after1' || afterSaleStage === 'after1_debt');
 
     return (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -183,6 +195,19 @@ function MobileOrderCard({
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
                         <span className="text-sm font-bold text-foreground">{productCode}</span>
+                        {isWarranty && (
+                            <Badge className="bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-100 text-[9px] px-1 py-0 h-3.5 shrink-0">
+                                BH
+                            </Badge>
+                        )}
+                        {needsDebtCollection && (
+                            <Badge
+                                className="bg-red-100 text-red-700 border-red-300 hover:bg-red-100 text-[9px] px-1 py-0 h-3.5 shrink-0"
+                                title="Cần thu nợ"
+                            >
+                                TN
+                            </Badge>
+                        )}
                         <span className="truncate text-sm font-medium text-blue-600">{customerName}</span>
                     </div>
                     <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">{description}</p>

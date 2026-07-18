@@ -49,6 +49,16 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
         !!productGroup.product?.warranty_code ||
         productGroup.services?.some(s => s.care_warranty_flow === 'warranty');
 
+    // Cần thu nợ (TN): After sale nhưng chưa qua bước Kiểm nợ (after1 / after1_debt)
+    const afterSaleStage =
+        (productGroup.product as any)?.after_sale_stage ||
+        (productGroup.product as any)?.phase_stage ||
+        (productGroup.services?.[0] as any)?.after_sale_stage ||
+        null;
+    const needsDebtCollection =
+        columnId === 'after_sale' &&
+        (!afterSaleStage || afterSaleStage === 'after1' || afterSaleStage === 'after1_debt');
+
     const technicianNames = (() => {
         const names = new Set<string>();
         for (const s of effectiveServices) {
@@ -134,6 +144,14 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
                                 {isWarranty && (
                                     <Badge className="bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-100 text-[9px] px-1 py-0 h-3.5 shrink-0">
                                         BH
+                                    </Badge>
+                                )}
+                                {needsDebtCollection && (
+                                    <Badge
+                                        className="bg-red-100 text-red-700 border-red-300 hover:bg-red-100 text-[9px] px-1 py-0 h-3.5 shrink-0"
+                                        title="Cần thu nợ"
+                                    >
+                                        TN
                                     </Badge>
                                 )}
                             </div>
