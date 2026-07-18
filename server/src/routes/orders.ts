@@ -287,6 +287,8 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                 product_material: product.material || null,
                                 product_condition_before: product.condition_before || null,
                                 product_notes: product.notes || null,
+                                current_phase: product.current_phase || null,
+                                phase_stage: product.phase_stage || null,
                             });
                             if (product.services?.length) {
                                 for (const s of product.services as any[]) {
@@ -450,6 +452,8 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                 product_material: product.material || null,
                                 product_condition_before: product.condition_before || null,
                                 product_notes: product.notes || null,
+                                current_phase: product.current_phase || null,
+                                phase_stage: product.phase_stage || null,
                             });
                         if (product.services?.length) {
                             for (const s of product.services as any[]) {

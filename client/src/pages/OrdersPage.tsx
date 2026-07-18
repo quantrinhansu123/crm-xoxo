@@ -111,7 +111,13 @@ export function OrdersPage() {
         setShowConfirmDoneDialog(true);
     };
 
-    const getGroupStatus = (group: { product: OrderItem | null; services: OrderItem[] }, fallbackOrder: Order): string => {
+    /** null = ẩn khỏi mọi cột /orders (đã Lưu trữ / after4) */
+    const getGroupStatus = (group: { product: OrderItem | null; services: OrderItem[] }, fallbackOrder: Order): string | null => {
+        const lead = (group.product || group.services?.[0]) as OrderItem & {
+            after_sale_stage?: string | null;
+            current_phase?: string | null;
+            care_warranty_flow?: string | null;
+        } | undefined;
         const itemStatus = group.product?.status || group.services?.[0]?.status;
         
         if (!itemStatus) {
@@ -119,25 +125,39 @@ export function OrdersPage() {
         }
 
         // 1. Sales / Warranty steps (Before Sale) - Highest priority
-        // If an item is being handled by Sales/Warranty, it belongs in "Before Sale"
+        // Tạo HD Bảo hành (step1–4) vẫn hiện ở Before Sale dù after_sale_stage còn after4
         if (['step1', 'step2', 'step3', 'step4', 'pending'].includes(itemStatus)) return 'before_sale';
 
-        // 2. Check for technical workflow progress (In Progress)
-        // If sales are done/confirmed and any item in the group is assigned or being worked on
+        // 2. Đã Lưu trữ (after4) hoặc đã vào Care/Warranty sau feedback — ẩn khỏi board /orders
+        // Giống Túi Dior: vào tab Chăm sóc/Bảo hành rồi thì biến mất ngoài /orders
+        const afterStage = lead?.after_sale_stage;
+        const phase = lead?.current_phase;
+        const careFlow = lead?.care_warranty_flow;
+        if (
+            afterStage === 'after4'
+            || phase === 'care'
+            || phase === 'warranty'
+            || careFlow === 'care'
+            || careFlow === 'warranty'
+        ) {
+            return null;
+        }
+
+        // 3. Check for technical workflow progress (In Progress)
         const allItems = [group.product, ...group.services].filter(Boolean) as OrderItem[];
         const hasActiveTechSteps = allItems.some(item => 
             item.order_item_steps?.some(step => ['in_progress', 'assigned'].includes(step.status))
         );
         if (hasActiveTechSteps) return 'in_progress';
 
-        // 3. Explicit In Progress / Processing statuses (from lead item)
+        // 4. Explicit In Progress / Processing statuses (from lead item)
         if (['assigned', 'in_progress', 'processing'].includes(itemStatus)) return 'in_progress';
         
-        // 4. Completion / After sale statuses
+        // 5. Completion / After sale statuses
         if (['completed', 'done'].includes(itemStatus)) return 'done';
         if (['delivered', 'after_sale'].includes(itemStatus)) return 'after_sale';
         
-        // 5. Fallback to order status (e.g. for step5 which is technically "chốt đơn" but waiting for tech)
+        // 6. Fallback to order status
         return fallbackOrder.status;
     };
 
@@ -227,7 +247,7 @@ export function OrdersPage() {
             const groups = getOrderProductGroups(order);
             groups.forEach((group, index) => {
                 const groupStatus = getGroupStatus(group, order);
-                if (groupStatus === status) {
+                if (groupStatus && groupStatus === status) {
                     result.push({ order, group, groupIndex: index });
                 }
             });
