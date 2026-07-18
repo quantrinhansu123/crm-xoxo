@@ -111,52 +111,61 @@ export function OrdersPage() {
         setShowConfirmDoneDialog(true);
     };
 
+    /** Đã Lưu trữ / vào Care|Warranty — ẩn khỏi board /orders */
+    const isArchivedToCareWarranty = (item?: (OrderItem & {
+        after_sale_stage?: string | null;
+        current_phase?: string | null;
+        care_warranty_flow?: string | null;
+        care_warranty_stage?: string | null;
+        phase_stage?: string | null;
+    }) | null) => {
+        if (!item) return false;
+        const careStages = new Set(['care6', 'care12', 'care-custom', 'war1', 'war2', 'war3']);
+        return (
+            item.after_sale_stage === 'after4'
+            || item.current_phase === 'care'
+            || item.current_phase === 'warranty'
+            || item.care_warranty_flow === 'care'
+            || item.care_warranty_flow === 'warranty'
+            || (!!item.care_warranty_stage && careStages.has(item.care_warranty_stage))
+            || (!!item.phase_stage && careStages.has(item.phase_stage))
+        );
+    };
+
     /** null = ẩn khỏi mọi cột /orders (đã Lưu trữ / after4) */
     const getGroupStatus = (group: { product: OrderItem | null; services: OrderItem[] }, fallbackOrder: Order): string | null => {
-        const lead = (group.product || group.services?.[0]) as OrderItem & {
-            after_sale_stage?: string | null;
-            current_phase?: string | null;
-            care_warranty_flow?: string | null;
-        } | undefined;
+        const allItems = [group.product, ...group.services].filter(Boolean) as OrderItem[];
         const itemStatus = group.product?.status || group.services?.[0]?.status;
-        
+
+        // 1. Sales / Warranty steps (Before Sale) - Highest priority
+        // Tạo HD Bảo hành (step1–4) vẫn hiện ở Before Sale dù after_sale_stage còn after4
+        if (itemStatus && ['step1', 'step2', 'step3', 'step4', 'pending'].includes(itemStatus)) {
+            return 'before_sale';
+        }
+
+        // 2. Đã Lưu trữ (after4) hoặc đã vào Care/Warranty sau feedback — ẩn khỏi board /orders
+        // Check mọi item trong group (product + service) vì list API đôi khi lệch phase trên service
+        if (allItems.some((it) => isArchivedToCareWarranty(it as any))) {
+            return null;
+        }
+
         if (!itemStatus) {
             return fallbackOrder.status;
         }
 
-        // 1. Sales / Warranty steps (Before Sale) - Highest priority
-        // Tạo HD Bảo hành (step1–4) vẫn hiện ở Before Sale dù after_sale_stage còn after4
-        if (['step1', 'step2', 'step3', 'step4', 'pending'].includes(itemStatus)) return 'before_sale';
-
-        // 2. Đã Lưu trữ (after4) hoặc đã vào Care/Warranty sau feedback — ẩn khỏi board /orders
-        // Giống Túi Dior: vào tab Chăm sóc/Bảo hành rồi thì biến mất ngoài /orders
-        const afterStage = lead?.after_sale_stage;
-        const phase = lead?.current_phase;
-        const careFlow = lead?.care_warranty_flow;
-        if (
-            afterStage === 'after4'
-            || phase === 'care'
-            || phase === 'warranty'
-            || careFlow === 'care'
-            || careFlow === 'warranty'
-        ) {
-            return null;
-        }
-
         // 3. Check for technical workflow progress (In Progress)
-        const allItems = [group.product, ...group.services].filter(Boolean) as OrderItem[];
-        const hasActiveTechSteps = allItems.some(item => 
+        const hasActiveTechSteps = allItems.some(item =>
             item.order_item_steps?.some(step => ['in_progress', 'assigned'].includes(step.status))
         );
         if (hasActiveTechSteps) return 'in_progress';
 
         // 4. Explicit In Progress / Processing statuses (from lead item)
         if (['assigned', 'in_progress', 'processing'].includes(itemStatus)) return 'in_progress';
-        
+
         // 5. Completion / After sale statuses
         if (['completed', 'done'].includes(itemStatus)) return 'done';
         if (['delivered', 'after_sale'].includes(itemStatus)) return 'after_sale';
-        
+
         // 6. Fallback to order status
         return fallbackOrder.status;
     };

@@ -917,21 +917,33 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
         }
 
         // Đồng bộ bước xuống dịch vụ của đúng sản phẩm này (không đụng SP khác trên đơn)
-        if (stage !== undefined && care_warranty_flow === undefined && product?.id) {
-            const svcUpdate: Record<string, unknown> = {
-                current_phase: 'after_sale',
-                phase_stage: stage,
-            };
-            const { error: svcErr } = await supabaseAdmin
-                .from('order_product_services')
-                .update({ ...svcUpdate, after_sale_stage: stage })
-                .eq('order_product_id', id);
-            if (svcErr) {
-                // DB có thể chưa có after_sale_stage trên services
-                await supabaseAdmin
+        if (product?.id && (stage !== undefined || care_warranty_flow !== undefined || care_warranty_stage !== undefined)) {
+            const svcUpdate: Record<string, unknown> = {};
+            if (care_warranty_flow === 'care' || care_warranty_flow === 'warranty') {
+                svcUpdate.current_phase = care_warranty_flow;
+                svcUpdate.phase_stage = care_warranty_stage || (care_warranty_flow === 'care' ? 'care6' : 'war1');
+                if (stage !== undefined) svcUpdate.after_sale_stage = stage;
+            } else if (care_warranty_stage !== undefined && (oldCareFlow === 'care' || oldCareFlow === 'warranty' || product.current_phase === 'care' || product.current_phase === 'warranty')) {
+                svcUpdate.current_phase = product.current_phase || oldCareFlow;
+                svcUpdate.phase_stage = care_warranty_stage;
+            } else if (stage !== undefined && care_warranty_flow === undefined) {
+                svcUpdate.current_phase = 'after_sale';
+                svcUpdate.phase_stage = stage;
+                svcUpdate.after_sale_stage = stage;
+            }
+            if (Object.keys(svcUpdate).length > 0) {
+                const { error: svcErr } = await supabaseAdmin
                     .from('order_product_services')
                     .update(svcUpdate)
                     .eq('order_product_id', id);
+                if (svcErr) {
+                    // Retry without optional columns some DBs may lack
+                    const { after_sale_stage: _drop, ...rest } = svcUpdate as any;
+                    await supabaseAdmin
+                        .from('order_product_services')
+                        .update(Object.keys(rest).length ? rest : svcUpdate)
+                        .eq('order_product_id', id);
+                }
             }
         }
 

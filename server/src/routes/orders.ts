@@ -324,6 +324,8 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                         delivery_code: product.delivery_code || null,
                                         delivery_carrier: product.delivery_carrier || null,
                                         delivery_type: product.delivery_type || null,
+                                        current_phase: product.current_phase || s.current_phase || null,
+                                        phase_stage: product.phase_stage || s.phase_stage || null,
                                     });
                                 }
                             }
@@ -490,6 +492,8 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                     delivery_carrier: product.delivery_carrier || null,
                                     delivery_type: product.delivery_type || null,
                                     order_item_steps: s.order_item_steps || [],
+                                    current_phase: product.current_phase || s.current_phase || null,
+                                    phase_stage: product.phase_stage || s.phase_stage || null,
                                 });
                             }
                         }
