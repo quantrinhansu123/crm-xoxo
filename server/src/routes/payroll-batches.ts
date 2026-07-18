@@ -380,9 +380,12 @@ router.get('/:id', authenticate, requireAccountant, async (req: AuthenticatedReq
 // This calculates salary for ALL active employees and creates/updates the batch
 router.post('/generate', authenticate, requireAccountant, async (req: AuthenticatedRequest, res, next) => {
     try {
-        const { month, year, apply_technician_kpi_commission_policy: applyTechKpiPolicyRaw } = req.body;
+        const { month, year, apply_technician_kpi_commission_policy: applyTechKpiPolicyRaw, user_ids: userIdsRaw } = req.body;
         if (!month || !year) throw new ApiError('Thiếu tháng hoặc năm', 400);
         const applyTechKpiPolicy = Boolean(applyTechKpiPolicyRaw);
+        const userIds = Array.isArray(userIdsRaw)
+            ? userIdsRaw.filter((id: unknown) => typeof id === 'string' && id.length > 0)
+            : [];
 
         // Create or get the batch
         let batch = await getOrCreatePayrollBatch(month, year, req.user!.id);
@@ -397,11 +400,15 @@ router.post('/generate', authenticate, requireAccountant, async (req: Authentica
             if (updatedBatch) batch = updatedBatch;
         }
 
-        // Get all active employees
-        const { data: users } = await supabaseAdmin
+        // Get active employees (all, or scoped to selected user_ids)
+        let usersQuery = supabaseAdmin
             .from('users')
             .select('id')
             .eq('status', 'active');
+        if (userIds.length > 0) {
+            usersQuery = usersQuery.in('id', userIds);
+        }
+        const { data: users } = await usersQuery;
 
         if (!users || users.length === 0) {
             return res.json({

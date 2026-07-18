@@ -173,7 +173,12 @@ router.get('/', authenticate, requireManager, async (req: AuthenticatedRequest, 
         if (role) query = query.eq('role', role);
         if (department) query = query.eq('department', department);
         if (status) query = query.eq('status', status);
-        if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+        if (search) {
+            const q = String(search).trim().replace(/%/g, '\\%').replace(/,/g, '');
+            query = query.or(
+                `name.ilike.%${q}%,email.ilike.%${q}%,employee_code.ilike.%${q}%,timekeeping_code.ilike.%${q}%,phone.ilike.%${q}%`
+            );
+        }
 
         const { data: users, error } = await query;
 

@@ -277,36 +277,47 @@ function GeneratePayrollDialog({ open, onOpenChange, onGenerate }: { open: boole
     useEffect(() => {
         if (open) {
             setApplyTechKpiPolicy(false);
+            setScope('all');
+            setSelectedEmployees([]);
+            setEmpSearch('');
+            setEmpResults([]);
         }
     }, [open]);
 
-    // Search employees
+    // Search employees (empty query on focus → list all active)
+    const loadEmployees = useCallback(async (q: string) => {
+        setEmpSearchLoading(true);
+        try {
+            const res = await usersApi.getAll({
+                search: q.trim() || undefined,
+                status: 'active',
+            });
+            const users = res.data.data?.users || [];
+            setEmpResults(users.map((u: any) => ({
+                id: u.id,
+                name: u.name,
+                code: u.employeeCode || u.employee_code || u.code || u.timekeepingCode || u.timekeeping_code,
+                department: u.department,
+            })));
+            setEmpDropdownOpen(true);
+        } catch {
+            setEmpResults([]);
+            setEmpDropdownOpen(true);
+        } finally {
+            setEmpSearchLoading(false);
+        }
+    }, []);
+
     useEffect(() => {
         if (!empSearch.trim()) {
-            setEmpResults([]);
-            setEmpDropdownOpen(false);
+            // Keep dropdown closed until focus; don't clear results while typing→clearing
             return;
         }
-        const timer = setTimeout(async () => {
-            setEmpSearchLoading(true);
-            try {
-                const res = await usersApi.getAll({ search: empSearch.trim() });
-                const users = res.data.data?.users || [];
-                setEmpResults(users.map((u: any) => ({
-                    id: u.id,
-                    name: u.name,
-                    code: u.employeeCode || u.employee_code || u.code,
-                    department: u.department,
-                })));
-                setEmpDropdownOpen(true);
-            } catch {
-                setEmpResults([]);
-            } finally {
-                setEmpSearchLoading(false);
-            }
+        const timer = setTimeout(() => {
+            void loadEmployees(empSearch);
         }, 300);
         return () => clearTimeout(timer);
-    }, [empSearch]);
+    }, [empSearch, loadEmployees]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -333,9 +344,14 @@ function GeneratePayrollDialog({ open, onOpenChange, onGenerate }: { open: boole
 
     const handleGenerateClick = async () => {
         if (payPeriod === 'monthly' && !workPeriod) return;
+        if (scope === 'custom' && selectedEmployees.length === 0) {
+            alert('Vui lòng chọn ít nhất một nhân viên khi dùng phạm vi Tùy chọn');
+            return;
+        }
 
         setGenerating(true);
         try {
+            const userIds = scope === 'custom' ? selectedEmployees.map(e => e.id) : undefined;
             if (payPeriod === 'monthly') {
                 const [monthStr, yearStr] = workPeriod.split('/');
                 const month = parseInt(monthStr, 10);
@@ -344,6 +360,7 @@ function GeneratePayrollDialog({ open, onOpenChange, onGenerate }: { open: boole
                     month,
                     year,
                     apply_technician_kpi_commission_policy: applyTechKpiPolicy,
+                    user_ids: userIds,
                 });
             } else {
                 // Custom date range — pass as-is or convert
@@ -351,12 +368,14 @@ function GeneratePayrollDialog({ open, onOpenChange, onGenerate }: { open: boole
                     start_date: customStartDate,
                     end_date: customEndDate,
                     apply_technician_kpi_commission_policy: applyTechKpiPolicy,
+                    user_ids: userIds,
                 } as any);
             }
             onGenerate();
             onOpenChange(false);
         } catch (err: unknown) {
             console.error('Error generating payroll:', err);
+            alert((err as any)?.response?.data?.message || 'Lỗi khi tạo bảng tính lương');
         } finally {
             setGenerating(false);
         }
@@ -471,10 +490,12 @@ function GeneratePayrollDialog({ open, onOpenChange, onGenerate }: { open: boole
                                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                                                 <Input
                                                     className="pl-9 h-9 text-[13px] border-gray-200"
-                                                    placeholder="Tìm theo mã, tên nhân viên"
+                                                    placeholder="Tìm theo mã NV, mã chấm công, tên..."
                                                     value={empSearch}
                                                     onChange={e => setEmpSearch(e.target.value)}
-                                                    onFocus={() => empResults.length > 0 && setEmpDropdownOpen(true)}
+                                                    onFocus={() => {
+                                                        void loadEmployees(empSearch);
+                                                    }}
                                                 />
                                                 {/* Dropdown */}
                                                 {empDropdownOpen && (

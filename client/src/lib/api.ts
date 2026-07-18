@@ -826,7 +826,12 @@ export const payrollBatchesApi = {
     getById: (id: string) =>
         api.get<ApiResponse<{ batch: any; records: any[] }>>(`/payroll-batches/${id}`),
 
-    generate: (data: { month: number; year: number; apply_technician_kpi_commission_policy?: boolean }) =>
+    generate: (data: {
+        month: number;
+        year: number;
+        apply_technician_kpi_commission_policy?: boolean;
+        user_ids?: string[];
+    }) =>
         api.post<ApiResponse<{ batch: any }>>('/payroll-batches/generate', data),
 
     updateStatus: (id: string, status: string) =>
