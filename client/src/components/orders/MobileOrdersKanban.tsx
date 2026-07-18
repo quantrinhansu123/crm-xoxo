@@ -172,7 +172,6 @@ function MobileOrderCard({
         services.some(s => s.care_warranty_flow === 'warranty');
     const afterSaleStage =
         (product as any)?.after_sale_stage ||
-        (product as any)?.phase_stage ||
         (services[0] as any)?.after_sale_stage ||
         null;
     const needsDebtCollection =

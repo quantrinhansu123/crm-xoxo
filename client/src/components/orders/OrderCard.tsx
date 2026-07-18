@@ -50,11 +50,10 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
         productGroup.services?.some(s => s.care_warranty_flow === 'warranty');
 
     // Cần thu nợ (TN): After sale nhưng chưa qua bước Kiểm nợ (after1 / after1_debt)
-    const afterSaleStage =
-        (productGroup.product as any)?.after_sale_stage ||
-        (productGroup.product as any)?.phase_stage ||
-        (productGroup.services?.[0] as any)?.after_sale_stage ||
-        null;
+    // Chỉ lấy after_sale_stage — không fallback phase_stage (có thể là war*/care* của chu kỳ khác)
+    const afterSaleStage = (productGroup.product as any)?.after_sale_stage
+        || (productGroup.services?.[0] as any)?.after_sale_stage
+        || null;
     const needsDebtCollection =
         columnId === 'after_sale' &&
         (!afterSaleStage || afterSaleStage === 'after1' || afterSaleStage === 'after1_debt');

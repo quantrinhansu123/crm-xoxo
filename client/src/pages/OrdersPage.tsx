@@ -112,7 +112,8 @@ export function OrdersPage() {
         setShowConfirmDoneDialog(true);
     };
 
-    /** SP đã feedback khen/chê → Care/Warranty / after4 = cột Lưu trữ */
+    /** SP đã vào Lưu trữ / tab Care|Warranty — không dùng care_warranty_flow đơn độc
+     * (BH còn gắn flow=warranty khi vẫn đang after1–after3). */
     const isArchivedToCareWarranty = (item?: (OrderItem & {
         after_sale_stage?: string | null;
         current_phase?: string | null;
@@ -121,15 +122,10 @@ export function OrdersPage() {
         phase_stage?: string | null;
     }) | null) => {
         if (!item) return false;
-        const careStages = new Set(['care6', 'care12', 'care-custom', 'war1', 'war2', 'war3']);
         return (
             item.after_sale_stage === 'after4'
             || item.current_phase === 'care'
             || item.current_phase === 'warranty'
-            || item.care_warranty_flow === 'care'
-            || item.care_warranty_flow === 'warranty'
-            || (!!item.care_warranty_stage && careStages.has(item.care_warranty_stage))
-            || (!!item.phase_stage && careStages.has(item.phase_stage))
         );
     };
 
