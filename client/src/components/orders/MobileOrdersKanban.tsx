@@ -41,10 +41,11 @@ const TAB_SHORT_LABELS: Record<string, string> = {
     in_progress: 'Đang TH',
     done: 'Đã HT',
     after_sale: 'After',
+    archived: 'Lưu trữ',
     cancelled: 'Hủy',
 };
 
-const DONE_HIDDEN_COLUMNS = new Set(['done', 'after_sale', 'cancelled']);
+const DONE_HIDDEN_COLUMNS = new Set(['done', 'after_sale', 'archived', 'cancelled']);
 
 function getTechnicianNames(services: OrderItem[]) {
     const names = new Set<string>();

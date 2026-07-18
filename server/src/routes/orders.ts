@@ -18,25 +18,6 @@ import { deleteOrderCascade } from '../utils/orderDeletionHelper.js';
 
 const router = Router();
 
-/** SP đã Lưu trữ / Care|Warranty — không đưa vào list /orders (kanban board). */
-function isHiddenFromOrdersBoard(product: {
-    status?: string | null;
-    after_sale_stage?: string | null;
-    care_warranty_flow?: string | null;
-    current_phase?: string | null;
-}): boolean {
-    const status = product.status || '';
-    // Tạo HD Bảo hành (step1–4) vẫn hiện Before Sale
-    if (['step1', 'step2', 'step3', 'step4', 'pending'].includes(status)) return false;
-    return (
-        product.after_sale_stage === 'after4'
-        || product.care_warranty_flow === 'care'
-        || product.care_warranty_flow === 'warranty'
-        || product.current_phase === 'care'
-        || product.current_phase === 'warranty'
-    );
-}
-
 async function getOrderNotificationContext(orderId: string) {
     const { data: order, error } = await supabaseAdmin
         .from('orders')
@@ -275,7 +256,6 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                     if (opList.length > 0) {
                         const v2Items: any[] = [];
                         for (const product of opList) {
-                            if (isHiddenFromOrdersBoard(product)) continue;
                             v2Items.push({
                                 id: product.id,
                                 order_id: order.id,
@@ -444,7 +424,6 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                 if (opList.length > 0) {
                     const v2Items: any[] = [];
                     for (const product of opList) {
-                        if (isHiddenFromOrdersBoard(product)) continue;
                         v2Items.push({
                             id: product.id,
                             order_id: order.id,

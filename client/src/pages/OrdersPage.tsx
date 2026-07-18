@@ -41,6 +41,7 @@ const MOBILE_ORDER_STAT_STYLES: Record<string, { bg: string; label: string }> = 
     in_progress: { bg: 'bg-orange-500', label: 'Đang thực hiện' },
     done: { bg: 'bg-emerald-600', label: 'Đã hoàn thiện' },
     after_sale: { bg: 'bg-teal-600', label: 'After sale' },
+    archived: { bg: 'bg-slate-600', label: 'Lưu trữ' },
     cancelled: { bg: 'bg-rose-500', label: 'Đã huỷ' },
 };
 
@@ -111,7 +112,7 @@ export function OrdersPage() {
         setShowConfirmDoneDialog(true);
     };
 
-    /** Đã Lưu trữ / vào Care|Warranty — ẩn khỏi board /orders */
+    /** SP đã feedback khen/chê → Care/Warranty / after4 = cột Lưu trữ */
     const isArchivedToCareWarranty = (item?: (OrderItem & {
         after_sale_stage?: string | null;
         current_phase?: string | null;
@@ -132,9 +133,9 @@ export function OrdersPage() {
         );
     };
 
-    /** null = ẩn khỏi mọi cột /orders (đã Lưu trữ / after4) */
+    /** null = ẩn (hiếm); 'archived' = cột Lưu trữ trên /orders */
     const getGroupStatus = (group: { product: OrderItem | null; services: OrderItem[] }, fallbackOrder: Order): string | null => {
-        const allItems = [group.product, ...group.services].filter(Boolean) as OrderItem[];
+        const allItems = [group.product, ...(group.services || [])].filter(Boolean) as OrderItem[];
         const itemStatus = group.product?.status || group.services?.[0]?.status;
 
         // 1. Sales / Warranty steps (Before Sale) - Highest priority
@@ -143,18 +144,9 @@ export function OrdersPage() {
             return 'before_sale';
         }
 
-        // 2. Status care/warranty (set khi vào Lưu trữ) — luôn ẩn, không phụ thuộc field phụ trên list API
-        if (itemStatus && ['care', 'warranty', 'archived'].includes(itemStatus)) {
-            return null;
-        }
-        if (allItems.some((it) => it.status && ['care', 'warranty', 'archived'].includes(it.status))) {
-            return null;
-        }
-
-        // 3. Đã Lưu trữ (after4) hoặc đã vào Care/Warranty sau feedback — ẩn khỏi board /orders
-        // Check mọi item trong group (product + service) vì list API đôi khi lệch phase trên service
+        // 2. Đã Lưu trữ (after4 / Care khen / Bảo hành) → cột Lưu trữ
         if (allItems.some((it) => isArchivedToCareWarranty(it as any))) {
-            return null;
+            return 'archived';
         }
 
         if (!itemStatus) {
@@ -171,7 +163,6 @@ export function OrdersPage() {
         if (['assigned', 'in_progress', 'processing'].includes(itemStatus)) return 'in_progress';
 
         // 5. Completion / After sale statuses
-        // completed + đơn after_sale: thuộc pipeline after-sale, không phải cột Đã hoàn thiện
         if (['completed', 'done'].includes(itemStatus)) {
             if (fallbackOrder.status === 'after_sale') return 'after_sale';
             return 'done';
@@ -643,7 +634,7 @@ export function OrdersPage() {
                     )}
 
                     {/* Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
                         {columns.map((column) => {
                             const count = getCardsByStatus(column.id).length;
                             return (
@@ -660,7 +651,7 @@ export function OrdersPage() {
                     </div>
 
                     <div className="pb-6">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                             {columns.map((column) => (
                                 <div key={column.id} className="min-w-0">
                                     <Card className={`${column.bgColor} border ${column.borderColor} h-full`}>

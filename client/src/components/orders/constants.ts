@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, Clock, HeartHandshake, ShoppingCart, type LucideIcon } from 'lucide-react';
+import { Archive, Ban, CheckCircle2, Clock, HeartHandshake, ShoppingCart, type LucideIcon } from 'lucide-react';
 import type { OrderStatus, Package as PackageType, Voucher } from '@/types';
 import type { Order } from '@/hooks/useOrders';
 
@@ -40,6 +40,7 @@ export const columns: KanbanColumn[] = [
     { id: 'in_progress', title: 'Đang thực hiện', icon: Clock, color: 'text-amber-600', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' },
     { id: 'done', title: 'Đã hoàn thiện', icon: CheckCircle2, color: 'text-cyan-600', bgColor: 'bg-cyan-50', borderColor: 'border-cyan-200' },
     { id: 'after_sale', title: 'After sale', icon: HeartHandshake, color: 'text-emerald-600', bgColor: 'bg-emerald-50', borderColor: 'border-emerald-200' },
+    { id: 'archived', title: 'Lưu trữ', icon: Archive, color: 'text-slate-600', bgColor: 'bg-slate-100', borderColor: 'border-slate-300' },
     { id: 'cancelled', title: 'Đã huỷ', icon: Ban, color: 'text-red-600', bgColor: 'bg-red-50', borderColor: 'border-red-200' }
 ];
 
