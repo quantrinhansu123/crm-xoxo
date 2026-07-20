@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { supabaseAdmin } from '../config/supabase.js';
 import { fireCrmMasterWebhook } from './webhookNotifier.js';
+import { buildFrontendUrl } from '../config/index.js';
 
 type StaffRole = 'technician' | 'sale' | 'manager' | 'accountant' | string;
 type Channel = 'telegram' | 'zalo';
@@ -40,8 +41,7 @@ export function getFirstImage(images: unknown): string | null {
 
 export function buildCrmOrderUrl(orderCodeOrId?: string | null): string | null {
     if (!orderCodeOrId) return null;
-    const baseUrl = process.env.CRM_WEB_URL || 'https://crm-web-sepia-nine.vercel.app';
-    return `${baseUrl.replace(/\/$/, '')}/orders/${orderCodeOrId}`;
+    return buildFrontendUrl(`/orders/${orderCodeOrId}`);
 }
 
 export function notifyCrmMasterUser(event: string, payload: CrmMasterEventPayload): void {

@@ -4,6 +4,7 @@ import { ApiError } from '../middleware/errorHandler.js';
 import { supabaseAdmin } from '../config/supabase.js';
 import { autoLogKpiViolation } from '../utils/kpiViolationLogger.js';
 import { fireWebhook } from '../utils/webhookNotifier.js';
+import { buildFrontendUrl } from '../config/index.js';
 
 const router = Router();
 
@@ -61,7 +62,7 @@ router.get('/test-webhook', verifyCronSecret, async (req: Request, res: Response
             message: 'Đây là tin nhắn test từ hệ thống CRM SLA Engine',
             triggered_by: 'Manual Trigger',
             tele_id_sale: '123456789', // Dummy ID for testing
-            link_lead: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/leads/test-id`,
+            link_lead: buildFrontendUrl('/leads/test-id'),
             server_time: new Date().toISOString()
         });
         
