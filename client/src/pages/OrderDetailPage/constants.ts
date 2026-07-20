@@ -153,6 +153,10 @@ export function getGroupAfterSaleStage(group: {
         const phase = group.product.current_phase;
         if (phase === 'care' || phase === 'warranty') return null;
 
+        // An explicit phase is authoritative. Stale after-sale stage columns must
+        // not make a Sales/Workflow product appear in two processes at once.
+        if (phase && phase !== 'after_sale') return null;
+
         const after = group.product.after_sale_stage;
         const pStage = group.product.phase_stage;
         const inAfterSale =
