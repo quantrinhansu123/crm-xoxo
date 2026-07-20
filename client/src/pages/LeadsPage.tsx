@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useLeads } from '@/hooks/useLeads';
+import { useLeads, LEADS_LIST_LIMIT } from '@/hooks/useLeads';
 import { useViewActionForRoles } from '@/hooks/useViewAction';
 import type { Lead } from '@/hooks/useLeads';
 import { useEmployees } from '@/hooks/useEmployees';
@@ -37,7 +37,7 @@ import { MobileKanbanColumnTabs } from '@/components/kanban/mobileKanban';
 export function LeadsPage() {
     const navigate = useNavigate();
     const { canRead, canEdit, canDelete } = useViewActionForRoles('leads', ['admin', 'manager', 'sale']);
-    const { leads, loading, error, fetchLeads, createLead, updateLead, deleteLead, convertLead } = useLeads();
+    const { leads, loading, error, pagination, fetchLeads, createLead, updateLead, deleteLead, convertLead } = useLeads();
     const { employees, fetchEmployees } = useEmployees();
     const { users: technicians, fetchTechnicians } = useUsers();
 
@@ -85,7 +85,7 @@ export function LeadsPage() {
 
     // Fetch data on mount (một lần — tránh loop khi identity hook đổi)
     useEffect(() => {
-        fetchLeads({ limit: 500 });
+        fetchLeads({ limit: LEADS_LIST_LIMIT });
         fetchEmployees({ role: 'sale' });
         fetchCustomers();
         fetchProducts();
@@ -135,14 +135,18 @@ export function LeadsPage() {
         []
     );
 
-    // Calculate stats
+    const hasClientFilters = Boolean(
+        searchTerm.trim() || selectedSources.length > 0 || selectedEmployees.length > 0 || onlyUnassigned
+    );
+
+    // Calculate stats — Tổng leads lấy từ DB (pagination.total), không kẹt 500 bản ghi tải về
     const stats = useMemo(() => {
-        const total = filteredLeads.length;
+        const total = hasClientFilters ? filteredLeads.length : (pagination.total || filteredLeads.length);
         const newLeads = leadsByStatus['xac_dinh_nhu_cau']?.length || 0;
         const qualified = (leadsByStatus['hen_qua_ship']?.length || 0) + (leadsByStatus['chot_don']?.length || 0);
         const nurturing = (leadsByStatus['hen_gui_anh']?.length || 0) + (leadsByStatus['dam_phan_gia']?.length || 0);
         return { total, newLeads, qualified, nurturing };
-    }, [filteredLeads, leadsByStatus]);
+    }, [filteredLeads, leadsByStatus, pagination.total, hasClientFilters]);
 
     const handleDragEnd = async (result: DropResult) => {
         const { destination, source, draggableId } = result;
@@ -196,10 +200,10 @@ export function LeadsPage() {
                 navigate(`/orders/new?${params.toString()}`);
             }
 
-            await fetchLeads({ limit: 500 }); // Refresh data
+            await fetchLeads({ limit: LEADS_LIST_LIMIT }); // Refresh data
         } catch {
             toast.error('Lỗi khi cập nhật trạng thái');
-            await fetchLeads({ limit: 500 }); // Revert by refreshing
+            await fetchLeads({ limit: LEADS_LIST_LIMIT }); // Revert by refreshing
         }
     };
 
@@ -210,7 +214,7 @@ export function LeadsPage() {
             toast.success(`Đã cập nhật thông tin cho "${leadForHenQuaShip.name}"`);
             setShowHenQuaShipDialog(false);
             setLeadForHenQuaShip(null);
-            await fetchLeads({ limit: 500 });
+            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         } catch {
             toast.error('Lỗi khi cập nhật thông tin');
         }
@@ -223,7 +227,7 @@ export function LeadsPage() {
             toast.success(`Đã chuyển "${leadForFail.name}" sang trạng thái Fail`);
             setShowFailDialog(false);
             setLeadForFail(null);
-            await fetchLeads({ limit: 500 });
+            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         } catch {
             toast.error('Lỗi khi cập nhật trạng thái');
         }
@@ -246,7 +250,7 @@ export function LeadsPage() {
             navigate(`/orders/new?${params.toString()}`);
             
             setLeadForUpdatePhone(null);
-            await fetchLeads({ limit: 500 });
+            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         } catch {
             toast.error('Lỗi khi cập nhật số điện thoại');
         }
@@ -256,7 +260,7 @@ export function LeadsPage() {
         try {
             await convertLead(lead.id);
             toast.success(`Đã chuyển đổi ${lead.name} thành khách hàng!`);
-            await fetchLeads({ limit: 500 });
+            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         } catch {
             toast.error('Lỗi khi chuyển đổi lead');
         }
@@ -266,7 +270,7 @@ export function LeadsPage() {
         try {
             await createLead(data);
             toast.success('Đã tạo lead thành công!');
-            await fetchLeads({ limit: 500 });
+            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Lỗi khi tạo lead';
             toast.error(message);
@@ -324,10 +328,10 @@ export function LeadsPage() {
                 navigate(`/orders/new?${params.toString()}`);
             }
 
-            await fetchLeads({ limit: 500 });
+            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         } catch {
             toast.error('Lỗi khi cập nhật trạng thái');
-            await fetchLeads({ limit: 500 });
+            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         }
     };
 
@@ -644,7 +648,7 @@ export function LeadsPage() {
                         }
                         setShowOrderConfirmation(false);
                         setCreatedOrder(null);
-                        fetchLeads({ limit: 500 }); // Refresh leads data
+                        fetchLeads({ limit: LEADS_LIST_LIMIT }); // Refresh leads data
                     }}
                 />
 

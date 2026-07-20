@@ -110,18 +110,21 @@ export interface UseLeadsReturn {
     convertLead: (id: string) => Promise<any>;
 }
 
+/** Tải đủ leads cho Kanban — tránh kẹt thống kê ở 500 */
+export const LEADS_LIST_LIMIT = 5000;
+
 export function useLeads(): UseLeadsReturn {
     const [leads, setLeads] = useState<Lead[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [pagination, setPagination] = useState({
         page: 1,
-        limit: 500,
+        limit: LEADS_LIST_LIMIT,
         total: 0,
         totalPages: 0,
     });
 
-    const lastParamsRef = useRef<FetchParams>({ limit: 500 });
+    const lastParamsRef = useRef<FetchParams>({ limit: LEADS_LIST_LIMIT });
     const fetchSeqRef = useRef(0);
 
     const fetchLeads = useCallback(async (params?: FetchParams, options?: FetchOptions) => {
