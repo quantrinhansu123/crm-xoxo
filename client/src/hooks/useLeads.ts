@@ -37,6 +37,8 @@ export interface Lead {
     last_message_text?: string;
     last_message_time?: string;
     last_actor?: string;
+    current_deadline_at?: string;
+    current_rule_index?: number;
 
     // Delivery & Appointment
     delivery_method?: 'direct' | 'ship';

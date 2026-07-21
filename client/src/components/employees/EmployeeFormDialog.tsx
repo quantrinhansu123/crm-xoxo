@@ -690,8 +690,13 @@ export function EmployeeFormDialog({
                                             </div>
                                             <div className="space-y-1">
                                                 <Label className="text-[12px] text-gray-500">
-                                                    Mật khẩu {isEditing ? '' : '*'}
+                                                    {isEditing ? 'Mật khẩu mới' : 'Mật khẩu *'}
                                                 </Label>
+                                                {isEditing && (employee as any)?.password_plain && (
+                                                    <p className="text-[11px] text-gray-400">
+                                                        Mật khẩu hiện tại: <span className="font-mono select-all text-gray-600">{(employee as any).password_plain}</span>
+                                                    </p>
+                                                )}
                                                 <div className="relative">
                                                     <Input
                                                         type={showPassword ? 'text' : 'password'}

@@ -531,10 +531,28 @@ async function resolveUserByName(nameOrId: string): Promise<string | null> {
 }
 
 function normalizeMessageActor(lastActor?: string | null, messageDirection?: string | null): 'lead' | 'sale' | undefined {
-    if (lastActor === 'lead' || lastActor === 'sale') return lastActor;
-    if (messageDirection === 'inbound') return 'lead';
-    if (messageDirection === 'outbound') return 'sale';
+    const actor = String(lastActor || '').trim().toLowerCase();
+    if (actor === 'lead' || actor === 'customer' || actor === 'khach' || actor === 'khách' || actor === 'user' || actor === 'client') {
+        return 'lead';
+    }
+    if (actor === 'sale' || actor === 'agent' || actor === 'staff' || actor === 'page' || actor === 'outbound') {
+        return 'sale';
+    }
+
+    const dir = String(messageDirection || '').trim().toLowerCase();
+    if (dir === 'inbound' || dir === 'in' || dir === 'received') return 'lead';
+    if (dir === 'outbound' || dir === 'out' || dir === 'sent') return 'sale';
     return undefined;
+}
+
+function isInboundDirection(messageDirection?: string | null): boolean {
+    const dir = String(messageDirection || '').trim().toLowerCase();
+    return dir === 'inbound' || dir === 'in' || dir === 'received';
+}
+
+function isOutboundDirection(messageDirection?: string | null): boolean {
+    const dir = String(messageDirection || '').trim().toLowerCase();
+    return dir === 'outbound' || dir === 'out' || dir === 'sent';
 }
 
 async function handleLeadUpsert(incomingData: any, event?: string) {
@@ -919,8 +937,12 @@ async function handleLeadUpdate(data: any) {
     let saleSlaHandledInCoreUpdate = false;
     const incomingSaleName = owner_sale || assigned_to;
 
-    if (incomingSaleName && last_message_text && message_direction !== 'inbound') {
-        effectiveLastActor = 'sale';
+    if (incomingSaleName && last_message_text) {
+        if (isOutboundDirection(message_direction)) {
+            effectiveLastActor = 'sale';
+        } else if (!isInboundDirection(message_direction) && effectiveLastActor === 'sale') {
+            effectiveLastActor = 'sale';
+        }
     }
 
     // Logic Ownership:
@@ -1071,9 +1093,9 @@ async function handleLeadUpdate(data: any) {
         if (effectiveLastActor === 'lead') {
             await on_customer_message(lead);
         } else if (effectiveLastActor === 'sale' && !saleSlaHandledInCoreUpdate) {
-            const saleName = owner_sale || assigned_to;
-            const resolvedId = await resolveUserByName(saleName);
-            await on_sale_message(lead, resolvedId as string, saleName);
+            const saleName = owner_sale || assigned_to || currentLead.owner_sale;
+            const resolvedId = (await resolveUserByName(saleName)) || currentLead.assigned_to || null;
+            await on_sale_message(lead, resolvedId, saleName || 'Sale');
         }
     }
 

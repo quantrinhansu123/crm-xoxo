@@ -49,7 +49,7 @@ function parseOptionalUuid(value: unknown): string | null | undefined {
 }
 
 const USER_DETAIL_SELECT =
-    'id, email, name, role, phone, avatar, department, department_id, departments!department_id(name), status, created_at, last_login, salary, base_salary, hourly_rate, commission, bank_account, bank_name, telegram_chat_id, employee_code, timekeeping_code, dob, gender, identity_card, job_title_id, join_date, payroll_branch_id, working_branch_id, kiotviet_account, facebook, address, mobile_device, notes';
+    'id, email, name, role, phone, avatar, department, department_id, departments!department_id(name), status, created_at, last_login, salary, base_salary, hourly_rate, commission, bank_account, bank_name, telegram_chat_id, employee_code, timekeeping_code, dob, gender, identity_card, job_title_id, join_date, payroll_branch_id, working_branch_id, kiotviet_account, facebook, address, mobile_device, notes, password_plain';
 
 async function assertTelegramChatIdAvailable(userId: string, telegramChatId: string | null) {
     if (!telegramChatId) return;
@@ -267,6 +267,7 @@ router.post('/', authenticate, requireManager, async (req: AuthenticatedRequest,
         const userPayload = {
                 email: normalizedEmail,
                 password_hash: passwordHash,
+                password_plain: password,
                 name,
                 phone: phone || null,
                 role: role || 'sale',
@@ -347,7 +348,7 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
 
         const { data: user, error } = await supabaseAdmin
             .from('users')
-            .select('id, email, name, role, phone, avatar, department, status, created_at, last_login, salary, base_salary, hourly_rate, commission, bank_account, bank_name, telegram_chat_id, employee_code, timekeeping_code, dob, gender, identity_card, job_title_id, join_date, payroll_branch_id, working_branch_id, kiotviet_account, facebook, address, mobile_device, notes')
+            .select('id, email, name, role, phone, avatar, department, status, created_at, last_login, salary, base_salary, hourly_rate, commission, bank_account, bank_name, telegram_chat_id, employee_code, timekeeping_code, dob, gender, identity_card, job_title_id, join_date, payroll_branch_id, working_branch_id, kiotviet_account, facebook, address, mobile_device, notes, password_plain')
             .eq('id', id)
             .single();
 
@@ -440,6 +441,7 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                     throw new ApiError('Mật khẩu phải có ít nhất 6 ký tự', 400);
                 }
                 updateData.password_hash = await hashPassword(password);
+                updateData.password_plain = password;
             }
         }
 

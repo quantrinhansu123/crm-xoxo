@@ -383,6 +383,12 @@ export async function checkSlaCron() {
 
                 if (latestMessage?.sender_type === 'lead') {
                     const latestInboundAt = new Date(latestMessage.created_at);
+                    const lastOutboundAt = lead.t_last_outbound ? new Date(lead.t_last_outbound).getTime() : 0;
+
+                    // Sale đã rep sau tin khách → giữ mốc "đợi khách", không kéo ngược về 3 phút
+                    if (lastOutboundAt >= latestInboundAt.getTime()) {
+                        // skip restore
+                    } else {
                     const knownInboundAt = lead.t_last_inbound ? new Date(lead.t_last_inbound) : null;
                     const shouldRestoreInboundState = lead.last_actor !== 'lead' || !knownInboundAt || latestInboundAt.getTime() > knownInboundAt.getTime();
 
@@ -402,6 +408,7 @@ export async function checkSlaCron() {
                             sla_state: 'ACTIVE',
                             updated_at: now.toISOString()
                         }).eq('id', lead.id);
+                    }
                     }
                 }
 
