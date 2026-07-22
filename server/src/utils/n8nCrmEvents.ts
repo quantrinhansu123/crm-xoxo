@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { supabaseAdmin } from '../config/supabase.js';
 import { fireCrmMasterWebhook } from './webhookNotifier.js';
+import { enrichCrmMasterUserPayload } from './webhookPayloadAliases.js';
 import { buildFrontendUrl } from '../config/index.js';
 
 type StaffRole = 'technician' | 'sale' | 'manager' | 'accountant' | string;
@@ -56,13 +57,13 @@ export function notifyCrmMasterUser(event: string, payload: CrmMasterEventPayloa
     }
     recentCrmMasterEventIds.set(eventId, now + CRM_MASTER_DEDUPE_TTL_MS);
 
-    const body = {
+    const body = enrichCrmMasterUserPayload({
         event,
         event_id: eventId,
         created_at: new Date().toISOString(),
         channel: payload.channel || 'telegram',
         ...payload,
-    };
+    });
 
     fireCrmMasterWebhook(event, body).catch((err) => {
         console.error(`[CrmMasterEvent] Failed to fire ${event}:`, err);

@@ -6,6 +6,8 @@
  * NOTE: dùng `any` cho fetch result vì trên CI `Response` bị lẫn với Express.Response.
  */
 
+import { enrichCrmMasterPayload } from './webhookPayloadAliases.js';
+
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || '';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 const CRM_MASTER_WEBHOOK_URL = process.env.CRM_MASTER_WEBHOOK_URL || 'https://dhsywwqoi.datadex.vn/webhook/crm-master-xoxo';
@@ -101,7 +103,8 @@ export async function fireCrmMasterWebhook(event: string, data: Record<string, a
 }
 
 export function notifyCrmMaster(event: string, data: Record<string, any>): void {
-    fireCrmMasterWebhook(event, data).catch((err) => {
+    const enriched = enrichCrmMasterPayload(data);
+    fireCrmMasterWebhook(event, enriched).catch((err) => {
         console.error(`[CrmMasterWebhook] ❌ ERROR: Unhandled event "${event}":`, err);
     });
 }

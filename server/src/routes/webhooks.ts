@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { fireWebhook, notifyCrmMaster } from '../utils/webhookNotifier.js';
 import { on_customer_message, on_sale_message, on_lead_assigned, getVirtualTimeLeft, calculateDeadline, SLA_CYCLES } from '../utils/slaManager.js';
+import { enrichLeadSlaFields, resolveLeadCustomerMessageAt, resolveLeadStaffReplyAt } from '../utils/webhookPayloadAliases.js';
 
 const router = Router();
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -156,7 +157,7 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
                 action_type = 'WARN';
             }
 
-            return {
+            return enrichLeadSlaFields({
                 id: lead.id,
                 name: lead.name,
                 phone: lead.phone,
@@ -172,7 +173,7 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
                 time_left_mins: timeLeftMins,
                 action_type: action_type,
                 sla_label: action_type === 'RECLAIM' ? `${slaMinutes} phút (Thu hồi)` : action_type === 'WARN' ? `${warnMinutes} phút (Cảnh báo)` : 'OK'
-            };
+            });
         }).filter((l: any) => l.action_type !== 'NONE');
 
         res.json({
@@ -779,20 +780,22 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         
         // Trigger SLA Rule 1 or 2
         if (normalizedLastActor === 'lead') {
-            await on_customer_message(lead);
+            await on_customer_message(lead, { inboundAt: resolveLeadCustomerMessageAt(data) ?? undefined });
         } else if (normalizedLastActor === 'sale') {
-            await on_sale_message(lead, resolvedAssignedTo as string, saleName);
+            await on_sale_message(lead, resolvedAssignedTo as string, saleName, {
+                outboundAt: resolveLeadStaffReplyAt(data) ?? undefined,
+            });
         }
     } else if (resolvedAssignedTo) {
         // Mới gán Sale, chưa nhắn tin -> Rule 1 kích hoạt 3 phút
         await on_lead_assigned(lead.id, resolvedAssignedTo as string);
     }
 
-    notifyCrmMaster('lead.created', { lead });
+    notifyCrmMaster('lead.created', { lead: enrichLeadSlaFields(lead) });
 
     return {
         action: 'created',
-        lead
+        lead: enrichLeadSlaFields(lead)
     };
 }
 
@@ -814,10 +817,12 @@ async function handleLeadUpdate(data: any) {
         message_direction, // Không phải cột DB
         lead: _ignored_lead, // Bỏ qua key "lead" để không bị nhầm là cột database
         t_last_message: _ignored_t1, // Bỏ key rác từ n8n
-        t_last_customer_message: _ignored_t2, // Bỏ key rác từ n8n
         tags: _ignored_tags, // Bỏ key rác chưa hỗ trợ
         ...otherFields
     } = data;
+
+    const inboundMessageAt = resolveLeadCustomerMessageAt(data);
+    const outboundReplyAt = resolveLeadStaffReplyAt(data);
 
     // Log để kiểm tra dữ liệu nhận được từ n8n (Debug)
     console.log(`[Webhook] Update Lead ID: ${id || data.id}, Phone: ${incomingPhone || data.phone}`);
@@ -1091,19 +1096,22 @@ async function handleLeadUpdate(data: any) {
         
         // Cập nhật State Machine SLA rời theo đúng kiến trúc sau khi Update lõi Lead xog
         if (effectiveLastActor === 'lead') {
-            await on_customer_message(lead);
+            await on_customer_message(lead, { inboundAt: inboundMessageAt ?? undefined });
         } else if (effectiveLastActor === 'sale' && !saleSlaHandledInCoreUpdate) {
             const saleName = owner_sale || assigned_to || currentLead.owner_sale;
             const resolvedId = (await resolveUserByName(saleName)) || currentLead.assigned_to || null;
-            await on_sale_message(lead, resolvedId, saleName || 'Sale');
+            await on_sale_message(lead, resolvedId, saleName || 'Sale', {
+                outboundAt: outboundReplyAt ?? undefined,
+            });
         }
     }
 
-    notifyCrmMaster('lead.updated', { lead });
+    const enrichedLead = enrichLeadSlaFields(lead);
+    notifyCrmMaster('lead.updated', { lead: enrichedLead });
 
     return {
         action: 'updated',
-        lead
+        lead: enrichedLead
     };
 }
 

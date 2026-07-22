@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../config/supabase.js';
 import { fireWebhook } from './webhookNotifier.js';
+import { enrichFinanceWebhookPayload } from './webhookPayloadAliases.js';
 
 type Actor = {
     id: string;
@@ -48,14 +49,14 @@ export async function notifyFinanceEvent({
     recipientRoles = ['admin', 'manager', 'accountant'],
     recipientUserIds = [],
 }: NotifyFinanceEventParams): Promise<void> {
-    const payload = {
+    const payload = enrichFinanceWebhookPayload(event, {
         ...data,
         event,
         actor_id: actor?.id,
         actor_name: actor?.name,
         actor_role: actor?.role,
         occurred_at: new Date().toISOString(),
-    };
+    }, actor);
 
     fireWebhook(event, payload);
 

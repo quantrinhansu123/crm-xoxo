@@ -1349,7 +1349,12 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
             });
         }
 
-        notifyCrmMaster('order.created', { order, customer_items: createdCustomerItems });
+        notifyCrmMaster('order.created', {
+            order,
+            customer_items: createdCustomerItems,
+            created_by_name: req.user!.name,
+            ...(order.sales_id === req.user!.id ? { sale_name: req.user!.name, sales_name: req.user!.name } : {}),
+        });
 
         res.status(201).json({
             status: 'success',

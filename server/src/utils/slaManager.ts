@@ -108,13 +108,14 @@ export function is_valid_followup(ruleIndex: number, timeLeftMinutes: number): b
  * Bất kể mốc hiện tại (kể cả RECLAIMED/FINISHED): nhảy về mốc 3 phút.
  * Không áp dụng khi đã Chốt đơn / Hủy / Fail (STOPPED hoặc end stage).
  */
-export async function on_customer_message(lead: any) {
+export async function on_customer_message(lead: any, opts?: { inboundAt?: string | Date }) {
     if (lead.sla_state === 'STOPPED' || isSlaEndStage(lead.pipeline_stage)) {
         console.log(`[SLA] Skipping customer message for lead ${lead.id} (STOPPED / end stage)`);
         if (lead.id) {
+            const inboundAt = opts?.inboundAt ? new Date(opts.inboundAt) : new Date();
             const patch: Record<string, unknown> = {
-                t_last_inbound: new Date().toISOString(),
-                last_message_time: new Date().toISOString(),
+                t_last_inbound: inboundAt.toISOString(),
+                last_message_time: inboundAt.toISOString(),
                 last_actor: 'lead',
             };
             // Đồng bộ STOPPED nếu còn ACTIVE nhưng đã ở cột chốt đơn
@@ -127,7 +128,7 @@ export async function on_customer_message(lead: any) {
         return;
     }
 
-    const now = new Date();
+    const now = opts?.inboundAt ? new Date(opts.inboundAt) : new Date();
     const nextRule = SLA_CYCLES[0];
     const deadline = calculateDeadline(now, nextRule, lead.created_at || now);
 
@@ -149,8 +150,8 @@ export async function on_customer_message(lead: any) {
 /**
  * Di chuyển SLA sang mốc tiếp theo
  */
-export async function move_to_next_rule(lead: any, saleId: string | null = null, fromCron: boolean = false, markOutbound: boolean = false) {
-    const now = new Date();
+export async function move_to_next_rule(lead: any, saleId: string | null = null, fromCron: boolean = false, markOutbound: boolean = false, outboundAt?: string | Date) {
+    const now = outboundAt ? new Date(outboundAt) : new Date();
     const nextIndex = (lead.current_rule_index || 0) + 1;
     console.log('[DEBUG SLA] nextIndex:', nextIndex);
     
@@ -186,7 +187,7 @@ export async function move_to_next_rule(lead: any, saleId: string | null = null,
 /**
  * Xử lý khi Sale Nhắn (Rule 2 + Rule 4)
  */
-export async function on_sale_message(lead: any, saleId: string | null, saleName: string) {
+export async function on_sale_message(lead: any, saleId: string | null, saleName: string, opts?: { outboundAt?: string | Date }) {
     if (lead.id) {
         const { data: freshLead, error } = await supabaseAdmin
             .from('leads')
@@ -214,8 +215,8 @@ export async function on_sale_message(lead: any, saleId: string | null, saleName
         // Chỉ lưu vết tin nhắn, không tác động Rule khi Pause/Stop/end stage
         const patch: Record<string, unknown> = {
             last_actor: 'sale',
-            t_last_outbound: new Date().toISOString(),
-            last_message_time: new Date().toISOString()
+            t_last_outbound: (opts?.outboundAt ? new Date(opts.outboundAt) : new Date()).toISOString(),
+            last_message_time: (opts?.outboundAt ? new Date(opts.outboundAt) : new Date()).toISOString()
         };
         if (isSlaEndStage(lead.pipeline_stage) && lead.sla_state !== 'STOPPED') {
             patch.sla_state = 'STOPPED';
@@ -227,7 +228,7 @@ export async function on_sale_message(lead: any, saleId: string | null, saleName
     }
 
     // Rule 2: Sale nhắn cuối → đồng hồ bắt đầu/chuyển sang mốc SLA tiếp theo (không khóa khung 10p/30p)
-    await move_to_next_rule(lead, saleId, false, true);
+    await move_to_next_rule(lead, saleId, false, true, opts?.outboundAt);
 }
 
 export async function on_lead_assigned(leadId: string, saleId: string) {
