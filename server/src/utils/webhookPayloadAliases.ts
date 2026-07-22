@@ -6,30 +6,100 @@ function firstRelation<T = any>(value: T | T[] | null | undefined): T | null {
     return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
 }
 
+function toIsoOrNull(raw: unknown): string | null {
+    if (raw === undefined || raw === null || raw === '') return null;
+    const d = new Date(String(raw));
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
+ * Chuẩn hóa payload lead từ n8n/Pancake trước khi xử lý.
+ * Map alias phổ biến → field CRM chuẩn (không breaking field cũ).
+ */
+export function normalizeN8nLeadPayload(incoming: Record<string, any> | null | undefined): Record<string, any> {
+    if (!incoming || typeof incoming !== 'object') return {};
+
+    const data = { ...incoming };
+
+    // message_time (n8n) → last_message_time
+    if (!data.last_message_time && data.message_time) {
+        data.last_message_time = data.message_time;
+    }
+
+    // assigned_to_name (n8n) → owner_sale
+    if (!data.owner_sale && data.assigned_to_name) {
+        data.owner_sale = data.assigned_to_name;
+    }
+
+    // customer_id từ Pancake đôi khi là pancake customer id
+    if (!data.pancake_customer_id && data.pancake_customer_id_alt) {
+        data.pancake_customer_id = data.pancake_customer_id_alt;
+    }
+
+    // Alias thời điểm khách/sale
+    if (!data.last_customer_message_at && data.t_last_customer_message) {
+        data.last_customer_message_at = data.t_last_customer_message;
+    }
+    if (!data.last_staff_reply_at && data.t_last_staff_reply) {
+        data.last_staff_reply_at = data.t_last_staff_reply;
+    }
+
+    // Nếu last_actor=sale và có message time → coi là staff reply time
+    const actor = String(data.last_actor || '').trim().toLowerCase();
+    const msgAt = data.last_message_time || data.message_time || null;
+    if (actor === 'sale' || actor === 'agent' || actor === 'staff' || actor === 'page') {
+        if (!data.last_staff_reply_at && msgAt) data.last_staff_reply_at = msgAt;
+        if (!data.t_last_outbound && msgAt) data.t_last_outbound = msgAt;
+    } else if (actor === 'lead' || actor === 'customer' || actor === 'khach' || actor === 'khách' || actor === 'user' || actor === 'client') {
+        if (!data.last_customer_message_at && msgAt) data.last_customer_message_at = msgAt;
+        if (!data.t_last_inbound && msgAt) data.t_last_inbound = msgAt;
+    }
+
+    return data;
+}
+
+/** Các key n8n không phải cột DB leads — bỏ khỏi update bừa */
+export const N8N_LEAD_NON_DB_KEYS = [
+    'message_time',
+    'assigned_to_name',
+    'customer_id', // CRM customers.id — không phải cột leads
+    'message_id',
+    'request_id',
+    'page_id',
+    'message_direction',
+    'last_customer_message_at',
+    'last_staff_reply_at',
+    't_last_customer_message',
+    't_last_staff_reply',
+    't_last_message',
+    'event',
+    'data',
+] as const;
+
 /** Đọc timestamp khách nhắn từ payload n8n/Pancake */
 export function resolveLeadCustomerMessageAt(data: Record<string, any> | null | undefined): string | null {
     if (!data) return null;
-    const raw =
+    return toIsoOrNull(
         data.last_customer_message_at
         ?? data.t_last_customer_message
         ?? data.t_last_inbound
-        ?? null;
-    if (!raw) return null;
-    const d = new Date(raw);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+        ?? ((String(data.last_actor || '').toLowerCase() === 'lead' || String(data.message_direction || '').toLowerCase() === 'inbound')
+            ? (data.last_message_time ?? data.message_time)
+            : null)
+    );
 }
 
 /** Đọc timestamp sale rep từ payload n8n/Pancake */
 export function resolveLeadStaffReplyAt(data: Record<string, any> | null | undefined): string | null {
     if (!data) return null;
-    const raw =
+    return toIsoOrNull(
         data.last_staff_reply_at
         ?? data.t_last_staff_reply
         ?? data.t_last_outbound
-        ?? null;
-    if (!raw) return null;
-    const d = new Date(raw);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+        ?? ((String(data.last_actor || '').toLowerCase() === 'sale' || String(data.message_direction || '').toLowerCase() === 'outbound')
+            ? (data.last_message_time ?? data.message_time)
+            : null)
+    );
 }
 
 /** Thêm alias SLA cho lead (outbound webhook / API response) */
