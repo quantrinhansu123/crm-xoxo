@@ -107,6 +107,8 @@ export function is_valid_followup(ruleIndex: number, timeLeftMinutes: number): b
  * Xử lý khi Khách Nhắn (Rule 1)
  * Bất kể mốc hiện tại (kể cả RECLAIMED/FINISHED): nhảy về mốc 3 phút.
  * Không áp dụng khi đã Chốt đơn / Hủy / Fail (STOPPED hoặc end stage).
+ * Không reset nếu tin inbound cũ hơn / bằng lần sale outbound gần nhất
+ * (tránh đè mất ĐỢI KHÁCH 60' khi n8n/cron gửi lại tin khách cũ).
  */
 export async function on_customer_message(lead: any, opts?: { inboundAt?: string | Date }) {
     if (lead.sla_state === 'STOPPED' || isSlaEndStage(lead.pipeline_stage)) {
@@ -128,7 +130,28 @@ export async function on_customer_message(lead: any, opts?: { inboundAt?: string
         return;
     }
 
+    // Refresh lead để có t_last_outbound / rule index mới nhất
+    if (lead.id) {
+        const { data: freshLead } = await supabaseAdmin
+            .from('leads')
+            .select('id, created_at, pipeline_stage, sla_state, t_last_outbound, t_last_inbound, current_rule_index, last_actor, assigned_to')
+            .eq('id', lead.id)
+            .maybeSingle();
+        if (freshLead) lead = { ...lead, ...freshLead };
+    }
+
     const now = opts?.inboundAt ? new Date(opts.inboundAt) : new Date();
+    const lastOutboundAt = lead.t_last_outbound ? new Date(lead.t_last_outbound).getTime() : 0;
+
+    // Đang ĐỢI KHÁCH (index≥1, last_actor=sale): chỉ về 3' khi khách nhắn SAU sale
+    if (
+        lastOutboundAt > 0
+        && now.getTime() <= lastOutboundAt
+    ) {
+        console.log(`[SLA] Skip on_customer_message lead ${lead.id}: inbound <= last outbound (giữ mốc ĐỢI KHÁCH)`);
+        return;
+    }
+
     const nextRule = SLA_CYCLES[0];
     const deadline = calculateDeadline(now, nextRule, lead.created_at || now);
 
@@ -143,7 +166,7 @@ export async function on_customer_message(lead: any, opts?: { inboundAt?: string
         next_followup_time: null,
         appointment_reminded_at: null,
         next_followup_reminded_at: null,
-        updated_at: now.toISOString()
+        updated_at: new Date().toISOString()
     }).eq('id', lead.id);
 }
 
@@ -207,10 +230,12 @@ export async function on_sale_message(lead: any, saleId: string | null, saleName
         return;
     }
 
+    // Lead đã thu hồi / chưa owner: sale reply tại đây không claim ownership
+    // (ownership claim nằm ở webhook). Chỉ lưu vết nếu vẫn RECLAIMED mà đã có owner lạ.
     if (
         lead.sla_state === 'STOPPED' ||
         isSlaEndStage(lead.pipeline_stage) ||
-        ['PAUSED_APPOINTMENT', 'FINISHED', 'RECLAIMED'].includes(lead.sla_state || '')
+        ['PAUSED_APPOINTMENT', 'FINISHED'].includes(lead.sla_state || '')
     ) {
         // Chỉ lưu vết tin nhắn, không tác động Rule khi Pause/Stop/end stage
         const patch: Record<string, unknown> = {
@@ -224,6 +249,37 @@ export async function on_sale_message(lead: any, saleId: string | null, saleName
         }
         const { error } = await supabaseAdmin.from('leads').update(patch).eq('id', lead.id);
         if (error) console.error('[SLA] Lỗi update khi paused/stopped:', error);
+        return;
+    }
+
+    // RECLAIMED + đã có owner (edge): không advance; RECLAIMED + unowned đã được webhook claim→60'
+    if (lead.sla_state === 'RECLAIMED') {
+        if (!lead.assigned_to && saleId) {
+            // Fallback claim nếu webhook chưa gán (race): owner + ĐỢI KHÁCH 60'
+            const now = opts?.outboundAt ? new Date(opts.outboundAt) : new Date();
+            const deadline = calculateDeadline(now, SLA_CYCLES[1], lead.created_at || now);
+            await supabaseAdmin.from('leads').update({
+                assigned_to: saleId,
+                assign_state: 'assigned',
+                owner_sale: saleName || null,
+                current_rule_index: 1,
+                current_deadline_at: deadline.toISOString(),
+                last_actor: 'sale',
+                t_last_outbound: now.toISOString(),
+                last_message_time: now.toISOString(),
+                sla_state: 'ACTIVE',
+                updated_at: now.toISOString(),
+            }).eq('id', lead.id);
+            console.log(`[SLA] Fallback claim after RECLAIMED: lead ${lead.id} → ${saleId} (60')`);
+            return;
+        }
+        const patch: Record<string, unknown> = {
+            last_actor: 'sale',
+            t_last_outbound: (opts?.outboundAt ? new Date(opts.outboundAt) : new Date()).toISOString(),
+            last_message_time: (opts?.outboundAt ? new Date(opts.outboundAt) : new Date()).toISOString()
+        };
+        const { error } = await supabaseAdmin.from('leads').update(patch).eq('id', lead.id);
+        if (error) console.error('[SLA] Lỗi update khi RECLAIMED:', error);
         return;
     }
 
@@ -385,31 +441,37 @@ export async function checkSlaCron() {
                 if (latestMessage?.sender_type === 'lead') {
                     const latestInboundAt = new Date(latestMessage.created_at);
                     const lastOutboundAt = lead.t_last_outbound ? new Date(lead.t_last_outbound).getTime() : 0;
+                    const ruleIndexNow = lead.current_rule_index || 0;
 
-                    // Sale đã rep sau tin khách → giữ mốc "đợi khách", không kéo ngược về 3 phút
-                    if (lastOutboundAt >= latestInboundAt.getTime()) {
-                        // skip restore
+                    // Đang ĐỢI KHÁCH (sale đã rep, index≥1): tuyệt đối không kéo về 3'
+                    // trừ khi có tin khách MỚI sau outbound.
+                    if (ruleIndexNow > 0 && lead.last_actor === 'sale' && lastOutboundAt > 0 && latestInboundAt.getTime() <= lastOutboundAt) {
+                        // giữ nguyên deadline 60'/mốc hiện tại
+                    } else if (lastOutboundAt >= latestInboundAt.getTime()) {
+                        // Sale đã rep sau tin khách → giữ mốc "đợi khách"
                     } else {
-                    const knownInboundAt = lead.t_last_inbound ? new Date(lead.t_last_inbound) : null;
-                    const shouldRestoreInboundState = lead.last_actor !== 'lead' || !knownInboundAt || latestInboundAt.getTime() > knownInboundAt.getTime();
+                        const knownInboundAt = lead.t_last_inbound ? new Date(lead.t_last_inbound) : null;
+                        // Chỉ restore khi inbound mới hơn inbound đã biết — không restore chỉ vì last_actor=sale
+                        const shouldRestoreInboundState = !knownInboundAt
+                            || latestInboundAt.getTime() > knownInboundAt.getTime();
 
-                    if (shouldRestoreInboundState) {
-                        const restoredDeadline = calculateDeadline(latestInboundAt, SLA_CYCLES[0], lead.created_at);
-                        lead.last_actor = 'lead';
-                        lead.t_last_inbound = latestInboundAt.toISOString();
-                        lead.current_rule_index = 0;
-                        lead.current_deadline_at = restoredDeadline.toISOString();
+                        if (shouldRestoreInboundState) {
+                            const restoredDeadline = calculateDeadline(latestInboundAt, SLA_CYCLES[0], lead.created_at);
+                            lead.last_actor = 'lead';
+                            lead.t_last_inbound = latestInboundAt.toISOString();
+                            lead.current_rule_index = 0;
+                            lead.current_deadline_at = restoredDeadline.toISOString();
 
-                        await supabaseAdmin.from('leads').update({
-                            last_actor: 'lead',
-                            t_last_inbound: latestInboundAt.toISOString(),
-                            last_message_time: latestInboundAt.toISOString(),
-                            current_rule_index: 0,
-                            current_deadline_at: restoredDeadline.toISOString(),
-                            sla_state: 'ACTIVE',
-                            updated_at: now.toISOString()
-                        }).eq('id', lead.id);
-                    }
+                            await supabaseAdmin.from('leads').update({
+                                last_actor: 'lead',
+                                t_last_inbound: latestInboundAt.toISOString(),
+                                last_message_time: latestInboundAt.toISOString(),
+                                current_rule_index: 0,
+                                current_deadline_at: restoredDeadline.toISOString(),
+                                sla_state: 'ACTIVE',
+                                updated_at: now.toISOString()
+                            }).eq('id', lead.id);
+                        }
                     }
                 }
 
@@ -466,7 +528,7 @@ export async function checkSlaCron() {
                             continue;
                         }
 
-                        // RECLAIM
+                        // RECLAIM — clear đủ ownership + timer để chu kỳ mới sạch
                         fireWebhook('SLA_RECLAIM', {
                             lead_id: lead.id,
                             lead_name: lead.name,
@@ -476,8 +538,11 @@ export async function checkSlaCron() {
                         });
                         await supabaseAdmin.from('leads').update({
                             assigned_to: null,
+                            owner_sale: null,
                             assign_state: 'unassigned',
                             sla_state: 'RECLAIMED',
+                            current_rule_index: 0,
+                            current_deadline_at: null,
                             updated_at: now.toISOString()
                         }).eq('id', lead.id);
                         
