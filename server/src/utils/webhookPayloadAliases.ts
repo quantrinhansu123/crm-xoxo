@@ -280,7 +280,13 @@ export function enrichCustomerZaloFields(
 ): Record<string, any> | null {
     if (!customer && !extra.customer_name && !extra.customer_phone) return null;
 
-    const phone = customer?.phone ?? extra.customer_phone ?? null;
+    const phone = customer?.zalo_phone
+        ?? customer?.customer_zalo_phone
+        ?? customer?.phone
+        ?? extra.zalo_phone
+        ?? extra.customer_zalo_phone
+        ?? extra.customer_phone
+        ?? null;
     const zaloUserId =
         customer?.zalo_user_id
         ?? customer?.customer_zalo_user_id
@@ -294,7 +300,7 @@ export function enrichCustomerZaloFields(
         name,
         phone,
         customer_name: name,
-        customer_phone: phone,
+        customer_phone: customer?.phone ?? extra.customer_phone ?? phone,
         zalo_phone: phone,
         customer_zalo_phone: phone,
         zalo_user_id: zaloUserId,

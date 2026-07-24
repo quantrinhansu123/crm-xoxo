@@ -21,7 +21,7 @@ const router = Router();
 async function getOrderNotificationContext(orderId: string) {
     const { data: order, error } = await supabaseAdmin
         .from('orders')
-        .select('id, order_code, sales_id, due_at, customer:customers(id, name, phone, zalo_user_id, customer_zalo_user_id), sales_user:users!orders_sales_id_fkey(id, name, role, telegram_chat_id)')
+        .select('id, order_code, sales_id, due_at, customer:customers(id, name, phone, zalo_phone, customer_zalo_phone, zalo_user_id, customer_zalo_user_id), sales_user:users!orders_sales_id_fkey(id, name, role, telegram_chat_id)')
         .eq('id', orderId)
         .maybeSingle();
 
@@ -95,6 +95,10 @@ function notifyOrderCustomerZalo(event: string, context: any, extra: Record<stri
 
     const customerName = context.customer?.name || null;
     const customerPhone = context.customer?.phone || null;
+    const zaloPhone = context.customer?.zalo_phone
+        || context.customer?.customer_zalo_phone
+        || customerPhone
+        || null;
     const productName = extra.product_name || extra.item?.product_name || null;
     const currentStep = extra.current_step || extra.event_step || event;
     const status = extra.status || context.order?.status || null;
@@ -112,8 +116,8 @@ function notifyOrderCustomerZalo(event: string, context: any, extra: Record<stri
         product_name: productName,
         customer_name: customerName,
         customer_phone: customerPhone,
-        zalo_phone: customerPhone,
-        customer_zalo_phone: customerPhone,
+        zalo_phone: zaloPhone,
+        customer_zalo_phone: zaloPhone,
         zalo_user_id: zaloUserId,
         image_url: imageUrl,
         video_url: videoUrl,
@@ -132,8 +136,8 @@ function notifyOrderCustomerZalo(event: string, context: any, extra: Record<stri
             phone: customerPhone,
             customer_name: customerName,
             customer_phone: customerPhone,
-            zalo_phone: customerPhone,
-            customer_zalo_phone: customerPhone,
+            zalo_phone: zaloPhone,
+            customer_zalo_phone: zaloPhone,
             zalo_user_id: zaloUserId,
         } : null,
         links: {

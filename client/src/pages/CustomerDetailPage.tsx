@@ -23,6 +23,7 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils';
 import { customersApi, invoicesApi } from '@/lib/api';
 import { InvoiceDetailDialog, type Invoice } from '@/components/invoices/InvoiceDetailDialog';
 import { CustomerDebtTab } from '@/components/customers/CustomerDebtTab';
+import { CustomerZaloTab } from '@/components/customers/CustomerZaloTab';
 import { useAuth } from '@/contexts/AuthContext';
 import { CustomerPhone } from '@/components/customers/CustomerPhone';
 
@@ -602,6 +603,10 @@ export function CustomerDetailPage() {
                                     <Scale className="h-4 w-4" />
                                     Công nợ
                                 </TabsTrigger>
+                                <TabsTrigger value="zalo" className="gap-2">
+                                    <MessageCircle className="h-4 w-4" />
+                                    Thông tin Zalo
+                                </TabsTrigger>
                             </TabsList>
 
                             {/* Orders Tab */}
@@ -885,6 +890,14 @@ export function CustomerDetailPage() {
                                     customerId={customer.id}
                                     customerName={customer.name}
                                     customerPhone={customer.phone}
+                                />
+                            </TabsContent>
+
+                            <TabsContent value="zalo">
+                                <CustomerZaloTab
+                                    customer={customer}
+                                    orders={customerOrders}
+                                    onCustomerUpdated={setCustomer}
                                 />
                             </TabsContent>
                         </Tabs>
