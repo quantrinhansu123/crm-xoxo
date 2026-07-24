@@ -91,6 +91,7 @@ router.post('/income', authenticate, async (req: AuthenticatedRequest, res, next
             data: {
                 transaction_id: transaction.id,
                 code: transaction.code,
+                voucher_code: transaction.code,
                 type: transaction.type,
                 category: transaction.category,
                 amount: transaction.amount,
@@ -99,6 +100,12 @@ router.post('/income', authenticate, async (req: AuthenticatedRequest, res, next
                 customer_id: transaction.customer_id,
                 invoice_id: transaction.invoice_id,
                 description: transaction.description,
+                content: transaction.description,
+                reason: transaction.description,
+                created_by: req.user!.id,
+                created_by_name: req.user!.name,
+                collector_name: req.user!.name,
+                received_by_name: req.user!.name,
             },
         });
 
@@ -114,7 +121,7 @@ router.post('/income', authenticate, async (req: AuthenticatedRequest, res, next
 // Create expense transaction (phiếu chi)
 router.post('/expense', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
-        const { amount, category, description, supplier, payment_method } = req.body;
+        const { amount, category, description, supplier, payment_method, order_id, order_code } = req.body;
 
         if (!amount || !category) {
             throw new ApiError('Số tiền và danh mục là bắt buộc', 400);
@@ -150,7 +157,9 @@ router.post('/expense', authenticate, async (req: AuthenticatedRequest, res, nex
             recipientUserIds: [transaction.created_by],
             data: {
                 transaction_id: transaction.id,
+                payment_voucher_id: transaction.id,
                 code: transaction.code,
+                voucher_code: transaction.code,
                 type: transaction.type,
                 category: transaction.category,
                 amount: transaction.amount,
@@ -158,6 +167,12 @@ router.post('/expense', authenticate, async (req: AuthenticatedRequest, res, nex
                 status: transaction.status,
                 supplier: transaction.supplier,
                 description: transaction.description,
+                content: transaction.description,
+                reason: transaction.description,
+                order_id: order_id || null,
+                order_code: order_code || null,
+                created_by: req.user!.id,
+                created_by_name: req.user!.name,
             },
         });
 

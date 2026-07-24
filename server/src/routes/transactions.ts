@@ -488,6 +488,7 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                 receipt_id: type === 'income' ? transaction.id : null,
                 payment_voucher_id: type === 'expense' ? transaction.id : null,
                 code: transaction.code,
+                voucher_code: transaction.code,
                 type: transaction.type,
                 category: transaction.category,
                 amount: transaction.amount,
@@ -496,6 +497,12 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                 order_id: transaction.order_id,
                 order_code: transaction.order_code,
                 notes: transaction.notes,
+                content: transaction.notes,
+                reason: transaction.notes,
+                created_by: req.user!.id,
+                created_by_name: req.user!.name,
+                collector_name: type === 'income' ? req.user!.name : undefined,
+                received_by_name: type === 'income' ? req.user!.name : undefined,
             },
         });
 

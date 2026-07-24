@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { authenticate, AuthenticatedRequest, requireSale } from '../middleware/auth.js';
 import { notifyCrmMaster } from '../utils/webhookNotifier.js';
+import { notifyFinanceEvent } from '../utils/financeNotifications.js';
 import { syncInvoiceWithOrder } from '../utils/billingHelper.js';
 import { checkAndCompleteOrder } from '../utils/orderHelper.js';
 import {
@@ -519,10 +520,10 @@ router.post('/:id/collect-payment', authenticate, requireSale, async (req: Authe
                 transCode = `PT${String(lastNum + 1).padStart(6, '0')}`;
             }
 
-            await supabaseAdmin.from('transactions').insert({
+            const { data: transaction } = await supabaseAdmin.from('transactions').insert({
                 code: transCode,
                 type: 'income',
-                category: 'Thanh toán đơn hàng',
+                category: paymentKind === 'deposit' ? 'Tiền cọc' : 'Thanh toán đơn hàng',
                 amount: payAmount,
                 payment_method: payment_method || 'cash',
                 notes: `${payContent} - ${order.order_code}`,
@@ -533,6 +534,36 @@ router.post('/:id/collect-payment', authenticate, requireSale, async (req: Authe
                 created_by: req.user!.id,
                 approved_by: req.user!.id,
                 approved_at: new Date().toISOString(),
+            }).select().single();
+
+            notifyFinanceEvent({
+                event: 'receipt.created',
+                title: 'Phiếu thu mới',
+                message: `${req.user!.name} đã tạo phiếu thu ${transCode}`,
+                actor: req.user!,
+                recipientUserIds: [req.user!.id],
+                data: {
+                    transaction_id: transaction?.id,
+                    receipt_id: transaction?.id,
+                    code: transCode,
+                    voucher_code: transCode,
+                    type: 'income',
+                    category: paymentKind === 'deposit' ? 'Tiền cọc' : 'Thanh toán đơn hàng',
+                    amount: payAmount,
+                    payment_method: payment_method || 'cash',
+                    status: 'approved',
+                    order_id: order.id,
+                    order_code: order.order_code,
+                    customer_id: id,
+                    customer_name: customer.name,
+                    notes: `${payContent} - ${order.order_code}`,
+                    content: payContent,
+                    reason: payContent,
+                    created_by: req.user!.id,
+                    created_by_name: req.user!.name,
+                    collector_name: req.user!.name,
+                    received_by_name: req.user!.name,
+                },
             });
 
             results.push({ order_id: order.id, order_code: order.order_code, amount: payAmount, payment });

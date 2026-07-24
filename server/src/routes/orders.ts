@@ -43,6 +43,9 @@ function notifyOrderSalesUser(event: string, context: any, extra: Record<string,
         return;
     }
 
+    const saleName = context.salesUser?.name || null;
+    const createdByName = context.createdByName || context.order?.created_by_name || null;
+
     notifyCrmMasterUser(event, {
         target_user_id: targetUserId,
         target_role: context.salesUser?.role || 'sale',
@@ -51,8 +54,13 @@ function notifyOrderSalesUser(event: string, context: any, extra: Record<string,
             id: context.order.id,
             order_code: context.order.order_code,
             return_due_at: context.order.due_at || null,
+            sale_name: saleName,
+            sales_name: saleName,
+            created_by_name: createdByName,
+            status: context.order.status || null,
         },
         customer: context.customer ? {
+            id: context.customer.id,
             name: context.customer.name,
             phone: context.customer.phone,
             zalo_user_id: context.customer.zalo_user_id || context.customer.customer_zalo_user_id || null,
@@ -63,6 +71,10 @@ function notifyOrderSalesUser(event: string, context: any, extra: Record<string,
             role: context.salesUser.role || 'sale',
             telegram_chat_id: context.salesUser.telegram_chat_id || null,
         } : null,
+        sale_name: saleName,
+        sales_name: saleName,
+        created_by_name: createdByName,
+        order_code: context.order.order_code,
         links: { crm_url: buildCrmOrderUrl(context.order.order_code || context.order.id) },
         ...extra,
     });
@@ -81,22 +93,54 @@ function notifyOrderCustomerZalo(event: string, context: any, extra: Record<stri
         return;
     }
 
+    const customerName = context.customer?.name || null;
+    const customerPhone = context.customer?.phone || null;
+    const productName = extra.product_name || extra.item?.product_name || null;
+    const currentStep = extra.current_step || extra.event_step || event;
+    const status = extra.status || context.order?.status || null;
+    const imageUrl = extra.image_url || extra.product_image_url || extra.links?.image_url || null;
+    const videoUrl = extra.video_url || extra.links?.video_url || null;
+
     notifyCrmMasterUser(event, {
         target_user_id: zaloUserId,
         target_role: 'customer',
         channel: 'zalo',
+        event,
+        current_step: currentStep,
+        status,
+        order_code: context.order.order_code,
+        product_name: productName,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        zalo_phone: customerPhone,
+        customer_zalo_phone: customerPhone,
+        zalo_user_id: zaloUserId,
+        image_url: imageUrl,
+        video_url: videoUrl,
+        product_image_url: imageUrl,
         order: {
             id: context.order.id,
             order_code: context.order.order_code,
             return_due_at: context.order.due_at || null,
+            status: context.order.status || null,
+            sale_name: context.salesUser?.name || null,
+            sales_name: context.salesUser?.name || null,
         },
         customer: context.customer ? {
             id: context.customer.id,
-            name: context.customer.name,
-            phone: context.customer.phone,
+            name: customerName,
+            phone: customerPhone,
+            customer_name: customerName,
+            customer_phone: customerPhone,
+            zalo_phone: customerPhone,
+            customer_zalo_phone: customerPhone,
             zalo_user_id: zaloUserId,
         } : null,
-        links: {},
+        links: {
+            ...(imageUrl ? { image_url: imageUrl } : {}),
+            ...(videoUrl ? { video_url: videoUrl } : {}),
+            crm_url: buildCrmOrderUrl(context.order.order_code || context.order.id),
+        },
         ...extra,
     });
 }
@@ -1336,6 +1380,7 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
                 paymentMethod: payment_method || 'cash',
                 notes: `Phiếu thu cọc đơn hàng - ${orderCode}`,
                 createdBy: req.user!.id,
+                createdByName: req.user!.name,
                 category: 'Tiền cọc',
             });
         } else if (paidAmountValue > 0) {
@@ -1346,14 +1391,36 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
                 paymentMethod: payment_method || 'cash',
                 notes: `Phiếu thu đơn hàng - ${orderCode}`,
                 createdBy: req.user!.id,
+                createdByName: req.user!.name,
             });
         }
 
+        // Resolve sale name for Telegram webhook
+        let saleNameForNotify: string | null = null;
+        if (order.sales_id) {
+            if (order.sales_id === req.user!.id) {
+                saleNameForNotify = req.user!.name;
+            } else {
+                const { data: saleUser } = await supabaseAdmin
+                    .from('users')
+                    .select('id, name')
+                    .eq('id', order.sales_id)
+                    .maybeSingle();
+                saleNameForNotify = saleUser?.name || null;
+            }
+        }
+
         notifyCrmMaster('order.created', {
-            order,
+            order: {
+                ...order,
+                sale_name: saleNameForNotify,
+                sales_name: saleNameForNotify,
+                created_by_name: req.user!.name,
+            },
             customer_items: createdCustomerItems,
+            sale_name: saleNameForNotify,
+            sales_name: saleNameForNotify,
             created_by_name: req.user!.name,
-            ...(order.sales_id === req.user!.id ? { sale_name: req.user!.name, sales_name: req.user!.name } : {}),
         });
 
         res.status(201).json({
@@ -2159,6 +2226,9 @@ router.patch('/:id', authenticate, async (req: AuthenticatedRequest, res, next) 
 
         if (delivery_code !== undefined && delivery_code) {
             notifyOrderCustomerZalo('shipping.tracking_code.updated', orderNotifyContext, {
+                current_step: 'shipping',
+                status: order.status || 'shipping',
+                product_name: null,
                 shipping: {
                     tracking_code: delivery_code,
                     carrier_name: delivery_carrier || order.delivery_carrier || null,
@@ -2171,6 +2241,8 @@ router.patch('/:id', authenticate, async (req: AuthenticatedRequest, res, next) 
 
         if (feedback_requested === true || hd_sent === true) {
             notifyOrderCustomerZalo('aftersale.care_feedback.started', orderNotifyContext, {
+                current_step: 'care_feedback',
+                status: order.status || 'after_sale',
                 aftersale: {
                     care_type: 'care_feedback',
                     template_code: 'care_feedback_default',
@@ -2455,6 +2527,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                 recipientUserIds: [req.user!.id],
                 data: {
                     code: transCode,
+                    voucher_code: transCode,
                     type: 'income',
                     category: 'Thanh toán đơn hàng',
                     amount: amountNum,
@@ -2464,6 +2537,12 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                     order_code: order.order_code,
                     invoice_id: invoice?.id,
                     notes: `${content} - ${order.order_code}`,
+                    content: `${content} - ${order.order_code}`,
+                    reason: content,
+                    created_by: req.user!.id,
+                    created_by_name: req.user!.name,
+                    collector_name: req.user!.name,
+                    received_by_name: req.user!.name,
                 },
             });
         }

@@ -1,4 +1,5 @@
 import { Draggable } from '@hello-pangea/dnd';
+import type { MouseEventHandler } from 'react';
 import { Calendar, Trash2, User, Wrench } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -18,12 +19,13 @@ interface OrderCardProps {
     productGroup: ProductGroup;
     columnId: string;
     index: number;
-    onClick: () => void;
+    href: string;
+    onClick: MouseEventHandler<HTMLAnchorElement>;
     draggable?: boolean;
     onDelete?: (order: Order) => void;
 }
 
-export function OrderCard({ draggableId, order, productGroup, columnId, index, onClick, draggable = true, onDelete }: OrderCardProps) {
+export function OrderCard({ draggableId, order, productGroup, columnId, index, href, onClick, draggable = true, onDelete }: OrderCardProps) {
     const { product, services } = productGroup;
 
     const effectiveProduct = product;
@@ -114,12 +116,13 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
     })();
 
     const renderCard = (provided?: any, isDragging = false) => (
-        <div
+        <a
             ref={provided?.innerRef}
             {...(provided?.draggableProps ?? {})}
             {...(provided?.dragHandleProps ?? {})}
+            href={href}
             onClick={onClick}
-            className={`kanban-card p-3 rounded-xl bg-white border shadow-sm cursor-pointer text-sm ${isDragging ? 'shadow-lg ring-2 ring-primary/20' : ''}`}
+            className={`kanban-card block p-3 rounded-xl bg-white border shadow-sm cursor-pointer text-sm ${isDragging ? 'shadow-lg ring-2 ring-primary/20' : ''}`}
         >
                     <div className="flex gap-2 mb-2">
                         <Avatar className="h-12 w-12 shrink-0 rounded-lg overflow-hidden bg-muted">
@@ -169,6 +172,7 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
                                 className="h-7 w-7 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
                                 title="Xóa đơn hàng"
                                 onClick={(e) => {
+                                    e.preventDefault();
                                     e.stopPropagation();
                                     onDelete(order);
                                 }}
@@ -237,7 +241,7 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
                             <span className="truncate">{order.sales_user?.name || 'N/A'}</span>
                         </div>
                     </div>
-        </div>
+        </a>
     );
 
     if (!draggable) {

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase.js';
+import { notifyFinanceEvent } from './financeNotifications.js';
 
 export function isPaymentSchemaColumnError(error: { message?: string; code?: string } | null): boolean {
     if (!error) return false;
@@ -374,6 +375,7 @@ export async function createOrderIncomeTransaction(opts: {
     paymentMethod: string;
     notes: string;
     createdBy: string;
+    createdByName?: string;
     category?: string;
 }): Promise<void> {
     if (opts.amount <= 0) return;
@@ -391,7 +393,7 @@ export async function createOrderIncomeTransaction(opts: {
         transCode = `PT${String(lastNum + 1).padStart(6, '0')}`;
     }
 
-    await supabaseAdmin.from('transactions').insert({
+    const { data: transaction, error } = await supabaseAdmin.from('transactions').insert({
         code: transCode,
         type: 'income',
         category: opts.category || 'Thanh toán đơn hàng',
@@ -405,5 +407,50 @@ export async function createOrderIncomeTransaction(opts: {
         created_by: opts.createdBy,
         approved_by: opts.createdBy,
         approved_at: new Date().toISOString(),
+    }).select().single();
+
+    if (error) {
+        console.error('[createOrderIncomeTransaction] insert error:', error.message);
+        return;
+    }
+
+    let actorName = opts.createdByName || null;
+    let actorRole = 'sale';
+    if (!actorName && opts.createdBy) {
+        const { data: user } = await supabaseAdmin
+            .from('users')
+            .select('id, name, role')
+            .eq('id', opts.createdBy)
+            .maybeSingle();
+        actorName = user?.name || null;
+        actorRole = user?.role || 'sale';
+    }
+
+    notifyFinanceEvent({
+        event: 'receipt.created',
+        title: 'Phiếu thu mới',
+        message: `${actorName || 'Hệ thống'} đã tạo phiếu thu ${transCode}`,
+        actor: { id: opts.createdBy, name: actorName || 'Hệ thống', role: actorRole },
+        recipientUserIds: [opts.createdBy],
+        data: {
+            transaction_id: transaction?.id,
+            receipt_id: transaction?.id,
+            code: transCode,
+            voucher_code: transCode,
+            type: 'income',
+            category: opts.category || 'Thanh toán đơn hàng',
+            amount: opts.amount,
+            payment_method: opts.paymentMethod || 'cash',
+            status: 'approved',
+            order_id: opts.orderId,
+            order_code: opts.orderCode,
+            notes: opts.notes,
+            content: opts.notes,
+            reason: opts.notes,
+            created_by: opts.createdBy,
+            created_by_name: actorName,
+            collector_name: actorName,
+            received_by_name: actorName,
+        },
     });
 }

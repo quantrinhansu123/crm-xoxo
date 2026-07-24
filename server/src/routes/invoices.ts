@@ -258,10 +258,10 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             throw new ApiError('Đơn hàng là bắt buộc', 400);
         }
 
-        // Lấy thông tin đơn hàng
+        // Lấy thông tin đơn hàng + sale
         const { data: order, error: orderError } = await supabaseAdmin
             .from('orders')
-            .select('*, customer:customers(*)')
+            .select('*, customer:customers(*), sales_user:users!orders_sales_id_fkey(id, name)')
             .eq('id', order_id)
             .single();
 
@@ -302,6 +302,9 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             throw new ApiError('Lỗi khi tạo hóa đơn: ' + error.message, 500);
         }
 
+        const salesUser = Array.isArray(order.sales_user) ? order.sales_user[0] : order.sales_user;
+        const saleName = salesUser?.name || null;
+
         notifyFinanceEvent({
             event: 'invoice.created',
             title: 'Hóa đơn mới',
@@ -311,13 +314,26 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             data: {
                 invoice_id: invoice.id,
                 invoice_code: invoice.invoice_code,
+                voucher_code: invoice.invoice_code,
                 order_id: invoice.order_id,
+                order_code: order.order_code || null,
                 customer_id: invoice.customer_id,
                 customer_name: order.customer?.name,
                 total_amount: invoice.total_amount,
                 payment_method: invoice.payment_method,
                 status: invoice.status,
                 notes: invoice.notes,
+                content: invoice.notes,
+                sale_name: saleName,
+                sales_name: saleName,
+                created_by: req.user!.id,
+                created_by_name: req.user!.name,
+                order: {
+                    order_code: order.order_code,
+                    sale_name: saleName,
+                    sales_name: saleName,
+                    created_by_name: req.user!.name,
+                },
             },
         });
 

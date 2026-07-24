@@ -699,7 +699,15 @@ export function OrdersPage() {
                                                                 columnId={column.id}
                                                                 index={index}
                                                                 draggable={false}
-                                                                onClick={() => navigate(`/orders/${order.id}`)}
+                                                                href={`/orders/${order.id}`}
+                                                                onClick={(event) => {
+                                                                    const orderPath = `/orders/${order.id}`;
+                                                                    if (event.ctrlKey || event.metaKey) {
+                                                                        return;
+                                                                    }
+                                                                    event.preventDefault();
+                                                                    navigate(orderPath);
+                                                                }}
                                                                 onDelete={canDelete ? handleDeleteOrder : undefined}
                                                             />
                                                         ))}
