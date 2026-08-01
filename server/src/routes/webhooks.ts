@@ -272,20 +272,128 @@ router.get('/leads/daily-summary', verifyWebhookSecret, async (req: Request, res
 // Endpoint nhận raw data từ n8n (không cần format event/data)
 // Data sẽ được lưu trực tiếp vào bảng webhook_logs
 // ============================================================
+function looksLikeUnevaluatedN8nExpression(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    const s = value.trim();
+    // Literal chưa evaluate: "={{ $json.raw_payload }}" hoặc "{{ $json... }}"
+    return /^=\{\{/.test(s) || /^\{\{\s*\$json/.test(s);
+}
+
+function scanUnevaluatedExpressions(input: unknown, path = 'body'): string[] {
+    const hits: string[] = [];
+    if (looksLikeUnevaluatedN8nExpression(input)) {
+        hits.push(path);
+        return hits;
+    }
+    if (!input || typeof input !== 'object') return hits;
+    if (Array.isArray(input)) {
+        input.forEach((item, i) => hits.push(...scanUnevaluatedExpressions(item, `${path}[${i}]`)));
+        return hits;
+    }
+    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+        hits.push(...scanUnevaluatedExpressions(value, `${path}.${key}`));
+    }
+    return hits;
+}
+
+/** Chuẩn hóa body RAW: hỗ trợ { source, payload: <pancake json> } */
+function normalizeRawWebhookBody(body: any): {
+    source: string;
+    payload: Record<string, any>;
+    meta: Record<string, any>;
+} {
+    const source = typeof body?.source === 'string' && body.source.trim()
+        ? body.source.trim()
+        : 'pancake';
+
+    let payload: any = body?.payload !== undefined ? body.payload : body;
+    if (typeof payload === 'string') {
+        try {
+            payload = JSON.parse(payload);
+        } catch {
+            payload = { raw_string: payload };
+        }
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        payload = { value: payload ?? null };
+    }
+
+    const nested = payload.data && typeof payload.data === 'object' ? payload.data : {};
+    const flat = { ...payload, ...nested };
+
+    const meta = {
+        message_id: flat.message_id ?? flat.id ?? null,
+        request_id: flat.request_id ?? null,
+        message_time: flat.message_time ?? flat.last_message_time ?? flat.inserted_at ?? flat.created_at ?? null,
+        page_id: flat.page_id ?? flat.pageId ?? null,
+        message_direction: flat.message_direction ?? flat.direction ?? null,
+        sender_sale_id: flat.sender_sale_id ?? null,
+        sender_sale_name: flat.sender_sale_name ?? null,
+        assigned_to: flat.assigned_to ?? null,
+    };
+
+    return { source, payload, meta };
+}
+
 router.post('/n8n/raw', verifyWebhookSecret, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const data = req.body;
 
-        console.log('[Webhook] Nhận raw data:', JSON.stringify(data).substring(0, 200));
+        // Bắt lỗi cấu hình n8n: body gửi literal expression thay vì JSON đã evaluate
+        const badPaths = scanUnevaluatedExpressions(data);
+        if (badPaths.length > 0) {
+            console.error('[Webhook] RAW body chứa expression chưa evaluate:', badPaths, String(JSON.stringify(data)).slice(0, 200));
+            await logWebhookEvent('raw', {
+                error: 'N8N_EXPRESSION_NOT_EVALUATED',
+                bad_paths: badPaths,
+                hint: 'Body JSON phải là ={{ { source: \"pancake\", payload: $json } }} (expression object), không phải chuỗi \"={{ $json.raw_payload }}\". Bật Continue On Fail cho node RAW_LOG.',
+                received: data,
+            }, 'error');
 
-        await logWebhookEvent('raw', data, 'success');
+            // Best-effort: trả 200 kèm warning để không chặn nhánh song song nếu quên Continue On Fail
+            return res.status(200).json({
+                status: 'accepted_with_warning',
+                code: 'N8N_EXPRESSION_NOT_EVALUATED',
+                message:
+                    'Body RAW đang là expression n8n chưa evaluate. Sửa Body = JSON: ={{ { source: \"pancake\", payload: $json } }}. Bật Continue On Fail cho RAW_LOG.',
+                bad_paths: badPaths,
+            });
+        }
+
+        const normalized = normalizeRawWebhookBody(data);
+        console.log('[Webhook] Nhận raw data:', JSON.stringify({
+            source: normalized.source,
+            meta: normalized.meta,
+        }).substring(0, 300));
+
+        await logWebhookEvent('raw', {
+            source: normalized.source,
+            payload: normalized.payload,
+            meta: normalized.meta,
+        }, 'success');
 
         res.status(200).json({
             status: 'success',
             message: 'Raw data đã được lưu',
+            meta: normalized.meta,
         });
     } catch (error) {
-        next(error);
+        // Best-effort logging: không làm hỏng luồng n8n
+        console.error('[Webhook] RAW log failed (best-effort):', error);
+        try {
+            await logWebhookEvent('raw', {
+                error: 'RAW_LOG_EXCEPTION',
+                message: error instanceof Error ? error.message : String(error),
+                received: req.body,
+            }, 'error');
+        } catch (_) {
+            /* ignore */
+        }
+        return res.status(200).json({
+            status: 'accepted_with_warning',
+            code: 'RAW_LOG_EXCEPTION',
+            message: 'RAW log lỗi phía CRM nhưng đã acknowledge để không chặn flow n8n',
+        });
     }
 });
 
@@ -536,50 +644,81 @@ async function resolveUserByName(nameOrId?: string | null): Promise<string | nul
 }
 
 /**
- * Resolve người phụ trách từ payload n8n:
- * - Ưu tiên assigned_to nếu là UUID hợp lệ
- * - owner_sale / assigned_to_name dùng làm tên hiển thị
- * - Nếu chỉ có tên → lookup users
+ * Chỉ chấp nhận UUID đã có trong bảng users CRM.
+ * Không map được → null (không dùng Pancake ID / tên chung / UUID lạ).
+ */
+async function resolveCrmUserId(raw: string | null | undefined): Promise<{ id: string | null; name: string | null }> {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return { id: null, name: null };
+
+    if (isUUID(value)) {
+        const { data: user } = await supabaseAdmin
+            .from('users')
+            .select('id, name')
+            .eq('id', value)
+            .maybeSingle();
+        if (user) return { id: user.id, name: user.name || null };
+        console.warn(`[Webhook] UUID không có trong users CRM — bỏ qua: ${value}`);
+        return { id: null, name: null };
+    }
+
+    const id = await resolveUserByName(value);
+    if (id) return { id, name: value };
+    console.warn(`[Webhook] Không map được tên "${value}" → null`);
+    return { id: null, name: null };
+}
+
+/**
+ * Resolve người phụ trách (assigned_to) vs người gửi tin (sender_sale_*).
+ * - assigned_to: owner lead hiện tại (UUID CRM)
+ * - sender_sale_id: người trực tiếp gửi outbound (UUID CRM)
+ * Claim/SLA dùng sender khi outbound; không map được → null.
  */
 async function resolveLeadAssignee(opts: {
     assigned_to?: string | null;
     owner_sale?: string | null;
     assigned_to_name?: string | null;
-}): Promise<{ id: string | null; name: string | null }> {
-    const rawId = typeof opts.assigned_to === 'string' ? opts.assigned_to.trim() : '';
-    const rawName =
-        (typeof opts.owner_sale === 'string' && opts.owner_sale.trim())
+    sender_sale_id?: string | null;
+    sender_sale_name?: string | null;
+    message_direction?: string | null;
+}): Promise<{
+    ownerId: string | null;
+    ownerName: string | null;
+    senderId: string | null;
+    senderName: string | null;
+    /** Actor dùng cho claim/SLA: ưu tiên sender trên outbound */
+    actorId: string | null;
+    actorName: string | null;
+}> {
+    const ownerFromId = await resolveCrmUserId(opts.assigned_to);
+    const ownerFromName = !ownerFromId.id
+        ? await resolveCrmUserId(opts.assigned_to_name || opts.owner_sale || null)
+        : { id: null, name: null };
+    const ownerId = ownerFromId.id || ownerFromName.id;
+    const ownerName =
+        ownerFromId.name
         || (typeof opts.assigned_to_name === 'string' && opts.assigned_to_name.trim())
-        || '';
+        || (typeof opts.owner_sale === 'string' && opts.owner_sale.trim())
+        || ownerFromName.name
+        || null;
 
-    if (rawId && isUUID(rawId)) {
-        const { data: user } = await supabaseAdmin
-            .from('users')
-            .select('id, name')
-            .eq('id', rawId)
-            .maybeSingle();
+    const senderFromId = await resolveCrmUserId(opts.sender_sale_id);
+    const senderFromName = !senderFromId.id
+        ? await resolveCrmUserId(opts.sender_sale_name || null)
+        : { id: null, name: null };
+    const senderId = senderFromId.id || senderFromName.id;
+    const senderName =
+        senderFromId.name
+        || (typeof opts.sender_sale_name === 'string' && opts.sender_sale_name.trim())
+        || senderFromName.name
+        || null;
 
-        if (user) {
-            return { id: user.id, name: rawName || user.name || null };
-        }
+    const outbound = isOutboundDirection(opts.message_direction);
+    // Outbound: actor = người gửi tin; inbound/khác: không dùng sender để claim
+    const actorId = outbound ? (senderId || ownerId) : ownerId;
+    const actorName = outbound ? (senderName || ownerName) : ownerName;
 
-        // Vẫn gán UUID từ n8n (có thể user inactive / cache) — log cảnh báo
-        console.warn(`[Webhook] assigned_to UUID không có trong users: ${rawId} — vẫn gán theo payload n8n`);
-        return { id: rawId, name: rawName || null };
-    }
-
-    // assigned_to là tên (không phải UUID)
-    if (rawId && !isUUID(rawId)) {
-        const id = await resolveUserByName(rawId);
-        return { id, name: rawName || rawId };
-    }
-
-    if (rawName) {
-        const id = await resolveUserByName(rawName);
-        return { id, name: rawName };
-    }
-
-    return { id: null, name: null };
+    return { ownerId, ownerName, senderId, senderName, actorId, actorName };
 }
 
 function normalizeMessageActor(lastActor?: string | null, messageDirection?: string | null): 'lead' | 'sale' | undefined {
@@ -674,9 +813,14 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         pancake_conversation_id_received: pancake_conversation_id || null,
         last_actor_received: last_actor || null,
         message_direction_received: message_direction || null,
-        message_time_mapped: last_message_time || null,
+        message_id_received: message_id || null,
+        request_id_received: data.request_id || null,
+        page_id_received: data.page_id || null,
+        message_time_mapped: last_message_time || data.message_time || null,
         owner_sale_mapped: saleDisplayName || null,
         assigned_to_received: assigned_to || null,
+        sender_sale_id_received: data.sender_sale_id || null,
+        sender_sale_name_received: data.sender_sale_name || null,
     };
 
     // 0. Kiểm tra thông tin định danh tối thiểu
@@ -779,13 +923,17 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         assigned_to,
         owner_sale: saleDisplayName,
         assigned_to_name: data.assigned_to_name,
+        sender_sale_id: data.sender_sale_id,
+        sender_sale_name: data.sender_sale_name,
+        message_direction,
     });
-    let resolvedAssignedTo = assignee.id;
-    let saleName = assignee.name;
-    if (!resolvedAssignedTo && typeof assigned_to === 'string' && isUUID(assigned_to.trim())) {
-        resolvedAssignedTo = assigned_to.trim();
-        saleName = saleDisplayName || saleName;
-        console.warn(`[Webhook] Create: fallback assigned_to UUID trực tiếp: ${resolvedAssignedTo}`);
+    let resolvedAssignedTo = assignee.actorId;
+    let saleName = assignee.actorName || assignee.senderName || assignee.ownerName;
+    if (!resolvedAssignedTo && (assigned_to || data.sender_sale_id)) {
+        console.warn(`[Webhook] Create: không resolve được assignee CRM — assigned_to=null`, {
+            assigned_to,
+            sender_sale_id: data.sender_sale_id || null,
+        });
     }
 
     // Tin khách + UUID trong payload → không claim (tránh stale assignee)
@@ -795,7 +943,17 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         resolvedAssignedTo = null;
     }
 
-    console.log(`[Webhook] Create lead assignee:`, { assigned_to, resolvedAssignedTo, saleName, createIsSaleReply });
+    console.log(`[Webhook] Create lead assignee:`, {
+        assigned_to,
+        sender_sale_id: data.sender_sale_id || null,
+        resolvedAssignedTo,
+        saleName,
+        createIsSaleReply,
+        message_id: message_id || null,
+        request_id: data.request_id || null,
+        page_id: data.page_id || null,
+        message_time: data.message_time || last_message_time || null,
+    });
 
     // 3. Tạo Lead mới (với retry logic để xử lý race condition)
     const insertPayload: Record<string, any> = {
@@ -1083,22 +1241,40 @@ async function handleLeadUpdate(incomingData: any) {
         assigned_to,
         owner_sale: saleDisplayName,
         assigned_to_name: data.assigned_to_name,
+        sender_sale_id: data.sender_sale_id,
+        sender_sale_name: data.sender_sale_name,
+        message_direction,
     });
-    let resolvedIncomingId = assignee.id;
-    let resolvedIncomingName = assignee.name;
+    let resolvedIncomingId = assignee.actorId;
+    let resolvedIncomingName = assignee.actorName || assignee.senderName || assignee.ownerName;
 
-    // Fallback cứng: nếu assigned_to là UUID hợp lệ thì LUÔN dùng, kể cả resolve fail
-    if (!resolvedIncomingId && typeof assigned_to === 'string' && isUUID(assigned_to.trim())) {
-        resolvedIncomingId = assigned_to.trim();
-        resolvedIncomingName = saleDisplayName || null;
-        console.warn(`[Webhook] Fallback gán assigned_to UUID trực tiếp: ${resolvedIncomingId}`);
+    // Không fallback UUID lạ / Pancake ID — chỉ UUID đã verify trong users
+    if (!resolvedIncomingId && (assigned_to || data.sender_sale_id)) {
+        console.warn(`[Webhook] Không resolve được assignee CRM — giữ assigned_to=null`, {
+            assigned_to,
+            sender_sale_id: data.sender_sale_id || null,
+            sender_sale_name: data.sender_sale_name || null,
+        });
     }
 
-    const hasIncomingSale = !!(resolvedIncomingId || saleDisplayName || assigned_to);
+    const hasIncomingSale = !!(
+        resolvedIncomingId
+        || saleDisplayName
+        || assignee.senderId
+        || assignee.ownerId
+        || data.sender_sale_id
+        || data.sender_sale_name
+    );
     const leadHasOwner = !!(currentLead.assigned_to && String(currentLead.assigned_to).trim());
 
     console.log(`[Webhook] Ownership check lead=${leadId}`, {
         payload_assigned_to: assigned_to,
+        sender_sale_id: data.sender_sale_id || null,
+        sender_sale_name: data.sender_sale_name || null,
+        message_id: message_id || null,
+        request_id: data.request_id || null,
+        page_id: data.page_id || null,
+        message_time: data.message_time || last_message_time || null,
         resolvedIncomingId,
         resolvedIncomingName,
         current_assigned_to: currentLead.assigned_to,

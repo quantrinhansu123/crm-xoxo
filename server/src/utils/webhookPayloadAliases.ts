@@ -42,19 +42,27 @@ export function normalizeN8nLeadPayload(incoming: Record<string, any> | null | u
     preferNonEmpty('assigned_to');
     preferNonEmpty('owner_sale');
     preferNonEmpty('assigned_to_name');
+    preferNonEmpty('sender_sale_id');
+    preferNonEmpty('sender_sale_name');
     preferNonEmpty('last_actor');
     preferNonEmpty('last_message_text');
     preferNonEmpty('last_message_time');
     preferNonEmpty('message_time');
+    preferNonEmpty('message_id');
+    preferNonEmpty('request_id');
+    preferNonEmpty('page_id');
+    preferNonEmpty('message_direction');
     preferNonEmpty('fb_thread_id');
     preferNonEmpty('pancake_conversation_id');
 
-    // Coerce assigned_to: object {id} / string / trim
-    if (data.assigned_to != null && typeof data.assigned_to === 'object') {
-        data.assigned_to = data.assigned_to.id || data.assigned_to.user_id || null;
-    }
-    if (typeof data.assigned_to === 'string') {
-        data.assigned_to = data.assigned_to.trim() || null;
+    // Coerce assigned_to / sender_sale_id: object {id} / string / trim
+    for (const key of ['assigned_to', 'sender_sale_id'] as const) {
+        if (data[key] != null && typeof data[key] === 'object') {
+            data[key] = data[key].id || data[key].user_id || null;
+        }
+        if (typeof data[key] === 'string') {
+            data[key] = data[key].trim() || null;
+        }
     }
 
     // message_time (n8n) → last_message_time
@@ -62,9 +70,13 @@ export function normalizeN8nLeadPayload(incoming: Record<string, any> | null | u
         data.last_message_time = data.message_time;
     }
 
-    // assigned_to_name (n8n) → owner_sale
-    if (!data.owner_sale && data.assigned_to_name) {
-        data.owner_sale = data.assigned_to_name;
+    // Display names: sender_sale_name (người gửi tin) / assigned_to_name (owner)
+    if (!data.sender_sale_name && data.assigned_to_name && String(data.message_direction || '').toLowerCase() === 'outbound') {
+        // backward-compat: một số flow cũ chỉ gửi assigned_to_name cho sale gửi tin
+        data.sender_sale_name = data.assigned_to_name;
+    }
+    if (!data.owner_sale && (data.sender_sale_name || data.assigned_to_name)) {
+        data.owner_sale = data.sender_sale_name || data.assigned_to_name;
     }
 
     // customer_id từ Pancake đôi khi là pancake customer id
@@ -106,6 +118,8 @@ export const N8N_LEAD_NON_DB_KEYS = [
     'request_id',
     'page_id',
     'message_direction',
+    'sender_sale_id',
+    'sender_sale_name',
     'last_customer_message_at',
     'last_staff_reply_at',
     't_last_customer_message',
