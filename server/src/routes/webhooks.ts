@@ -346,7 +346,7 @@ router.post('/n8n/raw', verifyWebhookSecret, async (req: Request, res: Response,
             await logWebhookEvent('raw', {
                 error: 'N8N_EXPRESSION_NOT_EVALUATED',
                 bad_paths: badPaths,
-                hint: 'Body JSON phải là ={{ { source: \"pancake\", payload: $json } }} (expression object), không phải chuỗi \"={{ $json.raw_payload }}\". Bật Continue On Fail cho node RAW_LOG.',
+                hint: 'Dùng Code node BUILD_RAW_LOG_BODY trả { source:\"pancake\", payload:$json }, rồi RAW_LOG Body Expression ={{ $json }} (JSON object, không bọc chuỗi, không dùng raw_payload). Nhánh CRM sync giữ riêng.',
                 received: data,
             }, 'error');
 
@@ -355,7 +355,7 @@ router.post('/n8n/raw', verifyWebhookSecret, async (req: Request, res: Response,
                 status: 'accepted_with_warning',
                 code: 'N8N_EXPRESSION_NOT_EVALUATED',
                 message:
-                    'Body RAW đang là expression n8n chưa evaluate. Sửa Body = JSON: ={{ { source: \"pancake\", payload: $json } }}. Bật Continue On Fail cho RAW_LOG.',
+                    'Body RAW đang là expression n8n chưa evaluate. Fix: BUILD_RAW_LOG_BODY → RAW_LOG với Body ={{ $json }} (JSON). Không đặt expression trong dấu ngoặc kép.',
                 bad_paths: badPaths,
             });
         }
