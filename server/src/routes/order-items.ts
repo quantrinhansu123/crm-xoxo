@@ -18,14 +18,20 @@ import {
     AFTER_SALE_STAGE_ORDER,
     CARE_STAGE_ORDER,
     WARRANTY_STAGE_ORDER,
-    assertDebtCheckCompleteForStageMove,
     assertForwardStageMove,
+    resolveAfterSaleOldStage,
 } from '../utils/kanbanStageValidation.js';
 import {
     collectAssignedSalesFromServices,
     firePickupInfoWebhook,
 } from '../utils/orderStaffHelper.js';
 import { extractSalesStepLogContent } from '../utils/salesStepLogContent.js';
+import {
+    buildLightweightHistoryNote,
+    normalizeMediaRefs,
+    sanitizeHistoryNotes,
+    summarizeMediaUpload,
+} from '../utils/historyLog.js';
 
 function emitRequestWebhook(event: string, payload: Record<string, any>) {
     fireWebhook(event, payload);
@@ -101,13 +107,8 @@ function derivePhaseFromStatus(status: string): { current_phase: string; phase_s
     if (['assigned', 'in_progress', 'processing'].includes(status)) {
         return { current_phase: 'workflow', phase_stage: 'room_active' };
     }
-    if (status === 'completed') {
-        return { current_phase: 'workflow', phase_stage: 'done' };
-    }
-    if (status === 'delivered') {
-        return { current_phase: 'after_sale', phase_stage: 'after1' };
-    }
-    if (status === 'after_sale') {
+    // Hoàn thành hạng mục → vào After sale (after1), không giữ workflow/done
+    if (status === 'completed' || status === 'delivered' || status === 'after_sale') {
         return { current_phase: 'after_sale', phase_stage: 'after1' };
     }
     return { current_phase: 'sales', phase_stage: 'step1' };
@@ -671,9 +672,19 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
         const phaseTable = entityType === 'order_item' ? 'order_items'
             : entityType === 'order_product_service' ? 'order_product_services'
             : 'order_products';
-        await supabaseAdmin.from(phaseTable)
-            .update({ current_phase, phase_stage })
+        const phaseUpdate: Record<string, unknown> = { current_phase, phase_stage };
+        if (current_phase === 'after_sale' && entityType !== 'order_product_service') {
+            phaseUpdate.after_sale_stage = 'after1';
+        }
+        const { error: phaseErr } = await supabaseAdmin.from(phaseTable)
+            .update(phaseUpdate)
             .eq('id', id);
+        if (phaseErr && phaseUpdate.after_sale_stage) {
+            // order_product_services có thể không có after_sale_stage
+            await supabaseAdmin.from(phaseTable)
+                .update({ current_phase, phase_stage })
+                .eq('id', id);
+        }
 
         res.json({
             status: 'success',
@@ -685,8 +696,8 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
         if (orderIdForLog && entityType && (oldStatus !== status)) {
             try {
                 let logReason = reason || null;
-                let logNotes = notes || null;
-                let logPhotos = Array.isArray(photos) ? photos : [];
+                let logNotes: string | null = sanitizeHistoryNotes(notes) || null;
+                let logPhotos = normalizeMediaRefs(photos);
 
                 if (!logReason && !logNotes && logPhotos.length === 0 && oldStatus?.startsWith('step')) {
                     const salesStepData = await resolveSalesStepData(entityType, id);
@@ -694,6 +705,8 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
                     logReason = extracted.reason || null;
                     logNotes = extracted.notes || null;
                     logPhotos = extracted.photos;
+                } else if (logPhotos.length > 0 && !logNotes) {
+                    logNotes = summarizeMediaUpload(logPhotos, '') || null;
                 }
 
                 await supabaseAdmin.from('order_item_status_log').insert({
@@ -703,7 +716,7 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
                     from_status: oldStatus,
                     to_status: status,
                     reason: logReason,
-                    notes: logNotes,
+                    notes: logNotes || null,
                     photos: logPhotos,
                     created_by: userId ?? null
                 });
@@ -884,7 +897,8 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
                 status: 'completed',
                 completed_at: new Date().toISOString(),
                 current_phase: 'after_sale',
-                phase_stage: 'after1'
+                phase_stage: 'after1',
+                after_sale_stage: 'after1',
             })
             .eq('id', id)
             .select('*, order:orders(id, order_code, sales_id, customer:customers(name))')
@@ -895,24 +909,63 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
         // Try V2 service
         if (!item) {
             isV2 = true;
-            const { data: v2Item, error: v2Error } = await supabaseAdmin
+            const v2UpdateFull: Record<string, unknown> = {
+                status: 'completed',
+                completed_at: new Date().toISOString(),
+                notes: notes || null,
+                current_phase: 'after_sale',
+                phase_stage: 'after1',
+                after_sale_stage: 'after1',
+            };
+            let { data: v2Item, error: v2Error } = await supabaseAdmin
                 .from('order_product_services')
-                .update({
-                    status: 'completed',
-                    completed_at: new Date().toISOString(),
-                    notes: notes || null,
-                    current_phase: 'after_sale',
-                    phase_stage: 'after1'
-                })
+                .update(v2UpdateFull)
                 .eq('id', id)
                 .select('*, order_product:order_products(order:orders(id, order_code, sales_id, customer:customers(name)))')
                 .maybeSingle();
 
+            // Một số DB chưa có after_sale_stage trên order_product_services → retry không cột đó
+            if (!v2Item && v2Error) {
+                console.error('[CompleteItem] V2 service update failed, retry without after_sale_stage:', v2Error.message);
+                const retry = await supabaseAdmin
+                    .from('order_product_services')
+                    .update({
+                        status: 'completed',
+                        completed_at: new Date().toISOString(),
+                        notes: notes || null,
+                        current_phase: 'after_sale',
+                        phase_stage: 'after1',
+                    })
+                    .eq('id', id)
+                    .select('*, order_product:order_products(order:orders(id, order_code, sales_id, customer:customers(name)))')
+                    .maybeSingle();
+                v2Item = retry.data;
+                v2Error = retry.error;
+            }
+
             if (v2Item) {
                 item = {
                     ...v2Item,
-                    order: v2Item.order_product?.order
+                    order: Array.isArray(v2Item.order_product?.order)
+                        ? v2Item.order_product.order[0]
+                        : v2Item.order_product?.order,
                 };
+                // Đưa product head sang after-sale khi hoàn thành dịch vụ
+                const productId = v2Item.order_product_id || v2Item.order_product?.id;
+                if (productId) {
+                    await supabaseAdmin
+                        .from('order_products')
+                        .update({
+                            status: 'completed',
+                            completed_at: new Date().toISOString(),
+                            current_phase: 'after_sale',
+                            phase_stage: 'after1',
+                            after_sale_stage: 'after1',
+                        })
+                        .eq('id', productId);
+                }
+            } else if (v2Error) {
+                console.error('[CompleteItem] V2 service still failing:', v2Error.message);
             }
         }
 
@@ -924,7 +977,8 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
                     status: 'completed',
                     completed_at: new Date().toISOString(),
                     current_phase: 'after_sale',
-                    phase_stage: 'after1'
+                    phase_stage: 'after1',
+                    after_sale_stage: 'after1',
                 })
                 .eq('id', id)
                 .select('*, order:orders(id, order_code, sales_id, customer:customers(name))')
@@ -941,6 +995,21 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
 
         if (!item) {
             throw new ApiError('Không tìm thấy hạng mục', 404);
+        }
+
+        // Normalize nested order relation (object | array | missing)
+        const nestedOrder = Array.isArray(item.order) ? item.order[0] : item.order;
+        if (nestedOrder && !item.order_id) {
+            item.order = nestedOrder;
+        } else if (!nestedOrder && item.order_id) {
+            const { data: ord } = await supabaseAdmin
+                .from('orders')
+                .select('id, order_code, sales_id, customer:customers(name)')
+                .eq('id', item.order_id)
+                .maybeSingle();
+            if (ord) item.order = ord;
+        } else if (nestedOrder) {
+            item.order = nestedOrder;
         }
 
         // 3. Mark all workflow steps for this item as 'completed'
@@ -988,19 +1057,22 @@ router.patch('/:id/complete', authenticate, async (req: AuthenticatedRequest, re
                     user_id: item.order.sales_id,
                     type: 'item_completed',
                     title: 'Dịch vụ đã hoàn thành',
-                    content: 'Dịch vụ "' + item.item_name + '" trong đơn ' + item.order.order_code + ' đã được hoàn thành',
+                    content: 'Dịch vụ "' + (item.item_name || item.name || '') + '" trong đơn ' + item.order.order_code + ' đã được hoàn thành',
                     data: {
                         order_id: item.order.id,
                         order_code: item.order.order_code,
                         item_id: item.id,
-                        item_name: item.item_name
+                        item_name: item.item_name || item.name
                     },
                     is_read: false
                 });
         }
 
         // Check and potentially complete the order
-        const allRelatedCompleted = await checkAndCompleteOrder(item.order.id);
+        const orderIdForComplete = item.order?.id || item.order_id;
+        const allRelatedCompleted = orderIdForComplete
+            ? await checkAndCompleteOrder(orderIdForComplete)
+            : false;
 
         res.json({
             status: 'success',
@@ -1740,7 +1812,7 @@ async function resolveOrderEntityId(
 // =====================================================
 // ORDER ITEM ACCESSORIES (Mua phụ kiện)
 // =====================================================
-const ACCESSORY_STATUSES = ['requested', 'rejected', 'need_buy', 'bought', 'waiting_ship', 'shipped', 'delivered_to_tech'];
+const ACCESSORY_STATUSES = ['requested', 'rejected', 'need_buy', 'bought', 'waiting_ship', 'shipped', 'delivered_to_tech', 'done'];
 
 router.patch('/:id/accessory', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
@@ -1748,7 +1820,7 @@ router.patch('/:id/accessory', authenticate, async (req: AuthenticatedRequest, r
         const { status, notes, metadata } = req.body;
 
         if (!status || !ACCESSORY_STATUSES.includes(status)) {
-            throw new ApiError('Trạng thái không hợp lệ. Chọn: requested, rejected, need_buy, bought, waiting_ship, shipped, delivered_to_tech', 400);
+            throw new ApiError('Trạng thái không hợp lệ. Chọn: requested, rejected, need_buy, bought, waiting_ship, shipped, delivered_to_tech, done', 400);
         }
 
         const entity = await resolveOrderEntityId(id, metadata);
@@ -2187,10 +2259,16 @@ router.patch(['/:id/change-room', '/:id/transfer-room'], authenticate, async (re
             if (tech) techName = tech.name;
         }
 
-        const displayPhotos = (Array.isArray(photos) && photos.length > 0) ? `\nẢnh bằng chứng: ${photos.join(', ')}` : '';
-        const deadlineInfo = deadline_days ? `\nHạn hoàn thành: ${deadline_days} ngày` : '';
-        const techInfo = techName ? `\nKỹ thuật viên: ${techName}` : '';
-        const finalNotes = `${reason}${note ? `\nLưu ý: ${note}` : ''}${deadlineInfo}${techInfo}${displayPhotos}`;
+        // History nhẹ: ghi chú ngắn — link Drive chỉ lưu ở cột photos, không nhúng vào notes
+        const mediaRefs = normalizeMediaRefs(photos);
+        const mediaSummary = summarizeMediaUpload(mediaRefs, 'bằng chứng chuyển phòng');
+        const finalNotes = buildLightweightHistoryNote([
+            reason,
+            note ? `Lưu ý: ${note}` : '',
+            deadline_days ? `Hạn: ${deadline_days} ngày` : '',
+            techName ? `KTV: ${techName}` : '',
+            mediaSummary,
+        ]);
 
         // a. Map targetRoomId to a search pattern for department
         let deptSearch = '';
@@ -2316,11 +2394,11 @@ router.patch(['/:id/change-room', '/:id/transfer-room'], authenticate, async (re
                 step_name: `${fromRoom} ➔ ${toRoom}`,
                 step_order: finalStep.step_order,
                 notes: finalNotes,
-                photos: photos || [],
+                photos: mediaRefs,
                 created_by: userId,
                 technician_id: technician_id || null,
                 deadline_days: deadline_days || null,
-                reason: reason || null
+                reason: sanitizeHistoryNotes(reason) || null
             });
         }
 
@@ -2421,10 +2499,14 @@ router.patch(['/:id/change-room', '/:id/transfer-room'], authenticate, async (re
 router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { id } = req.params;
-        const { 
-            completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, 
+        const {
+            completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type,
             stage, due_at, sales_step_data,
-            care_warranty_flow, care_warranty_stage
+            care_warranty_flow, care_warranty_stage,
+            move_notes, move_photos, allow_step_back,
+            // Mỗi sản phẩm trong đơn phải điền độc lập — không dùng chung dữ liệu cấp đơn
+            aftersale_receiver_name, debt_checked, debt_checked_notes, debt_checked_by_name,
+            delivery_creator_name, delivery_shipper_phone, delivery_staff_name, delivery_received_at,
         } = req.body;
         const userId = req.user?.id;
 
@@ -2439,10 +2521,37 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
         if (sales_step_data !== undefined) updatePayload.sales_step_data = sales_step_data;
         if (care_warranty_flow !== undefined) updatePayload.care_warranty_flow = care_warranty_flow;
         if (care_warranty_stage !== undefined) updatePayload.care_warranty_stage = care_warranty_stage;
+        if (aftersale_receiver_name !== undefined) updatePayload.aftersale_receiver_name = aftersale_receiver_name;
+        if (debt_checked !== undefined) updatePayload.debt_checked = !!debt_checked;
+        if (debt_checked_notes !== undefined) updatePayload.debt_checked_notes = debt_checked_notes;
+        if (debt_checked_by_name !== undefined) updatePayload.debt_checked_by_name = debt_checked_by_name;
+        if (delivery_creator_name !== undefined) updatePayload.delivery_creator_name = delivery_creator_name;
+        if (delivery_shipper_phone !== undefined) updatePayload.delivery_shipper_phone = delivery_shipper_phone;
+        if (delivery_staff_name !== undefined) updatePayload.delivery_staff_name = delivery_staff_name;
+        if (delivery_received_at !== undefined) updatePayload.delivery_received_at = delivery_received_at || null;
 
-        const { data: currentItem } = await supabaseAdmin.from('order_items').select('after_sale_stage, order_id, current_phase, care_warranty_flow, care_warranty_stage').eq('id', id).single();
+        const { data: currentItem } = await supabaseAdmin.from('order_items').select('after_sale_stage, phase_stage, order_id, current_phase, care_warranty_flow, care_warranty_stage, completion_photos').eq('id', id).single();
         const oldCareFlow = currentItem?.care_warranty_flow ?? null;
         const oldCareStage = currentItem?.care_warranty_stage ?? null;
+
+        // Vào lại từ đầu 1 chu kỳ Bảo hành/Chăm sóc: gom ghi chú + ảnh cũ vào lịch sử, xoá trắng để điền lại
+        const CARE_WARRANTY_ENTRY_STAGES: string[] = [WARRANTY_STAGE_ORDER[0], CARE_STAGE_ORDER[0]];
+        let archivedReentryNotes: string | null = null;
+        let archivedReentryPhotos: string[] = [];
+        const isReenteringCareWarranty = care_warranty_stage !== undefined
+            && CARE_WARRANTY_ENTRY_STAGES.includes(care_warranty_stage)
+            && care_warranty_stage !== oldCareStage;
+        if (isReenteringCareWarranty && currentItem?.order_id) {
+            const oldPhotos: string[] = Array.isArray(currentItem.completion_photos) ? currentItem.completion_photos : [];
+            const { data: orderRow } = await supabaseAdmin.from('orders').select('notes').eq('id', currentItem.order_id).single();
+            const oldOrderNotes: string = orderRow?.notes || '';
+            if (oldOrderNotes || oldPhotos.length > 0) {
+                archivedReentryNotes = oldOrderNotes || null;
+                archivedReentryPhotos = oldPhotos;
+                updatePayload.completion_photos = [];
+                await supabaseAdmin.from('orders').update({ notes: '' }).eq('id', currentItem.order_id);
+            }
+        }
 
         if (care_warranty_flow !== undefined) {
             if (care_warranty_flow === 'warranty') {
@@ -2463,17 +2572,23 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             updatePayload.current_phase = 'after_sale';
             updatePayload.phase_stage = stage;
         }
-        const oldStage = currentItem?.after_sale_stage || 'after1';
+        const oldStage = resolveAfterSaleOldStage(currentItem);
 
         if (stage !== undefined && stage !== oldStage) {
-            assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
-            if (oldStage === 'after1_debt' && stage === 'after2' && currentItem?.order_id) {
-                const { data: orderRow } = await supabaseAdmin
-                    .from('orders')
-                    .select('debt_checked, debt_checked_by_name')
-                    .eq('id', currentItem.order_id)
-                    .single();
-                assertDebtCheckCompleteForStageMove(oldStage, stage, orderRow);
+            const oldIdx = AFTER_SALE_STAGE_ORDER.indexOf(oldStage as any);
+            const newIdx = AFTER_SALE_STAGE_ORDER.indexOf(stage as any);
+            const isSingleStepBack = allow_step_back && oldIdx >= 0 && newIdx >= 0 && oldIdx - newIdx === 1;
+            // phase_stage / after_sale_stage đôi khi lệch còn after1 trong khi UI đã ở Kiểm nợ —
+            // cho phép after1 → after2 khi xác nhận kiểm nợ (debt_checked).
+            const isDebtCheckAdvance =
+                stage === 'after2'
+                && (oldStage === 'after1' || oldStage === 'after1_debt')
+                && debt_checked === true;
+            const isEnterAfterSaleFromWorkflow =
+                stage === 'after1'
+                && currentItem?.current_phase !== 'after_sale';
+            if (!isSingleStepBack && !isDebtCheckAdvance && !isEnterAfterSaleFromWorkflow) {
+                assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
             }
         }
 
@@ -2501,14 +2616,36 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
 
         // Record log if stage changed
         if (stage !== undefined && oldStage !== stage) {
-            await supabaseAdmin.from('order_after_sale_stage_log').insert({
-                order_id: item.order_id,
-                entity_type: 'order_item',
-                entity_id: id,
-                from_stage: oldStage,
-                to_stage: stage,
-                created_by: userId
-            });
+            const stagePhotos = normalizeMediaRefs(move_photos);
+            const stageNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(move_notes),
+                summarizeMediaUpload(stagePhotos, 'after-sale'),
+            ]) || null;
+            try {
+                await supabaseAdmin.from('order_after_sale_stage_log').insert({
+                    order_id: item.order_id,
+                    entity_type: 'order_item',
+                    entity_id: id,
+                    from_stage: oldStage,
+                    to_stage: stage,
+                    created_by: userId,
+                    notes: stageNotes,
+                    photos: stagePhotos.length ? stagePhotos : null,
+                });
+            } catch (logErr) {
+                try {
+                    await supabaseAdmin.from('order_after_sale_stage_log').insert({
+                        order_id: item.order_id,
+                        entity_type: 'order_item',
+                        entity_id: id,
+                        from_stage: oldStage,
+                        to_stage: stage,
+                        created_by: userId,
+                    });
+                } catch (fallbackErr) {
+                    console.error('order_after_sale_stage_log insert error (order_item):', logErr, fallbackErr);
+                }
+            }
         }
 
         const newCareFlow = care_warranty_flow !== undefined ? (care_warranty_flow || null) : oldCareFlow;
@@ -2520,6 +2657,13 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             const flowType = newCareFlow === 'warranty' || ['war1', 'war2', 'war3'].includes(newCareStage)
                 ? 'warranty'
                 : 'care';
+            const careLogPhotos = normalizeMediaRefs(
+                archivedReentryPhotos.length ? archivedReentryPhotos : move_photos
+            );
+            const careLogNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(archivedReentryNotes ?? move_notes),
+                summarizeMediaUpload(careLogPhotos, flowType === 'warranty' ? 'bảo hành' : 'chăm sóc'),
+            ]) || null;
             try {
                 await supabaseAdmin.from('order_care_warranty_log').insert({
                     order_id: item.order_id,
@@ -2529,6 +2673,8 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                     to_stage: newCareStage,
                     flow_type: flowType,
                     created_by: userId ?? null,
+                    notes: careLogNotes,
+                    photos: careLogPhotos.length ? careLogPhotos : null,
                 });
             } catch (logErr) {
                 try {
@@ -2538,6 +2684,8 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                         to_stage: newCareStage,
                         flow_type: flowType,
                         created_by: userId ?? null,
+                        notes: careLogNotes,
+                        photos: careLogPhotos.length ? careLogPhotos : null,
                     });
                 } catch (fallbackErr) {
                     console.error('order_care_warranty_log insert error (order_item):', logErr, fallbackErr);

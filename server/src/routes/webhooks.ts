@@ -2,7 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { fireWebhook, notifyCrmMaster } from '../utils/webhookNotifier.js';
-import { on_customer_message, on_sale_message, on_lead_assigned, getVirtualTimeLeft, calculateDeadline, SLA_CYCLES } from '../utils/slaManager.js';
+import { on_customer_message, on_sale_message, on_lead_assigned, getVirtualTimeLeft, calculateDeadline, SLA_CYCLES } from '../utils/leadSlaStateMachine.js';
+import { enrichLeadSlaFields, resolveLeadCustomerMessageAt, resolveLeadStaffReplyAt, normalizeN8nLeadPayload, N8N_LEAD_NON_DB_KEYS } from '../utils/webhookPayloadAliases.js';
 
 const router = Router();
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -125,8 +126,9 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
                 current_rule_index, sla_state, created_at, assigned_to,
                 assigned_to_user: users!leads_assigned_to_fkey(name, telegram_chat_id)
             `)
-            .eq('sla_state', 'ACTIVE')
-            .not('assigned_to', 'is', null);
+            .in('sla_state', ['OWNED_WAITING_SALE', 'OWNED_WAITING_CUSTOMER', 'PAUSED_FOLLOWUP'])
+            .not('assigned_to', 'is', null)
+            .not('pipeline_stage', 'in', '("chot_don","huy","fail")');
 
         if (error) {
             throw new ApiError('Lỗi truy vấn Leads SLA: ' + error.message, 500);
@@ -134,27 +136,28 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
 
         const now = new Date();
 
-        // Format data và tính toán hành động using getVirtualTimeLeft
+        // Format data — cùng ngưỡng WARN/RECLAIM với checkSlaCron (Rule 1+2)
         const leads = data.map((lead: any) => {
             const deadline = lead.current_deadline_at ? new Date(lead.current_deadline_at) : now;
             const createdAt = lead.created_at ? new Date(lead.created_at) : now;
             const ruleIndex = lead.current_rule_index || 0;
             const slaMinutes = SLA_CYCLES[ruleIndex] || 3;
-            const warnMinutes = Math.floor(slaMinutes * 0.7); // Warn at 70% of SLA
+            const warnMinutes = slaMinutes <= 3 ? 1.5 : 45;
 
-            // Use getVirtualTimeLeft to account for night pause
             const timeLeftMins = getVirtualTimeLeft(now, deadline, createdAt);
-            const timeUsed = slaMinutes - timeLeftMins;
 
             let action_type = 'NONE';
 
-            if (timeLeftMins <= 0) {
+            // RECLAIM chỉ khi mốc 3 phút (index 0) thủng — mốc dài chỉ WARN (cron sẽ chuyển mốc)
+            if (timeLeftMins <= 0 && ruleIndex === 0) {
                 action_type = 'RECLAIM';
-            } else if (timeLeftMins <= warnMinutes) {
+            } else if (timeLeftMins <= 0 && ruleIndex > 0) {
+                action_type = 'WARN';
+            } else if (timeLeftMins > 0 && timeLeftMins <= warnMinutes) {
                 action_type = 'WARN';
             }
 
-            return {
+            return enrichLeadSlaFields({
                 id: lead.id,
                 name: lead.name,
                 phone: lead.phone,
@@ -170,7 +173,7 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
                 time_left_mins: timeLeftMins,
                 action_type: action_type,
                 sla_label: action_type === 'RECLAIM' ? `${slaMinutes} phút (Thu hồi)` : action_type === 'WARN' ? `${warnMinutes} phút (Cảnh báo)` : 'OK'
-            };
+            });
         }).filter((l: any) => l.action_type !== 'NONE');
 
         res.json({
@@ -269,20 +272,128 @@ router.get('/leads/daily-summary', verifyWebhookSecret, async (req: Request, res
 // Endpoint nhận raw data từ n8n (không cần format event/data)
 // Data sẽ được lưu trực tiếp vào bảng webhook_logs
 // ============================================================
+function looksLikeUnevaluatedN8nExpression(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    const s = value.trim();
+    // Literal chưa evaluate: "={{ $json.raw_payload }}" hoặc "{{ $json... }}"
+    return /^=\{\{/.test(s) || /^\{\{\s*\$json/.test(s);
+}
+
+function scanUnevaluatedExpressions(input: unknown, path = 'body'): string[] {
+    const hits: string[] = [];
+    if (looksLikeUnevaluatedN8nExpression(input)) {
+        hits.push(path);
+        return hits;
+    }
+    if (!input || typeof input !== 'object') return hits;
+    if (Array.isArray(input)) {
+        input.forEach((item, i) => hits.push(...scanUnevaluatedExpressions(item, `${path}[${i}]`)));
+        return hits;
+    }
+    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+        hits.push(...scanUnevaluatedExpressions(value, `${path}.${key}`));
+    }
+    return hits;
+}
+
+/** Chuẩn hóa body RAW: hỗ trợ { source, payload: <pancake json> } */
+function normalizeRawWebhookBody(body: any): {
+    source: string;
+    payload: Record<string, any>;
+    meta: Record<string, any>;
+} {
+    const source = typeof body?.source === 'string' && body.source.trim()
+        ? body.source.trim()
+        : 'pancake';
+
+    let payload: any = body?.payload !== undefined ? body.payload : body;
+    if (typeof payload === 'string') {
+        try {
+            payload = JSON.parse(payload);
+        } catch {
+            payload = { raw_string: payload };
+        }
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        payload = { value: payload ?? null };
+    }
+
+    const nested = payload.data && typeof payload.data === 'object' ? payload.data : {};
+    const flat = { ...payload, ...nested };
+
+    const meta = {
+        message_id: flat.message_id ?? flat.id ?? null,
+        request_id: flat.request_id ?? null,
+        message_time: flat.message_time ?? flat.last_message_time ?? flat.inserted_at ?? flat.created_at ?? null,
+        page_id: flat.page_id ?? flat.pageId ?? null,
+        message_direction: flat.message_direction ?? flat.direction ?? null,
+        sender_sale_id: flat.sender_sale_id ?? null,
+        sender_sale_name: flat.sender_sale_name ?? null,
+        assigned_to: flat.assigned_to ?? null,
+    };
+
+    return { source, payload, meta };
+}
+
 router.post('/n8n/raw', verifyWebhookSecret, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const data = req.body;
 
-        console.log('[Webhook] Nhận raw data:', JSON.stringify(data).substring(0, 200));
+        // Bắt lỗi cấu hình n8n: body gửi literal expression thay vì JSON đã evaluate
+        const badPaths = scanUnevaluatedExpressions(data);
+        if (badPaths.length > 0) {
+            console.error('[Webhook] RAW body chứa expression chưa evaluate:', badPaths, String(JSON.stringify(data)).slice(0, 200));
+            await logWebhookEvent('raw', {
+                error: 'N8N_EXPRESSION_NOT_EVALUATED',
+                bad_paths: badPaths,
+                hint: 'Body JSON phải là ={{ { source: \"pancake\", payload: $json } }} (expression object), không phải chuỗi \"={{ $json.raw_payload }}\". Bật Continue On Fail cho node RAW_LOG.',
+                received: data,
+            }, 'error');
 
-        await logWebhookEvent('raw', data, 'success');
+            // Best-effort: trả 200 kèm warning để không chặn nhánh song song nếu quên Continue On Fail
+            return res.status(200).json({
+                status: 'accepted_with_warning',
+                code: 'N8N_EXPRESSION_NOT_EVALUATED',
+                message:
+                    'Body RAW đang là expression n8n chưa evaluate. Sửa Body = JSON: ={{ { source: \"pancake\", payload: $json } }}. Bật Continue On Fail cho RAW_LOG.',
+                bad_paths: badPaths,
+            });
+        }
+
+        const normalized = normalizeRawWebhookBody(data);
+        console.log('[Webhook] Nhận raw data:', JSON.stringify({
+            source: normalized.source,
+            meta: normalized.meta,
+        }).substring(0, 300));
+
+        await logWebhookEvent('raw', {
+            source: normalized.source,
+            payload: normalized.payload,
+            meta: normalized.meta,
+        }, 'success');
 
         res.status(200).json({
             status: 'success',
             message: 'Raw data đã được lưu',
+            meta: normalized.meta,
         });
     } catch (error) {
-        next(error);
+        // Best-effort logging: không làm hỏng luồng n8n
+        console.error('[Webhook] RAW log failed (best-effort):', error);
+        try {
+            await logWebhookEvent('raw', {
+                error: 'RAW_LOG_EXCEPTION',
+                message: error instanceof Error ? error.message : String(error),
+                received: req.body,
+            }, 'error');
+        } catch (_) {
+            /* ignore */
+        }
+        return res.status(200).json({
+            status: 'accepted_with_warning',
+            code: 'RAW_LOG_EXCEPTION',
+            message: 'RAW log lỗi phía CRM nhưng đã acknowledge để không chặn flow n8n',
+        });
     }
 });
 
@@ -500,62 +611,216 @@ router.get('/health', (req: Request, res: Response) => {
 // ============================================================
 
 /**
- * Helper: Kiểm tra chuỗi có phải UUID không
+ * Helper: Kiểm tra chuỗi có phải UUID không (nới lỏng — chấp nhận mọi UUID 8-4-4-4-12)
  */
-const isUUID = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+const isUUID = (str: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(str || '').trim());
 
 /**
- * Helper: Tìm UUID nhân viên dựa trên Họ tên
+ * Helper: Tìm UUID nhân viên dựa trên Họ tên hoặc UUID
  */
-async function resolveUserByName(nameOrId: string): Promise<string | null> {
-    if (!nameOrId) return null;
+async function resolveUserByName(nameOrId?: string | null): Promise<string | null> {
+    if (!nameOrId || typeof nameOrId !== 'string') return null;
+    const trimmed = nameOrId.trim();
+    if (!trimmed) return null;
 
-    // Nếu đã là UUID thì dùng luôn
-    if (isUUID(nameOrId)) return nameOrId;
+    // Nếu đã là UUID thì dùng luôn (không bắt buộc tồn tại trong users — n8n đã resolve)
+    if (isUUID(trimmed)) return trimmed;
 
-    // Tìm kiếm trong bảng users theo cột name
+    // Tìm kiếm trong bảng users theo cột name (không phân biệt hoa thường)
     const { data, error } = await supabaseAdmin
         .from('users')
         .select('id')
-        .eq('name', nameOrId)
+        .ilike('name', trimmed)
+        .limit(1)
         .maybeSingle();
 
     if (error || !data) {
-        console.warn(`[Webhook] Không tìm thấy hoặc có nhiều user với tên: ${nameOrId}`);
+        console.warn(`[Webhook] Không tìm thấy user với tên: ${trimmed}`);
         return null;
     }
 
     return data.id;
 }
 
+/**
+ * Chỉ chấp nhận UUID đã có trong bảng users CRM.
+ * Không map được → null (không dùng Pancake ID / tên chung / UUID lạ).
+ */
+async function resolveCrmUserId(raw: string | null | undefined): Promise<{ id: string | null; name: string | null }> {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return { id: null, name: null };
+
+    if (isUUID(value)) {
+        const { data: user } = await supabaseAdmin
+            .from('users')
+            .select('id, name')
+            .eq('id', value)
+            .maybeSingle();
+        if (user) return { id: user.id, name: user.name || null };
+        console.warn(`[Webhook] UUID không có trong users CRM — bỏ qua: ${value}`);
+        return { id: null, name: null };
+    }
+
+    const id = await resolveUserByName(value);
+    if (id) return { id, name: value };
+    console.warn(`[Webhook] Không map được tên "${value}" → null`);
+    return { id: null, name: null };
+}
+
+/**
+ * Resolve người phụ trách (assigned_to) vs người gửi tin (sender_sale_*).
+ * - assigned_to: owner lead hiện tại (UUID CRM)
+ * - sender_sale_id: người trực tiếp gửi outbound (UUID CRM)
+ * Claim/SLA dùng sender khi outbound; không map được → null.
+ */
+async function resolveLeadAssignee(opts: {
+    assigned_to?: string | null;
+    owner_sale?: string | null;
+    assigned_to_name?: string | null;
+    sender_sale_id?: string | null;
+    sender_sale_name?: string | null;
+    message_direction?: string | null;
+}): Promise<{
+    ownerId: string | null;
+    ownerName: string | null;
+    senderId: string | null;
+    senderName: string | null;
+    /** Actor dùng cho claim/SLA: ưu tiên sender trên outbound */
+    actorId: string | null;
+    actorName: string | null;
+}> {
+    const ownerFromId = await resolveCrmUserId(opts.assigned_to);
+    const ownerFromName = !ownerFromId.id
+        ? await resolveCrmUserId(opts.assigned_to_name || opts.owner_sale || null)
+        : { id: null, name: null };
+    const ownerId = ownerFromId.id || ownerFromName.id;
+    const ownerName =
+        ownerFromId.name
+        || (typeof opts.assigned_to_name === 'string' && opts.assigned_to_name.trim())
+        || (typeof opts.owner_sale === 'string' && opts.owner_sale.trim())
+        || ownerFromName.name
+        || null;
+
+    const senderFromId = await resolveCrmUserId(opts.sender_sale_id);
+    const senderFromName = !senderFromId.id
+        ? await resolveCrmUserId(opts.sender_sale_name || null)
+        : { id: null, name: null };
+    const senderId = senderFromId.id || senderFromName.id;
+    const senderName =
+        senderFromId.name
+        || (typeof opts.sender_sale_name === 'string' && opts.sender_sale_name.trim())
+        || senderFromName.name
+        || null;
+
+    const outbound = isOutboundDirection(opts.message_direction);
+    // Outbound: actor = người gửi tin; inbound/khác: không dùng sender để claim
+    const actorId = outbound ? (senderId || ownerId) : ownerId;
+    const actorName = outbound ? (senderName || ownerName) : ownerName;
+
+    return { ownerId, ownerName, senderId, senderName, actorId, actorName };
+}
+
 function normalizeMessageActor(lastActor?: string | null, messageDirection?: string | null): 'lead' | 'sale' | undefined {
-    if (lastActor === 'lead' || lastActor === 'sale') return lastActor;
-    if (messageDirection === 'inbound') return 'lead';
-    if (messageDirection === 'outbound') return 'sale';
+    const actor = String(lastActor || '').trim().toLowerCase();
+    if (actor === 'lead' || actor === 'customer' || actor === 'khach' || actor === 'khách' || actor === 'user' || actor === 'client') {
+        return 'lead';
+    }
+    if (actor === 'sale' || actor === 'agent' || actor === 'staff' || actor === 'page' || actor === 'outbound') {
+        return 'sale';
+    }
+
+    const dir = String(messageDirection || '').trim().toLowerCase();
+    if (dir === 'inbound' || dir === 'in' || dir === 'received') return 'lead';
+    if (dir === 'outbound' || dir === 'out' || dir === 'sent') return 'sale';
     return undefined;
 }
 
+function isInboundDirection(messageDirection?: string | null): boolean {
+    const dir = String(messageDirection || '').trim().toLowerCase();
+    return dir === 'inbound' || dir === 'in' || dir === 'received';
+}
+
+function isOutboundDirection(messageDirection?: string | null): boolean {
+    const dir = String(messageDirection || '').trim().toLowerCase();
+    return dir === 'outbound' || dir === 'out' || dir === 'sent';
+}
+
+async function emitIntrusionAlert(payload: {
+    lead_id: string;
+    lead_name?: string | null;
+    owner_id: string;
+    owner_name: string;
+    tele_id_sale?: string | null;
+    intruder_id: string;
+    intruder_name: string;
+    tele_id_vi_pham?: string | null;
+}) {
+    const link_lead = `${FRONTEND_URL}/leads/${payload.lead_id}`;
+    const eventPayload = { ...payload, link_lead };
+
+    // 1) n8n / crm-xoxo webhook
+    fireWebhook('INTRUSION_DETECTED', eventPayload);
+
+    // 2) Notification Center (owner + managers)
+    try {
+        const recipientIds = new Set<string>();
+        if (payload.owner_id) recipientIds.add(payload.owner_id);
+
+        const { data: managers } = await supabaseAdmin
+            .from('users')
+            .select('id')
+            .in('role', ['admin', 'manager'])
+            .eq('status', 'active');
+        (managers || []).forEach((u) => recipientIds.add(u.id));
+
+        if (recipientIds.size > 0) {
+            const title = 'Cảnh báo giành khách';
+            const message = `${payload.intruder_name} đã nhắn vào lead của ${payload.owner_name}: ${payload.lead_name || payload.lead_id}`;
+            await supabaseAdmin.from('notifications').insert(
+                Array.from(recipientIds).map((user_id) => ({
+                    user_id,
+                    type: 'INTRUSION_DETECTED',
+                    title,
+                    message,
+                    data: eventPayload,
+                }))
+            );
+        }
+    } catch (err) {
+        console.error('[Webhook] Failed to write intrusion notifications:', err);
+    }
+}
+
 async function handleLeadUpsert(incomingData: any, event?: string) {
-    // Tự động xử lý nếu dữ liệu bị bọc trong key "lead" (giúp n8n linh hoạt hơn)
-    const data = (incomingData && incomingData.lead)
-        ? { ...incomingData, ...incomingData.lead }
-        : incomingData;
+    // normalizeN8nLeadPayload tự merge nested `lead` + giữ assigned_to UUID hợp lệ
+    const data = normalizeN8nLeadPayload(incomingData);
 
     const {
         id, name, phone, email, source, company, address, notes, assigned_to, owner_sale, lead_type,
         fb_thread_id, pancake_conversation_id, facebook_name, avatar_url,
         last_message_text, last_message_time, last_actor,
-        pancake_customer_id, message_direction
+        pancake_customer_id, message_direction, message_id
     } = data;
 
     const normalizedLastActor = normalizeMessageActor(last_actor, message_direction);
+    const effectiveLastMessageTime = last_message_time || new Date().toISOString();
+    const saleDisplayName = owner_sale || data.assigned_to_name || null;
 
     // Thông tin debug để trả về cho n8n đối soát
     const debugInfo = {
         fb_thread_id_received: fb_thread_id || null,
         pancake_conversation_id_received: pancake_conversation_id || null,
         last_actor_received: last_actor || null,
-        message_direction_received: message_direction || null
+        message_direction_received: message_direction || null,
+        message_id_received: message_id || null,
+        request_id_received: data.request_id || null,
+        page_id_received: data.page_id || null,
+        message_time_mapped: last_message_time || data.message_time || null,
+        owner_sale_mapped: saleDisplayName || null,
+        assigned_to_received: assigned_to || null,
+        sender_sale_id_received: data.sender_sale_id || null,
+        sender_sale_name_received: data.sender_sale_name || null,
     };
 
     // 0. Kiểm tra thông tin định danh tối thiểu
@@ -653,13 +918,45 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         }
     }
 
-    // 2. Resolve assigned_to (Name -> UUID)
-    // Ưu tiên owner_sale (tên sale) từ n8n theo yêu cầu mới
-    const saleName = owner_sale || assigned_to;
-    const resolvedAssignedTo = await resolveUserByName(saleName);
+    // 2. Resolve assigned_to — chỉ gán owner khi sale reply (hoặc gán tay không kèm tin khách)
+    const assignee = await resolveLeadAssignee({
+        assigned_to,
+        owner_sale: saleDisplayName,
+        assigned_to_name: data.assigned_to_name,
+        sender_sale_id: data.sender_sale_id,
+        sender_sale_name: data.sender_sale_name,
+        message_direction,
+    });
+    let resolvedAssignedTo = assignee.actorId;
+    let saleName = assignee.actorName || assignee.senderName || assignee.ownerName;
+    if (!resolvedAssignedTo && (assigned_to || data.sender_sale_id)) {
+        console.warn(`[Webhook] Create: không resolve được assignee CRM — assigned_to=null`, {
+            assigned_to,
+            sender_sale_id: data.sender_sale_id || null,
+        });
+    }
+
+    // Tin khách + UUID trong payload → không claim (tránh stale assignee)
+    const createIsSaleReply = normalizedLastActor === 'sale' && !!last_message_text;
+    if (resolvedAssignedTo && last_message_text && !createIsSaleReply) {
+        console.log(`[Webhook] Create: bỏ assigned_to trên tin khách — lead tạo unassigned`);
+        resolvedAssignedTo = null;
+    }
+
+    console.log(`[Webhook] Create lead assignee:`, {
+        assigned_to,
+        sender_sale_id: data.sender_sale_id || null,
+        resolvedAssignedTo,
+        saleName,
+        createIsSaleReply,
+        message_id: message_id || null,
+        request_id: data.request_id || null,
+        page_id: data.page_id || null,
+        message_time: data.message_time || last_message_time || null,
+    });
 
     // 3. Tạo Lead mới (với retry logic để xử lý race condition)
-    const insertPayload = {
+    const insertPayload: Record<string, any> = {
         name: name || facebook_name || 'Khách hàng mới',
         phone: phone || null,
         email: email || null,
@@ -669,6 +966,7 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         notes: notes || null,
         status: 'new',
         assigned_to: resolvedAssignedTo,
+        owner_sale: resolvedAssignedTo ? (saleName || null) : null,
         lead_type: lead_type || 'individual',
         fb_thread_id: fb_thread_id || null,
         pancake_conversation_id: pancake_conversation_id || null,
@@ -677,10 +975,18 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         facebook_name: facebook_name || null,
         avatar_url: avatar_url || null,
         last_message_text: last_message_text || null,
-        last_message_time: last_message_time || new Date().toISOString(),
+        last_message_time: effectiveLastMessageTime,
         last_actor: normalizedLastActor || null,
         assign_state: resolvedAssignedTo ? 'assigned' : 'unassigned'
     };
+
+    // A sale-only create event cannot invent an active customer-response SLA.
+    if (createIsSaleReply) {
+        insertPayload.assigned_to = null;
+        insertPayload.owner_sale = null;
+        insertPayload.assign_state = 'unassigned';
+        insertPayload.sla_state = 'UNASSIGNED_IDLE';
+    }
 
     const { data: lead, error } = await supabaseAdmin
         .from('leads')
@@ -729,9 +1035,9 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
     if (resolvedAssignedTo) {
         await logLeadActivity(lead.id, {
             type: 'owner_assigned',
-            content: `Lead được gán cho ${saleName}`,
+            content: `Lead được gán cho ${saleName || resolvedAssignedTo}`,
             userId: resolvedAssignedTo,
-            userName: saleName
+            userName: saleName || 'Hệ thống'
         });
     }
 
@@ -753,30 +1059,40 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         await logLeadMessage(lead.id, {
             content: last_message_text,
             sender_type: normalizedLastActor || 'lead',
-            sender_name: normalizedLastActor === 'lead' ? (name || facebook_name) : 'Sale',
-            created_at: last_message_time
+            sender_name: normalizedLastActor === 'lead'
+                ? (name || facebook_name)
+                : (saleName || 'Sale'),
+            created_at: effectiveLastMessageTime,
+            message_id: message_id || null,
         });
         
-        // Trigger SLA Rule 1 or 2
+        // Trigger SLA — sale claim đã set 60' lúc insert
         if (normalizedLastActor === 'lead') {
-            await on_customer_message(lead);
-        } else if (normalizedLastActor === 'sale') {
-            await on_sale_message(lead, resolvedAssignedTo as string, saleName);
+            await on_customer_message(lead, {
+                inboundAt: resolveLeadCustomerMessageAt(data) ?? undefined,
+                messageId: message_id || null,
+            });
+        } else if (normalizedLastActor === 'sale' && !(createIsSaleReply && resolvedAssignedTo)) {
+            await on_sale_message(lead, resolvedAssignedTo as string, saleName || 'Sale', {
+                outboundAt: resolveLeadStaffReplyAt(data) ?? undefined,
+                messageId: message_id || null,
+            });
         }
     } else if (resolvedAssignedTo) {
         // Mới gán Sale, chưa nhắn tin -> Rule 1 kích hoạt 3 phút
         await on_lead_assigned(lead.id, resolvedAssignedTo as string);
     }
 
-    notifyCrmMaster('lead.created', { lead });
+    notifyCrmMaster('lead.created', { lead: enrichLeadSlaFields(lead) });
 
     return {
         action: 'created',
-        lead
+        lead: enrichLeadSlaFields(lead)
     };
 }
 
-async function handleLeadUpdate(data: any) {
+async function handleLeadUpdate(incomingData: any) {
+    const data = normalizeN8nLeadPayload(incomingData);
     const {
         id,
         phone: incomingPhone,
@@ -789,23 +1105,28 @@ async function handleLeadUpdate(data: any) {
         status,
         pipeline_stage: _ignored_stage, // Luôn bỏ qua pipeline_stage vì sale cập nhật thủ công
         assigned_to,
-        owner_sale, // Tên sale từ n8n
+        owner_sale, // Tên sale từ n8n (đã map từ assigned_to_name)
         assign_state, // Bôi đậm trạng thái gán
         message_direction, // Không phải cột DB
+        message_id,
         lead: _ignored_lead, // Bỏ qua key "lead" để không bị nhầm là cột database
         t_last_message: _ignored_t1, // Bỏ key rác từ n8n
-        t_last_customer_message: _ignored_t2, // Bỏ key rác từ n8n
         tags: _ignored_tags, // Bỏ key rác chưa hỗ trợ
         ...otherFields
     } = data;
 
+    const inboundMessageAt = resolveLeadCustomerMessageAt(data);
+    const outboundReplyAt = resolveLeadStaffReplyAt(data);
+    const effectiveLastMessageTime = last_message_time || outboundReplyAt || inboundMessageAt || new Date().toISOString();
+    const saleDisplayName = owner_sale || data.assigned_to_name || null;
+
     // Log để kiểm tra dữ liệu nhận được từ n8n (Debug)
-    console.log(`[Webhook] Update Lead ID: ${id || data.id}, Phone: ${incomingPhone || data.phone}`);
+    console.log(`[Webhook] Update Lead ID: ${id || data.id}, Phone: ${incomingPhone || data.phone}, last_actor=${rawLastActor}, last_message_time=${effectiveLastMessageTime}`);
 
     // 1. Tìm leadId
     let leadId = id;
     let currentLead: any = null;
-    const leadSlaSelect = 'id, assigned_to, name, facebook_name, created_at, round_index, t_last_inbound, t_last_outbound, current_deadline_at, current_rule_index, sla_state, owner_sale';
+    const leadSlaSelect = 'id, assigned_to, name, facebook_name, created_at, round_index, t_last_inbound, t_last_outbound, current_deadline_at, current_rule_index, sla_state, owner_sale, pipeline_stage';
 
     if (!leadId) {
         // Search by fb_thread_id first
@@ -894,7 +1215,13 @@ async function handleLeadUpdate(data: any) {
     addIfValid('status', status);
 
     // Lọc bỏ danh sách các cột tuyệt đối không cho phép update bừa bãi
-    const BANNED_KEYS = ['id', 'created_at', 'current_rule_index', 'current_deadline_at', 'last_valid_followup_at', 'sla_state', 't_last_inbound', 't_last_outbound', 'appointment_reminded_at', 'round_index'];
+    // Ownership (assigned_to / owner_sale / assign_state) CHỈ set qua logic bên dưới
+    const BANNED_KEYS = [
+        'id', 'created_at', 'current_rule_index', 'current_deadline_at', 'last_valid_followup_at',
+        'sla_state', 't_last_inbound', 't_last_outbound', 'appointment_reminded_at', 'round_index',
+        'assigned_to', 'owner_sale', 'assign_state',
+        ...N8N_LEAD_NON_DB_KEYS,
+    ];
     
     Object.keys(otherFields).forEach(key => {
         if (key !== 'notes' && key !== 'lead' && !BANNED_KEYS.includes(key)) {
@@ -905,118 +1232,139 @@ async function handleLeadUpdate(data: any) {
         }
     });
 
-    // Rule 5: Khi set lịch hẹn hoặc hẹn chăm sóc -> Pause SLA
-    if (updateData.appointment_time || updateData.next_followup_time) {
-        updateData.sla_state = 'PAUSED_APPOINTMENT';
-    }
-
-    // AI fields removed from core update
-    // Handled by handleLeadAIUpdate instead
+    // Appointment fields do not control the official owner/SLA state machine.
 
     let effectiveLastActor = normalizeMessageActor(rawLastActor, message_direction);
     let saleSlaHandledInCoreUpdate = false;
-    const incomingSaleName = owner_sale || assigned_to;
 
-    if (incomingSaleName && last_message_text && message_direction !== 'inbound') {
-        effectiveLastActor = 'sale';
-    }
+    const assignee = await resolveLeadAssignee({
+        assigned_to,
+        owner_sale: saleDisplayName,
+        assigned_to_name: data.assigned_to_name,
+        sender_sale_id: data.sender_sale_id,
+        sender_sale_name: data.sender_sale_name,
+        message_direction,
+    });
+    let resolvedIncomingId = assignee.actorId;
+    let resolvedIncomingName = assignee.actorName || assignee.senderName || assignee.ownerName;
 
-    // Logic Ownership:
-    // 1. Trường hợp đặc biệt: Thu hồi lead (Unassign) từ n8n (Tuần tra SLA)
-    if (!incomingSaleName && assign_state === 'unassigned' && assigned_to === null) {
-        updateData.assigned_to = null;
-        updateData.assign_state = 'unassigned';
-
-        // Log sự kiện thu hồi lead
-        await logLeadActivity(leadId, {
-            type: 'owner_unassigned',
-            content: `Lead đã được thu hồi và đưa về trạng thái tự do (Hệ thống quét SLA)`,
-            userName: 'Hệ thống'
+    // Không fallback UUID lạ / Pancake ID — chỉ UUID đã verify trong users
+    if (!resolvedIncomingId && (assigned_to || data.sender_sale_id)) {
+        console.warn(`[Webhook] Không resolve được assignee CRM — giữ assigned_to=null`, {
+            assigned_to,
+            sender_sale_id: data.sender_sale_id || null,
+            sender_sale_name: data.sender_sale_name || null,
         });
     }
-    // 2. Gán Sale mới: Ưu tiên owner_sale hoặc assigned_to
-    else if (incomingSaleName && !currentLead.assigned_to) {
-        const saleName = incomingSaleName;
-        const resolvedId = await resolveUserByName(saleName);
-        if (resolvedId) {
-            const now = new Date();
-            updateData.assigned_to = resolvedId;
-            updateData.assign_state = 'assigned';
-            updateData.owner_sale = saleName;
 
-            if (effectiveLastActor === 'sale' && last_message_text) {
-                const deadline = calculateDeadline(now, SLA_CYCLES[1], currentLead.created_at || now.toISOString());
-                updateData.current_rule_index = 1;
-                updateData.current_deadline_at = deadline.toISOString();
-                updateData.t_last_outbound = now.toISOString();
-                updateData.last_message_time = last_message_time || now.toISOString();
-                updateData.last_actor = 'sale';
-                updateData.sla_state = 'ACTIVE';
-                saleSlaHandledInCoreUpdate = true;
-            } else {
-                const deadline = calculateDeadline(now, SLA_CYCLES[0], currentLead.created_at || now.toISOString());
-                updateData.current_rule_index = 0;
-                updateData.current_deadline_at = deadline.toISOString();
-                updateData.sla_state = 'ACTIVE';
-            }
+    const hasIncomingSale = !!(
+        resolvedIncomingId
+        || saleDisplayName
+        || assignee.senderId
+        || assignee.ownerId
+        || data.sender_sale_id
+        || data.sender_sale_name
+    );
+    const leadHasOwner = !!(currentLead.assigned_to && String(currentLead.assigned_to).trim());
 
-            // Log sự kiện gán Sale
-            await logLeadActivity(leadId, {
-                type: 'owner_assigned',
-                content: `Lead được gán cho ${saleName}`,
-                userId: resolvedId,
-                userName: saleName
-            });
+    console.log(`[Webhook] Ownership check lead=${leadId}`, {
+        payload_assigned_to: assigned_to,
+        sender_sale_id: data.sender_sale_id || null,
+        sender_sale_name: data.sender_sale_name || null,
+        message_id: message_id || null,
+        request_id: data.request_id || null,
+        page_id: data.page_id || null,
+        message_time: data.message_time || last_message_time || null,
+        resolvedIncomingId,
+        resolvedIncomingName,
+        current_assigned_to: currentLead.assigned_to,
+        last_actor: effectiveLastActor,
+        leadHasOwner,
+    });
+
+    if (hasIncomingSale && last_message_text) {
+        if (isOutboundDirection(message_direction)) {
+            effectiveLastActor = 'sale';
+        } else if (!isInboundDirection(message_direction) && effectiveLastActor === 'sale') {
+            effectiveLastActor = 'sale';
         }
     }
-    // 3. Chống giành khách (Sale B nhắn vào Lead của Sale A)
-    else if (incomingSaleName && currentLead.assigned_to) {
-        const saleName = incomingSaleName;
-        const resolvedId = await resolveUserByName(saleName);
-        if (resolvedId && resolvedId !== currentLead.assigned_to) {
-            // Lấy telegram_chat_id và tên của cả 2 sale
+
+    // ——— Ownership rules ———
+    // Claim hợp lệ = tin SALE đang reply (không claim từ tin khách / sync còn kèm UUID cũ)
+    const isValidSaleClaimReply = !!(
+        effectiveLastActor === 'sale'
+        && last_message_text
+        && resolvedIncomingId
+    );
+    let skipIntrusionMessageSla = false;
+
+    // n8n cannot decide owner/SLA transitions. This payload is descriptive only.
+    if (!hasIncomingSale && assign_state === 'unassigned' && (assigned_to === null || assigned_to === undefined)) {
+        delete updateData.assigned_to;
+        delete updateData.assign_state;
+        delete updateData.owner_sale;
+    }
+    // 2. Lead CHƯA có owner — CHỈ gán khi sale rep hợp lệ đầu tiên → ĐỢI KHÁCH 60'
+    else if (!leadHasOwner && isValidSaleClaimReply) {
+        // Persist the message first; state machine claims with deadline/version checks.
+        delete updateData.assigned_to;
+        delete updateData.assign_state;
+        delete updateData.owner_sale;
+        saleSlaHandledInCoreUpdate = false;
+    }
+    // 2b. Lead chưa owner nhưng payload còn UUID + tin khách/sync → BỎ QUA ownership (tránh re-bind sau revoke)
+    else if (!leadHasOwner && resolvedIncomingId && !isValidSaleClaimReply) {
+        console.log(`[Webhook] Skip assign UUID trên lead chưa owner (actor=${effectiveLastActor || 'n/a'}) — chờ sale reply hợp lệ`);
+    }
+    // 3. Lead ĐÃ có owner — không overwrite; sale khác + last_actor=sale → INTRUSION
+    else if (leadHasOwner && resolvedIncomingId) {
+        if (resolvedIncomingId !== currentLead.assigned_to) {
             const { data: usersData } = await supabaseAdmin
                 .from('users')
                 .select('id, name, telegram_chat_id')
-                .in('id', [currentLead.assigned_to, resolvedId]);
+                .in('id', [currentLead.assigned_to, resolvedIncomingId]);
 
             const ownerUser = usersData?.find(u => u.id === currentLead.assigned_to);
             const ownerTele = ownerUser?.telegram_chat_id;
-            const ownerName = ownerUser?.name || 'Ẩn danh';
-            
-            const intruderTele = usersData?.find(u => u.id === resolvedId)?.telegram_chat_id;
+            const ownerName = ownerUser?.name || currentLead.owner_sale || 'Ẩn danh';
+            const intruderTele = usersData?.find(u => u.id === resolvedIncomingId)?.telegram_chat_id;
+            const intruderName = resolvedIncomingName || saleDisplayName || 'Sale khác';
 
-            // Phát hiện vi phạm
-            fireWebhook('INTRUSION_DETECTED', {
-                lead_id: leadId,
-                lead_name: currentLead.name || currentLead.facebook_name,
-                owner_id: currentLead.assigned_to,
-                owner_name: ownerName,
-                tele_id_sale: ownerTele,
-                intruder_id: resolvedId,
-                intruder_name: saleName,
-                tele_id_vi_pham: intruderTele,
-                link_lead: `${FRONTEND_URL}/leads/${leadId}`,
-            });
+            // Chỉ cảnh báo khi đúng là sale đang nhắn
+            if (effectiveLastActor === 'sale' && last_message_text) {
+                await emitIntrusionAlert({
+                    lead_id: leadId,
+                    lead_name: currentLead.name || currentLead.facebook_name,
+                    owner_id: currentLead.assigned_to,
+                    owner_name: ownerName,
+                    tele_id_sale: ownerTele,
+                    intruder_id: resolvedIncomingId,
+                    intruder_name: intruderName,
+                    tele_id_vi_pham: intruderTele,
+                });
 
-            // Ghi tin nhắn vào CRM nhưng KHÔNG tính SLA
-            if (last_message_text && effectiveLastActor === 'sale') {
                 await logLeadActivity(leadId, {
                     type: 'note',
-                    content: `[Cảnh báo vi phạm] ${saleName} đã nhắn tin: ${last_message_text}`,
+                    content: `[Cảnh báo vi phạm] ${intruderName} đã nhắn tin: ${last_message_text}`,
                     userName: 'Hệ thống'
                 });
 
-                // Vô hiệu hóa việc tính SLA phía dưới bằng cách hủy tin nhắn
+                // Không đổi owner / không reset timer / không ghi tin như khách
+                skipIntrusionMessageSla = true;
                 effectiveLastActor = undefined;
             }
+        } else if (resolvedIncomingName) {
+            updateData.owner_sale = resolvedIncomingName;
         }
+    } else if (leadHasOwner && resolvedIncomingName && !resolvedIncomingId) {
+        updateData.owner_sale = resolvedIncomingName;
     }
 
     // Cập nhật thông tin tin nhắn cuối và SLA
     if (last_message_text && effectiveLastActor !== undefined) {
         updateData.last_message_text = last_message_text;
-        updateData.last_message_time = last_message_time || new Date().toISOString();
+        updateData.last_message_time = effectiveLastMessageTime;
         updateData.last_actor = effectiveLastActor;
 
         if (effectiveLastActor === 'lead') {
@@ -1029,12 +1377,18 @@ async function handleLeadUpdate(data: any) {
             await logLeadActivity(leadId, {
                 type: 'sale_reply',
                 content: last_message_text,
-                userName: 'Sale'
+                userName: resolvedIncomingName || currentLead.owner_sale || 'Sale'
             });
         }
     }
 
-    const { data: lead, error } = await supabaseAdmin
+    console.log(`[Webhook] updateData ownership fields:`, {
+        assigned_to: updateData.assigned_to,
+        assign_state: updateData.assign_state,
+        owner_sale: updateData.owner_sale,
+    });
+
+    let { data: lead, error } = await supabaseAdmin
         .from('leads')
         .update(updateData)
         .eq('id', leadId)
@@ -1042,6 +1396,29 @@ async function handleLeadUpdate(data: any) {
         .single();
 
     if (error) {
+        // FK fail khi UUID không có trong users → vẫn cố gán owner_sale + assign_state, bỏ assigned_to
+        const isFkError = String(error.message || '').toLowerCase().includes('foreign key')
+            || error.code === '23503';
+        if (isFkError && updateData.assigned_to) {
+            console.error(`[Webhook] FK assigned_to thất bại (${updateData.assigned_to}), thử lại không FK:`, error.message);
+            const retryPayload = { ...updateData };
+            delete retryPayload.assigned_to;
+            // Không set assigned nếu FK fail — nhưng log rõ
+            const retry = await supabaseAdmin
+                .from('leads')
+                .update(retryPayload)
+                .eq('id', leadId)
+                .select()
+                .single();
+            if (retry.error) {
+                throw new ApiError('Lỗi khi cập nhật lead: ' + retry.error.message, 500);
+            }
+            lead = retry.data;
+            throw new ApiError(
+                `assigned_to UUID ${updateData.assigned_to} không tồn tại trong users — không gán được người phụ trách`,
+                400
+            );
+        }
         throw new ApiError('Lỗi khi cập nhật lead: ' + error.message, 500);
     }
 
@@ -1057,29 +1434,46 @@ async function handleLeadUpdate(data: any) {
     }
 
     // 5. Lưu lịch sử tin nhắn
-    if (last_message_text) {
-        await logLeadMessage(leadId, {
+    // Intrusion: không ghi lead_messages (tránh cron restore 3') — đã log activity ở trên
+    // Không default actor thiếu thành 'lead' (tránh cron tưởng khách nhắn → reset 3')
+    if (last_message_text && !skipIntrusionMessageSla && effectiveLastActor) {
+        const logged = await logLeadMessage(leadId, {
             content: last_message_text,
-            sender_type: effectiveLastActor || 'lead',
-            sender_name: effectiveLastActor === 'lead' ? (currentLead?.name || currentLead?.facebook_name) : 'Sale',
-            created_at: last_message_time
+            sender_type: effectiveLastActor,
+            sender_name: effectiveLastActor === 'lead'
+                ? (currentLead?.name || currentLead?.facebook_name)
+                : (resolvedIncomingName || saleDisplayName || currentLead?.owner_sale || 'Sale'),
+            created_at: effectiveLastMessageTime,
+            message_id: message_id || null,
         });
-        
-        // Cập nhật State Machine SLA rời theo đúng kiến trúc sau khi Update lõi Lead xog
-        if (effectiveLastActor === 'lead') {
-            await on_customer_message(lead);
+
+        // Tin trùng message_id → không đụng SLA (tránh reset 60'→3' khi n8n gửi lại)
+        if (logged === false) {
+            console.log(`[Webhook] Skip SLA update for duplicate message on lead ${leadId}`);
+        } else if (effectiveLastActor === 'lead') {
+            await on_customer_message(lead, {
+                inboundAt: inboundMessageAt || effectiveLastMessageTime,
+                messageId: message_id || null,
+            });
         } else if (effectiveLastActor === 'sale' && !saleSlaHandledInCoreUpdate) {
-            const saleName = owner_sale || assigned_to;
-            const resolvedId = await resolveUserByName(saleName);
-            await on_sale_message(lead, resolvedId as string, saleName);
+            const saleName = resolvedIncomingName || saleDisplayName || currentLead.owner_sale || 'Sale';
+            const resolvedId = resolvedIncomingId || lead.assigned_to || currentLead.assigned_to || null;
+            await on_sale_message(lead, resolvedId, saleName, {
+                outboundAt: outboundReplyAt || effectiveLastMessageTime,
+                messageId: message_id || null,
+            });
         }
+    } else if (last_message_text && !effectiveLastActor && !skipIntrusionMessageSla) {
+        console.log(`[Webhook] Skip lead_messages/SLA: thiếu last_actor/direction cho lead ${leadId}`);
     }
 
-    notifyCrmMaster('lead.updated', { lead });
+
+    const enrichedLead = enrichLeadSlaFields(lead);
+    notifyCrmMaster('lead.updated', { lead: enrichedLead });
 
     return {
         action: 'updated',
-        lead
+        lead: enrichedLead
     };
 }
 
@@ -1169,10 +1563,26 @@ async function handleLeadAIUpdate(data: any) {
 
 /**
  * Helper: Lưu lịch sử tin nhắn vào bảng lead_messages
+ * @returns true nếu insert mới, false nếu duplicate/skip, undefined nếu lỗi
  */
-async function logLeadMessage(leadId: string, messageData: any) {
+async function logLeadMessage(leadId: string, messageData: any): Promise<boolean | undefined> {
     try {
         const { content, sender_type, sender_name, created_at, message_id, message_type, metadata } = messageData;
+
+        // Tránh ghi trùng nếu n8n gửi lại cùng message_id
+        if (message_id) {
+            const { data: existing } = await supabaseAdmin
+                .from('lead_messages')
+                .select('id')
+                .eq('lead_id', leadId)
+                .eq('message_id', message_id)
+                .limit(1)
+                .maybeSingle();
+            if (existing) {
+                console.log(`[Webhook] Skip duplicate lead_message mid=${message_id}`);
+                return false;
+            }
+        }
 
         await supabaseAdmin
             .from('lead_messages')
@@ -1186,8 +1596,10 @@ async function logLeadMessage(leadId: string, messageData: any) {
                 metadata: metadata || {},
                 created_at: created_at || new Date().toISOString()
             });
+        return true;
     } catch (err) {
         console.error('[Webhook] Lỗi khi lưu lead_messages:', err);
+        return undefined;
     }
 }
 
@@ -1372,10 +1784,7 @@ async function handleLeadSaleMemoryUpdate(data: any) {
     addIfValid('eta_note', eta_note);
     addIfValid('sale_note_summary', sale_note_summary);
 
-    // Rule 5: Khi set lịch hẹn hoặc hẹn chăm sóc -> Pause SLA
-    if (updateData.appointment_time || updateData.next_followup_time) {
-        updateData.sla_state = 'PAUSED_APPOINTMENT';
-    }
+    // Appointment fields do not pause the official follow-up SLA.
 
     // 4. Thực thi update
     const { error } = await supabaseAdmin
@@ -1430,4 +1839,3 @@ async function logWebhookEvent(
 }
 
 export default router;
-

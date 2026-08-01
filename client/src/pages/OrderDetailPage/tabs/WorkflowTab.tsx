@@ -8,8 +8,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TabsContent } from '@/components/ui/tabs';
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
-import { cn } from '@/lib/utils';
-import { formatDateTime } from '@/lib/utils';
+import { getProductItemNotes } from '../utils';
+import { cn, formatDateTime } from '@/lib/utils';
 import { TECH_ROOMS } from '@/components/orders/constants';
 import type { Order, OrderItem } from '@/hooks/useOrders';
 import { Button } from '@/components/ui/button';
@@ -67,12 +67,20 @@ const WorkflowCard = memo(({
 }: WorkflowCardProps) => {
     const productName = group.product?.item_name ?? group.services[0]?.item_name ?? '—';
     const productItem = group.product as any;
+    const productNotes = getProductItemNotes(productItem);
     const productImages = productItem?.product_images ?? (productItem?.product?.image ? [productItem.product.image] : []);
-    const hasProductDetails = group.product && (productItem?.product_type || productItem?.product_brand || productItem?.product_color || productItem?.product_size || productItem?.product_material || productItem?.product_condition_before || productItem?.product_notes);
+    const hasProductDetails = group.product && (productItem?.product_type || productItem?.product_brand || productItem?.product_color || productItem?.product_size || productItem?.product_material || productItem?.product_condition_before || productNotes);
     const cardKey = group.product?.id ?? group.services.map((s) => s.id).join('-');
 
     const leadItem = group.services.find((s) => getItemCurrentStep(s.id)) ?? group.services[0];
     const workflowActionItem = group.product || leadItem;
+    const isWarranty = !!(
+        productItem?.care_warranty_flow === 'warranty'
+        || productItem?.warranty_code
+        || (leadItem as any)?.care_warranty_flow === 'warranty'
+        || (leadItem as any)?.warranty_code
+        || String(productItem?.warranty_code || '').startsWith('HDBH')
+    );
     // Isolation logic: only use orderExtensionRequest if it's truly global (no item IDs)
     const extensionRequest = productItem?.extension_request || (leadItem as any)?.extension_request || orderExtensionRequest;
     const stepDeadline = leadItem ? getStepDeadlineDisplay(leadItem.id) : { label: 'N/A', dueAt: null };
@@ -122,7 +130,16 @@ const WorkflowCard = memo(({
                     onClick={() => onCardClick(group, roomId)}
                 >
                     <div className="flex min-w-0 justify-between items-start mb-2">
-                        <span className="text-xs font-semibold text-gray-400">#{orderCode ?? cardKey?.slice(0, 8)}</span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-xs font-semibold text-gray-400">
+                                #{orderCode ?? cardKey?.slice(0, 8)}{isWarranty ? 'BH' : ''}
+                            </span>
+                            {isWarranty && (
+                                <Badge className="bg-orange-100 text-orange-700 border-orange-300 text-[10px] px-1 h-4 hover:bg-orange-100 shrink-0">
+                                    BH
+                                </Badge>
+                            )}
+                        </div>
                     </div>
 
                     <div className="min-w-0 space-y-2 mb-3">
@@ -163,8 +180,8 @@ const WorkflowCard = memo(({
                                 {productItem?.product_brand && (
                                     <div className="flex min-w-0 items-center gap-1.5"><Tag className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="min-w-0 truncate">Hãng: {productItem.product_brand}</span></div>
                                 )}
-                                {productItem?.product_notes && (
-                                    <div className="flex min-w-0 items-center gap-1.5"><FileText className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="min-w-0 line-clamp-1">Ghi chú: {productItem.product_notes}</span></div>
+                                {productNotes && (
+                                    <div className="flex min-w-0 items-center gap-1.5"><FileText className="h-3 w-3 shrink-0 text-muted-foreground" /><span className="min-w-0 line-clamp-1">Ghi chú: {productNotes}</span></div>
                                 )}
                             </div>
                         )}
@@ -937,7 +954,14 @@ export function WorkflowTab({
                                                                         itemName: groupName
                                                                     });
                                                                 } else {
-                                                                    setSelectedLogDetail(log);
+                                                                    const matchedGroup = workflowKanbanGroups?.find(g =>
+                                                                        g.product?.id === log.entity_id || g.services.some(s => s.id === log.entity_id)
+                                                                    );
+                                                                    const stepSource = matchedGroup?.product || matchedGroup?.services?.[0];
+                                                                    setSelectedLogDetail({
+                                                                        ...log,
+                                                                        _sales_step_data: (stepSource as any)?.sales_step_data || null,
+                                                                    });
                                                                     setShowLogDetailDialog(true);
                                                                 }
                                                             }}
@@ -973,11 +997,15 @@ export function WorkflowTab({
                                                             )}
                                                             {log.photos && log.photos.length > 0 && (
                                                                 <div className="flex flex-wrap gap-1 mt-1 pt-1 border-t border-blue-100/50">
-                                                                    {log.photos.map((url: string, idx: number) => (
-                                                                        <a key={idx} href={url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>
-                                                                            <img src={url} alt={`Evidence ${idx}`} className="h-8 w-8 object-cover rounded shadow-sm border border-gray-200" />
-                                                                        </a>
-                                                                    ))}
+                                                                    <a
+                                                                        href={log.photos[0]}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        onClick={e => e.stopPropagation()}
+                                                                        className="text-[10px] font-semibold text-primary hover:underline"
+                                                                    >
+                                                                        {log.photos.length} media trên Drive →
+                                                                    </a>
                                                                 </div>
                                                             )}
                                                         </div>
@@ -987,11 +1015,15 @@ export function WorkflowTab({
                                                             <span>{log.notes}</span>
                                                             {log.photos && log.photos.length > 0 && (
                                                                 <div className="flex flex-wrap gap-1 mt-1 pt-1 border-t border-red-100">
-                                                                    {log.photos.map((url: string, idx: number) => (
-                                                                        <a key={idx} href={url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>
-                                                                            <img src={url} alt={`Evidence ${idx}`} className="h-8 w-8 object-cover rounded shadow-sm border border-red-200" />
-                                                                        </a>
-                                                                    ))}
+                                                                    <a
+                                                                        href={log.photos[0]}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        onClick={e => e.stopPropagation()}
+                                                                        className="text-[10px] font-semibold text-red-700 hover:underline"
+                                                                    >
+                                                                        {log.photos.length} media trên Drive →
+                                                                    </a>
                                                                 </div>
                                                             )}
                                                         </div>

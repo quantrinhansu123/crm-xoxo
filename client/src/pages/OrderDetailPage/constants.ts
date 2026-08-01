@@ -88,23 +88,37 @@ export function getAfterSaleStageLabel(value: string | null | undefined): string
     return AFTER_SALE_STAGE_LABELS[value] ?? value;
 }
 
-/** Bước after-sale của 1 dòng (ưu tiên phase_stage — khớp Kanban) */
+/** Bước after-sale của 1 dòng (ưu tiên after_sale_stage khi đang aftersale — tránh lệch phase_stage cũ) */
 export function getItemAfterSaleStage(item: {
+    current_phase?: string | null;
     phase_stage?: string | null;
     after_sale_stage?: string | null;
 } | null | undefined): string {
     if (!item) return 'after1';
-    return item.phase_stage || item.after_sale_stage || 'after1';
+    const afterStages = new Set(['after1', 'after1_debt', 'after2', 'after3', 'after4']);
+    const after = item.after_sale_stage || null;
+    const phase = item.phase_stage || null;
+    if (item.current_phase === 'after_sale' || (after && afterStages.has(after))) {
+        return after || (phase && afterStages.has(phase) ? phase : null) || 'after1';
+    }
+    if (phase && afterStages.has(phase)) return phase;
+    return phase || after || 'after1';
 }
 
 /** Bước after-sale của nhóm sản phẩm trên Kanban */
-/** Trường cấp đơn được phép PATCH khi lưu form after-sale (không gồm bước SP) */
+/**
+ * Trường cấp đơn được phép PATCH khi lưu form after-sale (không gồm bước SP).
+ * Các trường debt_checked/debt_checked_notes/debt_checked_by_name/aftersale_receiver_name/
+ * delivery_creator_name/delivery_shipper_phone/delivery_staff_name/delivery_received_at đã
+ * chuyển sang lưu độc lập theo từng sản phẩm (item-level) — không còn ở đây để tránh
+ * các sản phẩm khác trong cùng đơn bị dùng chung dữ liệu.
+ */
 export const ORDER_LEVEL_AFTERSALE_PATCH_KEYS = new Set([
+    'debt_payment_photos',
+    // Đồng bộ xác nhận kiểm nợ cấp đơn (server/legacy gate còn đọc order.debt_checked)
     'debt_checked',
     'debt_checked_notes',
     'debt_checked_by_name',
-    'debt_payment_photos',
-    'aftersale_receiver_name',
     'packaging_photos',
     'delivery_carrier',
     'delivery_address',
@@ -114,10 +128,6 @@ export const ORDER_LEVEL_AFTERSALE_PATCH_KEYS = new Set([
     'delivery_fee',
     'aftersale_return_user_name',
     'delivery_notes',
-    'delivery_creator_name',
-    'delivery_shipper_phone',
-    'delivery_staff_name',
-    'delivery_received_at',
     'hd_sent',
     'hd_sent_photos',
     'feedback_requested',
@@ -136,9 +146,23 @@ export function getGroupAfterSaleStage(group: {
     product?: { current_phase?: string | null; phase_stage?: string | null; after_sale_stage?: string | null } | null;
     services?: { current_phase?: string | null; phase_stage?: string | null; after_sale_stage?: string | null }[];
 }): string | null {
-    if (group.product?.current_phase === 'after_sale') {
-        return getItemAfterSaleStage(group.product);
+    const afterStages = new Set(['after1', 'after1_debt', 'after2', 'after3', 'after4']);
+
+    // Luôn lấy stage của đúng product head — không lấy stage service (tránh 1 SP kéo theo SP khác cùng HĐ)
+    if (group.product) {
+        const phase = group.product.current_phase;
+        if (phase === 'care' || phase === 'warranty') return null;
+
+        const after = group.product.after_sale_stage;
+        const pStage = group.product.phase_stage;
+        const inAfterSale =
+            phase === 'after_sale'
+            || (!!after && afterStages.has(after))
+            || (!!pStage && afterStages.has(pStage));
+
+        return inAfterSale ? getItemAfterSaleStage(group.product) : null;
     }
+
     const svc = (group.services || []).find((s) => s.current_phase === 'after_sale');
     return svc ? getItemAfterSaleStage(svc) : null;
 }

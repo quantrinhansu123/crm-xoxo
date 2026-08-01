@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { formatCurrency } from '@/lib/utils';
 import type { Order, OrderItem } from '@/hooks/useOrders';
+import { getProductItemNotes } from '@/pages/OrderDetailPage/utils';
 
 interface PrintQRDialogProps {
     order: Order | null;
@@ -15,6 +16,13 @@ interface PrintQRDialogProps {
 }
 
 type OrderItemWithCode = OrderItem & { item_code: string };
+
+const escapeHtml = (text: string): string =>
+    text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 
 const getItemTypeLabel = (type: string) => {
     switch (type) {
@@ -70,7 +78,15 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
 
+        const orderCreatedAt = order.created_at
+            ? new Date(order.created_at).toLocaleDateString('vi-VN')
+            : '';
+
         const qrCodes = itemsToPrint.map((item: OrderItem) => {
+            const noteText = getProductItemNotes(item);
+            const conditionBefore = ((item as any).product_condition_before || '').trim();
+            const technicianName = item.sales_step_data?.step3_technician_name || item.technician?.name || '';
+
             return `
                 <div class="qr-item">
                     <div class="qr-header">
@@ -78,16 +94,19 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                         <span class="item-type ${item.item_type}">${getItemTypeLabel(item.item_type)}</span>
                     </div>
                     <div class="qr-content">
-                        ${item.item_code ? `
-                            <div class="qr-code" id="qr-${item.id}"></div>
-                        ` : `
-                            <div class="no-qr">Chưa có mã QR</div>
-                        `}
-                        <div class="item-info">
+                        <div class="qr-block">
+                            ${item.item_code ? `
+                                <div class="qr-code" id="qr-${item.id}"></div>
+                            ` : `
+                                <div class="no-qr">Chưa có mã QR</div>
+                            `}
                             <p class="item-name">${item.item_name}</p>
-                            <p class="item-details">SL: ${item.quantity} × ${formatCurrency(item.unit_price)}</p>
-                            <p class="item-total">${formatCurrency(item.total_price)}</p>
-                            ${item.item_code ? `<p class="item-code">${item.item_code}</p>` : ''}
+                            <div class="qr-caption">
+                                ${orderCreatedAt ? `<p>Ngày/tháng: ${escapeHtml(orderCreatedAt)}</p>` : ''}
+                                ${conditionBefore ? `<p>Tình trạng ban đầu: ${escapeHtml(conditionBefore)}</p>` : ''}
+                                ${noteText ? `<p>Ghi chú: ${escapeHtml(noteText)}</p>` : ''}
+                                ${technicianName ? `<p>KTV làm DV: ${escapeHtml(technicianName)}</p>` : ''}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -166,12 +185,17 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                     .item-type.voucher { background: #fef3c7; color: #d97706; }
                     .qr-content {
                         display: flex;
+                        justify-content: center;
                         padding: 15px;
-                        gap: 15px;
+                    }
+                    .qr-block {
+                        display: flex;
+                        flex-direction: column;
                         align-items: center;
+                        text-align: center;
+                        width: 100%;
                     }
                     .qr-code {
-                        flex-shrink: 0;
                         padding: 8px;
                         background: #fff;
                         border: 1px solid #eee;
@@ -189,31 +213,21 @@ export function PrintQRDialog({ order, open, onClose }: PrintQRDialogProps) {
                         font-size: 12px;
                         text-align: center;
                     }
-                    .item-info { flex: 1; }
                     .item-name {
                         font-weight: 600;
                         font-size: 14px;
-                        margin-bottom: 5px;
+                        margin-top: 8px;
                     }
-                    .item-details {
-                        color: #666;
-                        font-size: 13px;
-                        margin-bottom: 3px;
+                    .qr-caption {
+                        margin-top: 6px;
+                        width: 100%;
+                        text-align: center;
                     }
-                    .item-total {
-                        font-weight: 700;
-                        font-size: 15px;
-                        color: #059669;
-                        margin-bottom: 5px;
-                    }
-                    .item-code {
-                        font-family: monospace;
-                        font-size: 11px;
-                        color: #888;
-                        background: #f0f0f0;
-                        padding: 3px 8px;
-                        border-radius: 4px;
-                        display: inline-block;
+                    .qr-caption p {
+                        font-size: 10px;
+                        line-height: 1.4;
+                        color: #444;
+                        word-break: break-word;
                     }
                     @media print {
                         body { background: #fff; padding: 10px; }

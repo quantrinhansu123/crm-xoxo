@@ -100,10 +100,16 @@ export function InvoiceDetailDialog({
 
     if (!invoice) return null;
 
-    const receipts = invoice.transactions?.filter(t => t.id.startsWith('p-') || t.code?.startsWith('PT')) || [];
+    const receipts = invoice.transactions?.filter(t =>
+        t.type === 'income' ||
+        String(t.id || '').startsWith('p-') ||
+        String(t.code || '').startsWith('PT')
+    ) || [];
     const paidFromReceipts = receipts.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
     const hasRelatedPayments = paidFromReceipts > 0 || invoice.status === 'paid';
-    const expenses = invoice.transactions?.filter(t => t.code?.startsWith('PC')) || [];
+    const expenses = invoice.transactions?.filter(t =>
+        t.type === 'expense' || String(t.code || '').startsWith('PC')
+    ) || [];
 
     const statusConfig: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'secondary' | 'info' }> = {
         draft: { label: 'Nháp', variant: 'secondary' },

@@ -258,8 +258,81 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [datePreset, setDatePreset] = useState<DateRangePreset>('all');
+    const [stats, setStats] = useState({
+        total: 0,
+        draft: 0,
+        pending: 0,
+        paid: 0,
+        cancelled: 0,
+        salesAmount: 0,
+        paidAmount: 0,
+    });
 
     const { canEdit, canDelete } = useViewActionForRoles('invoices', ['manager', 'admin', 'accountant', 'sale']);
+
+    const applyStatsFromRows = useCallback((rows: Invoice[]) => {
+        let draft = 0;
+        let pending = 0;
+        let paid = 0;
+        let cancelled = 0;
+        let salesAmount = 0;
+        let paidAmount = 0;
+
+        for (const inv of rows) {
+            const amount = Number(inv.total_amount || 0) || 0;
+            const status = String(inv.status || '');
+            if (status === 'draft') draft += 1;
+            else if (status === 'pending') pending += 1;
+            else if (status === 'paid') paid += 1;
+            else if (status === 'cancelled') cancelled += 1;
+
+            if (status !== 'cancelled') salesAmount += amount;
+            if (status === 'paid') paidAmount += amount;
+        }
+
+        setStats({
+            total: rows.length,
+            draft,
+            pending,
+            paid,
+            cancelled,
+            salesAmount,
+            paidAmount,
+        });
+    }, []);
+
+    const fetchInvoiceStats = useCallback(async () => {
+        const dateParams: { from_date?: string; to_date?: string } = {};
+        if (fromDate) dateParams.from_date = fromDate;
+        if (toDate) dateParams.to_date = toDate;
+
+        try {
+            const response = await invoicesApi.getStats(dateParams);
+            const data = response.data?.data;
+            if (data && typeof data.total === 'number') {
+                setStats({
+                    total: data.total || 0,
+                    draft: data.draft || 0,
+                    pending: data.pending || 0,
+                    paid: data.paid || 0,
+                    cancelled: data.cancelled || 0,
+                    salesAmount: Number(data.salesAmount || data.totalAmount || 0),
+                    paidAmount: Number(data.paidAmount || 0),
+                });
+                return;
+            }
+        } catch (err) {
+            console.warn('Invoice stats API unavailable, falling back to list aggregate', err);
+        }
+
+        // Fallback khi Render chưa có /invoices/stats (hoặc route bị /:id nuốt)
+        try {
+            const response = await invoicesApi.getAll({ ...dateParams, limit: 500 });
+            applyStatsFromRows(response.data.data?.invoices || []);
+        } catch (err) {
+            console.error('Failed to load invoice stats fallback', err);
+        }
+    }, [fromDate, toDate, applyStatsFromRows]);
 
     const fetchInvoices = useCallback(async () => {
         try {
@@ -268,7 +341,8 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             if (fromDate) params.from_date = fromDate;
             if (toDate) params.to_date = toDate;
             const response = await invoicesApi.getAll(params);
-            setInvoices(response.data.data?.invoices || []);
+            const list = response.data.data?.invoices || [];
+            setInvoices(list);
         } catch (err: any) {
             setError(err.response?.data?.message || 'Lỗi khi tải danh sách hóa đơn');
         }
@@ -369,11 +443,15 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
     useEffect(() => {
         const loadData = async () => {
             setLoading(true);
-            await Promise.all([fetchInvoices(), fetchOrders()]);
+            await Promise.all([fetchInvoices(), fetchOrders(), fetchInvoiceStats()]);
             setLoading(false);
         };
         loadData();
-    }, [fetchInvoices, fetchOrders]);
+    }, [fetchInvoices, fetchOrders, fetchInvoiceStats]);
+
+    const refreshInvoices = useCallback(async () => {
+        await Promise.all([fetchInvoices(), fetchInvoiceStats()]);
+    }, [fetchInvoices, fetchInvoiceStats]);
 
     const handleStatusChange = async (
         id: string,
@@ -393,7 +471,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             } else {
                 toast.success('Đã cập nhật trạng thái hóa đơn');
             }
-            fetchInvoices();
+            refreshInvoices();
             if (selectedInvoice?.id === id) {
                 const detail = await invoicesApi.getById(id);
                 if (detail.data.data?.invoice) setSelectedInvoice(detail.data.data.invoice);
@@ -416,7 +494,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
     const handlePaymentSuccess = async () => {
         if (selectedInvoice) {
             await handleStatusChange(selectedInvoice.id, 'paid');
-            fetchInvoices();
+            refreshInvoices();
         }
     };
 
@@ -425,7 +503,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
         if (!inv) return;
 
         const deleteMessage = inv.order_id
-            ? `Bạn có chắc muốn xóa hóa đơn "${inv.invoice_code}"? Thao tác này sẽ xóa luôn đơn hàng liên kết và toàn bộ dữ liệu liên quan. Hành động này không thể hoàn tác.`
+            ? `Bạn có chắc muốn xóa hóa đơn "${inv.invoice_code}"?\n\nSẽ xóa theo:\n• Đơn hàng liên kết\n• Phiếu thu & phiếu chi liên quan\n• Sản phẩm/dịch vụ, quy trình, hoa hồng\n\nHành động này không thể hoàn tác.`
             : `Bạn có chắc muốn xóa hóa đơn "${inv.invoice_code}"? Hành động này không thể hoàn tác.`;
 
         if (!window.confirm(deleteMessage)) {
@@ -439,7 +517,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                 setShowInvoiceDetail(false);
                 setSelectedInvoice(null);
             }
-            fetchInvoices();
+            refreshInvoices();
         } catch (err: any) {
             toast.error(err.response?.data?.message || 'Lỗi khi xóa hóa đơn');
         }
@@ -454,17 +532,6 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             inv.customer?.phone?.includes(query)
         );
     }, [invoices, searchQuery]);
-
-    const stats = useMemo(() => {
-        return {
-            total: invoices.length,
-            draft: invoices.filter(i => i.status === 'draft').length,
-            pending: invoices.filter(i => i.status === 'pending').length,
-            paid: invoices.filter(i => i.status === 'paid').length,
-            cancelled: invoices.filter(i => i.status === 'cancelled').length,
-            totalAmount: invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.total_amount, 0)
-        };
-    }, [invoices]);
 
     if (loading) {
         return (
@@ -524,12 +591,16 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                         </span>
                     </div>
                     <div className="mt-1.5 flex items-center justify-between border-t border-border/60 pt-1.5 text-[11px]">
+                        <span className="font-medium text-muted-foreground">Doanh số</span>
+                        <span className="font-bold text-primary">{formatCurrency(stats.salesAmount)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[11px]">
                         <span className="font-medium text-muted-foreground">Doanh thu</span>
-                        <span className="font-bold text-primary">{formatCurrency(stats.totalAmount)}</span>
+                        <span className="font-bold text-green-700">{formatCurrency(stats.paidAmount)}</span>
                     </div>
                 </div>
 
-                <div className="hidden grid-cols-2 gap-3 sm:grid-cols-4 lg:grid lg:grid-cols-5 sm:gap-4">
+                <div className="hidden grid-cols-2 gap-3 sm:grid-cols-3 lg:grid lg:grid-cols-6 sm:gap-4">
                     <Card className="bg-gradient-to-br from-blue-50 to-blue-100/50 border-blue-200">
                         <CardContent className="p-4 flex items-center justify-between">
                             <div>
@@ -568,8 +639,16 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                     </Card>
                     <Card className="bg-gradient-to-br from-primary/5 to-primary/15 border-primary/20">
                         <CardContent className="p-4">
-                                <p className="text-sm text-primary font-medium truncate">Doanh thu</p>
-                                <p className="text-lg font-bold text-primary truncate">{formatCurrency(stats.totalAmount)}</p>
+                            <p className="text-sm text-primary font-medium truncate">Doanh số</p>
+                            <p className="text-lg font-bold text-primary truncate">{formatCurrency(stats.salesAmount)}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">HĐ chưa hủy</p>
+                        </CardContent>
+                    </Card>
+                    <Card className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 border-emerald-200">
+                        <CardContent className="p-4">
+                            <p className="text-sm text-emerald-700 font-medium truncate">Doanh thu</p>
+                            <p className="text-lg font-bold text-emerald-800 truncate">{formatCurrency(stats.paidAmount)}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">Số tiền đã thu</p>
                         </CardContent>
                     </Card>
                 </div>
@@ -642,6 +721,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                                 <thead className="bg-muted/50">
                                     <tr className="border-b">
                                         <th className="p-4 text-left font-medium">Mã hóa đơn</th>
+                                        <th className="p-4 text-left font-medium">Ngày tạo</th>
                                         <th className="p-4 text-left font-medium">Khách hàng</th>
                                         <th className="p-4 text-left font-medium">Đơn hàng</th>
                                         <th className="p-4 text-right font-medium">Tổng tiền</th>
@@ -652,7 +732,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                                 <tbody>
                                     {filteredInvoices.length === 0 ? (
                                         <tr>
-                                            <td colSpan={6} className="p-8 text-center text-muted-foreground italic">
+                                            <td colSpan={7} className="p-8 text-center text-muted-foreground italic">
                                                 Không có hóa đơn nào
                                             </td>
                                         </tr>
@@ -660,6 +740,9 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                                         filteredInvoices.map((inv) => (
                                             <tr key={inv.id} className="border-b hover:bg-muted/30 transition-colors">
                                                 <td className="p-4 font-medium">{inv.invoice_code}</td>
+                                                <td className="p-4 text-muted-foreground whitespace-nowrap">
+                                                    {inv.created_at ? formatDate(inv.created_at) : '—'}
+                                                </td>
                                                 <td className="p-4">
                                                     <div>
                                                         <p className="font-medium">{inv.customer?.name}</p>
@@ -721,7 +804,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
             <CreateInvoiceDialog
                 open={showCreateDialog}
                 onClose={() => setShowCreateDialog(false)}
-                onSuccess={fetchInvoices}
+                onSuccess={refreshInvoices}
                 orders={orders}
             />
 

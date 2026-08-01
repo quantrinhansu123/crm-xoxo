@@ -39,11 +39,23 @@ export function useOrderActions(
             if (isCustomerItem) {
                 await orderProductsApi.updateAfterSaleData(itemId, data);
             } else {
-                await orderItemsApi.updateAfterSaleData(itemId, data);
+                try {
+                    await orderItemsApi.updateAfterSaleData(itemId, data);
+                } catch (err: any) {
+                    // V2 product head đôi khi bị gọi nhầm qua order-items → fallback order_products
+                    const status = err?.response?.status;
+                    if (status === 404 || status === 500) {
+                        await orderProductsApi.updateAfterSaleData(itemId, data);
+                    } else {
+                        throw err;
+                    }
+                }
             }
             await reloadOrder();
-        } catch (error) {
-            toast.error('Lỗi khi cập nhật thông tin After-sale sản phẩm');
+        } catch (error: any) {
+            const msg = error?.response?.data?.message || error?.message || 'Lỗi khi cập nhật thông tin After-sale sản phẩm';
+            toast.error(msg);
+            throw error;
         }
     }, [reloadOrder]);
 

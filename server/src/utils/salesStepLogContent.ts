@@ -1,3 +1,10 @@
+import {
+    buildLightweightHistoryNote,
+    normalizeMediaRefs,
+    sanitizeHistoryNotes,
+    summarizeMediaUpload,
+} from './historyLog.js';
+
 export interface SalesStepLogContent {
     reason: string;
     notes: string;
@@ -5,12 +12,13 @@ export interface SalesStepLogContent {
 }
 
 function asPhotoArray(val: unknown): string[] {
-    if (Array.isArray(val)) {
-        return val.filter((u): u is string => typeof u === 'string' && u.length > 0);
-    }
-    return [];
+    return normalizeMediaRefs(val);
 }
 
+/**
+ * Snapshot nhẹ khi rời bước Sale: ghi chú ngắn + link Drive refs.
+ * Form đầy đủ vẫn nằm trên entity (sales_step_data), không dump vào history.
+ */
 export function extractSalesStepLogContent(
     fromStatus: string | null | undefined,
     salesStepData: Record<string, unknown> | null | undefined
@@ -22,43 +30,62 @@ export function extractSalesStepLogContent(
 
     switch (fromStatus) {
         case 'step1': {
-            const receiver = typeof data.step1_receiver_name === 'string' ? data.step1_receiver_name : '';
-            const notes = typeof data.step1_notes === 'string' ? data.step1_notes : '';
             const photos = asPhotoArray(data.step1_evidence_photos);
-            const extras: string[] = [];
-            const shippingFee = Number(data.step1_shipping_fee) || 0;
-            if (shippingFee > 0) {
-                extras.push(`Phí ship: ${shippingFee.toLocaleString('vi-VN')}đ`);
-            }
-            if (data.step1_accessories_checked) {
-                extras.push('Đã xác nhận phụ kiện đi kèm');
-            }
+            const receiver = typeof data.step1_receiver_name === 'string' ? data.step1_receiver_name.trim() : '';
+            const userNote = sanitizeHistoryNotes(
+                typeof data.step1_notes === 'string' ? data.step1_notes : ''
+            );
             return {
-                reason: receiver ? `NV Sale nhận: ${receiver}` : '',
-                notes: [notes, ...extras].filter(Boolean).join('\n'),
+                reason: 'Hoàn thành bước Nhận đồ & Chụp ảnh',
+                notes: buildLightweightHistoryNote([
+                    summarizeMediaUpload(photos, 'nhận đồ'),
+                    receiver ? `NV nhận: ${receiver}` : '',
+                    userNote,
+                ]),
                 photos,
             };
         }
-        case 'step2':
+        case 'step2': {
+            const tags = asPhotoArray(data.step2_tags_photos);
+            const form = asPhotoArray(data.step2_form_photos);
+            const photos = [...tags, ...form];
+            const parts: string[] = [];
+            if (tags.length) parts.push(summarizeMediaUpload(tags, 'tags'));
+            if (form.length) parts.push(summarizeMediaUpload(form, 'form túi/shoestree', 'thêm'));
             return {
-                reason: 'Gắn Tags & Form túi/Shoestree',
-                notes: '',
-                photos: [
-                    ...asPhotoArray(data.step2_tags_photos),
-                    ...asPhotoArray(data.step2_form_photos),
-                ],
+                reason: 'Hoàn thành bước Gắn Tags & Form',
+                notes: buildLightweightHistoryNote(parts),
+                photos,
             };
+        }
         case 'step3': {
-            const tech = typeof data.step3_technician_name === 'string' ? data.step3_technician_name : '';
-            const parts = [
-                typeof data.step3_work_details === 'string' ? data.step3_work_details : '',
-                typeof data.step3_work_location === 'string' ? `Vị trí: ${data.step3_work_location}` : '',
-                typeof data.step3_notes === 'string' ? data.step3_notes : '',
-            ].filter(Boolean);
+            const photos = asPhotoArray(data.step3_photos);
+            const tech = typeof data.step3_technician_name === 'string' ? data.step3_technician_name.trim() : '';
+            const userNote = sanitizeHistoryNotes(
+                typeof data.step3_notes === 'string' ? data.step3_notes : ''
+            );
             return {
-                reason: tech ? `Trao đổi KT: ${tech}` : 'Trao đổi KT',
-                notes: parts.join('\n'),
-                photos: asPhotoArray(data.step3_photos),
+                reason: 'Hoàn thành bước Trao đổi kỹ thuật',
+                notes: buildLightweightHistoryNote([
+                    tech ? `KT: ${tech}` : '',
+                    summarizeMediaUpload(photos, 'QC / trao đổi KT', 'thêm'),
+                    userNote,
+                ]),
+                photos,
+            };
+        }
+        case 'step4': {
+            const photos = asPhotoArray(data.step4_photos);
+            const userNote = sanitizeHistoryNotes(
+                typeof data.step4_notes === 'string' ? data.step4_notes : ''
+            );
+            return {
+                reason: 'Hoàn thành bước Chốt gói / Chờ duyệt',
+                notes: buildLightweightHistoryNote([
+                    summarizeMediaUpload(photos, 'chốt gói', 'thêm'),
+                    userNote,
+                ]),
+                photos,
             };
         }
         default:

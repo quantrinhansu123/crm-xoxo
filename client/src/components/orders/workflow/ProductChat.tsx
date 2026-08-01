@@ -82,16 +82,34 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
-    const scrollRef = useRef<HTMLDivElement>(null);
+    const messagesContainerRef = useRef<HTMLDivElement>(null);
     const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+    const lastScrolledMsgKeyRef = useRef<string>('');
+    const hasHydratedMessagesRef = useRef(false);
     const [highlightedId, setHighlightedId] = useState<string | undefined>(undefined);
+
+    const scrollChatToBottom = useCallback(() => {
+        const container = messagesContainerRef.current;
+        if (!container) return;
+        // Only scroll the chat pane — never scrollIntoView (that jumps the parent dialog/page).
+        container.scrollTop = container.scrollHeight;
+    }, []);
 
     const fetchMessages = async (showLoading = false) => {
         if (showLoading) setLoading(true);
         try {
             const response = await productChatsApi.getMessages(entityId, chatRoomId);
             if (response.data?.data) {
-                setMessages(response.data.data);
+                const next = response.data.data as Message[];
+                setMessages((prev) => {
+                    if (
+                        prev.length === next.length &&
+                        prev.every((m, i) => m.id === next[i]?.id)
+                    ) {
+                        return prev;
+                    }
+                    return next;
+                });
             }
         } catch (error) {
             console.error('Error fetching messages:', error);
@@ -187,24 +205,32 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
     }, [entityId, chatRoomId]);
 
     useEffect(() => {
-        if (scrollRef.current) {
-            const viewport = scrollRef.current.closest('[data-radix-scroll-area-viewport]');
-            if (viewport) {
-                viewport.scrollTop = viewport.scrollHeight;
-            } else {
-                scrollRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
+        if (!messages.length) {
+            lastScrolledMsgKeyRef.current = '';
+            hasHydratedMessagesRef.current = false;
+            return;
         }
-    }, [messages]);
+        const key = `${messages.length}:${messages[messages.length - 1]?.id ?? ''}`;
+        if (key === lastScrolledMsgKeyRef.current) return;
+        const isInitialLoad = !hasHydratedMessagesRef.current;
+        lastScrolledMsgKeyRef.current = key;
+        hasHydratedMessagesRef.current = true;
+        // Không auto-scroll lần đầu — tránh kéo dialog/form xuống mục chat khi vừa mở
+        if (isInitialLoad) return;
+        scrollChatToBottom();
+    }, [messages, scrollChatToBottom]);
 
     // Scroll to and flash highlight the target message from notification
     useEffect(() => {
         if (!highlightMessageId || !messages.length) return;
         const el = messageRefs.current[highlightMessageId];
-        if (el) {
+        const container = messagesContainerRef.current;
+        if (el && container) {
             // Small delay so the dialog finishes opening
             setTimeout(() => {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const top =
+                    el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+                container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
                 setHighlightedId(highlightMessageId);
                 // Remove highlight after animation (2 flashes × ~600ms each)
                 setTimeout(() => setHighlightedId(undefined), 1400);
@@ -386,7 +412,7 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
                 50% { background-color: rgba(250, 204, 21, 0.35); }
             }
         `}</style>
-            <div className="flex flex-col flex-1 border rounded-lg bg-gray-50/50 min-h-0">
+            <div className="flex flex-col flex-1 border rounded-lg bg-gray-50/50 min-h-0" style={{ overflowAnchor: 'none' }}>
                 <div className="p-3 border-b bg-white rounded-t-lg">
                     <h4 className="text-sm font-semibold flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
@@ -394,7 +420,10 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
                     </h4>
                 </div>
 
-                <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-4">
+                <div
+                    ref={messagesContainerRef}
+                    className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-4"
+                >
                     <div className="space-y-4">
                         {messages.length === 0 ? (
                             <div className="text-center py-8 text-muted-foreground text-sm italic">
@@ -443,7 +472,6 @@ export function ProductChat({ orderId, entityId, entityType, roomId, currentUser
                                 );
                             })
                         )}
-                        <div ref={scrollRef} />
                     </div>
                 </div>
 

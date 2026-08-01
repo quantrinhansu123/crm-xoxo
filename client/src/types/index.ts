@@ -76,7 +76,7 @@ export interface LeadHistoryItem {
     createdBy: User;
 }
 
-export type OrderStatus = 'before_sale' | 'in_progress' | 'done' | 'after_sale' | 'cancelled';
+export type OrderStatus = 'before_sale' | 'in_progress' | 'done' | 'after_sale' | 'archived' | 'cancelled';
 
 export interface Order {
     id: string;

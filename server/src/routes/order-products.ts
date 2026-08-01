@@ -15,13 +15,19 @@ import {
     AFTER_SALE_STAGE_ORDER,
     CARE_STAGE_ORDER,
     WARRANTY_STAGE_ORDER,
-    assertDebtCheckCompleteForStageMove,
     assertForwardStageMove,
+    resolveAfterSaleOldStage,
 } from '../utils/kanbanStageValidation.js';
 import {
     clonePendingWorkflowStepsForService,
     isServiceActivelyInWorkflow,
 } from '../utils/warrantyReentryHelper.js';
+import {
+    buildLightweightHistoryNote,
+    normalizeMediaRefs,
+    sanitizeHistoryNotes,
+    summarizeMediaUpload,
+} from '../utils/historyLog.js';
 
 const router = Router();
 
@@ -95,22 +101,27 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
 router.patch('/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { id } = req.params;
-        const { images } = req.body;
+        const { images, notes } = req.body;
 
-        if (images === undefined) {
+        if (images === undefined && notes === undefined) {
             throw new ApiError('Không có dữ liệu cập nhật', 400);
         }
 
-        const imageList = Array.isArray(images) ? images.filter((u: unknown) => typeof u === 'string' && u) : [];
+        const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+        if (images !== undefined) {
+            updatePayload.images = Array.isArray(images) ? images.filter((u: unknown) => typeof u === 'string' && u) : [];
+        }
+
+        if (notes !== undefined) {
+            updatePayload.notes = typeof notes === 'string' ? notes.trim() || null : null;
+        }
 
         const { data: product, error } = await supabaseAdmin
             .from('order_products')
-            .update({
-                images: imageList,
-                updated_at: new Date().toISOString(),
-            })
+            .update(updatePayload)
             .eq('id', id)
-            .select('id, name, product_code, images, order_id')
+            .select('id, name, product_code, images, notes, order_id')
             .single();
 
         if (error || !product) {
@@ -175,6 +186,7 @@ router.patch('/:id/status', authenticate, async (req: AuthenticatedRequest, res,
             updateData.delivered_at = new Date().toISOString();
             updateData.current_phase = 'after_sale';
             updateData.phase_stage = 'after1';
+            updateData.after_sale_stage = 'after1';
         }
 
         const { data: product, error } = await supabaseAdmin
@@ -310,6 +322,41 @@ router.patch('/:id/reset-services', authenticate, async (req: AuthenticatedReque
 // =====================================================
 // ORDER PRODUCT SERVICES ROUTES
 // =====================================================
+
+// Update a service's sale note (separate from the technician completion `notes` field)
+router.patch('/services/:serviceId/notes', authenticate, async (req: AuthenticatedRequest, res, next) => {
+    try {
+        const { serviceId } = req.params;
+        const { notes } = req.body;
+
+        const { data: service, error } = await supabaseAdmin
+            .from('order_product_services')
+            .update({
+                // Không set updated_at — bảng này không có cột đó
+                sale_note: typeof notes === 'string' ? notes.trim() || null : null,
+            })
+            .eq('id', serviceId)
+            .select('id, item_name, sale_note, order_product_id')
+            .single();
+
+        if (error || !service) {
+            console.error('[order-products] update service sale_note failed:', serviceId, error);
+            throw new ApiError(
+                error?.message
+                    ? `Không thể lưu ghi chú dịch vụ: ${error.message}`
+                    : 'Không tìm thấy dịch vụ hoặc lỗi cập nhật',
+                404,
+            );
+        }
+
+        res.json({
+            status: 'success',
+            data: service,
+        });
+    } catch (error) {
+        next(error);
+    }
+});
 
 // Assign technician(s) to a service
 router.patch('/services/:serviceId/assign', authenticate, async (req: AuthenticatedRequest, res, next) => {
@@ -513,14 +560,16 @@ router.patch('/services/:serviceId/complete', authenticate, async (req: Authenti
             .update({
                 status: 'completed',
                 completed_at: new Date().toISOString(),
-                notes: notes || null
+                notes: notes || null,
+                current_phase: 'after_sale',
+                phase_stage: 'after1',
             })
             .eq('id', serviceId)
             .select()
             .single();
 
         if (error) {
-            throw new ApiError('Không thể hoàn thành dịch vụ', 500);
+            throw new ApiError('Không thể hoàn thành dịch vụ: ' + error.message, 500);
         }
 
         const context = await getServiceNotificationContext(serviceId);
@@ -551,17 +600,19 @@ router.patch('/services/:serviceId/complete', authenticate, async (req: Authenti
 
         const allCompleted = allServices?.every(s => s.status === 'completed' || s.status === 'cancelled');
 
-        // If all services completed, update product status and check parent order
+        // If all services completed, update product status + after-sale
         if (allCompleted) {
             await supabaseAdmin
                 .from('order_products')
                 .update({
                     status: 'completed',
-                    completed_at: new Date().toISOString()
+                    completed_at: new Date().toISOString(),
+                    current_phase: 'after_sale',
+                    phase_stage: 'after1',
+                    after_sale_stage: 'after1',
                 })
                 .eq('id', service.order_product_id);
 
-            // Check if parent order can be completed
             const { data: op } = await supabaseAdmin
                 .from('order_products')
                 .select('order_id')
@@ -749,10 +800,14 @@ router.post('/:id/recalculate-status', authenticate, async (req: AuthenticatedRe
 router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { id } = req.params;
-        const { 
-            completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, 
+        const {
+            completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type,
             stage, due_at, sales_step_data,
-            care_warranty_flow, care_warranty_stage
+            care_warranty_flow, care_warranty_stage,
+            move_notes, move_photos, allow_step_back,
+            // Mỗi sản phẩm trong đơn phải điền độc lập — không dùng chung dữ liệu cấp đơn
+            aftersale_receiver_name, debt_checked, debt_checked_notes, debt_checked_by_name,
+            delivery_creator_name, delivery_shipper_phone, delivery_staff_name, delivery_received_at,
         } = req.body;
         const userId = req.user?.id;
 
@@ -767,10 +822,37 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
         if (sales_step_data !== undefined) updatePayload.sales_step_data = sales_step_data;
         if (care_warranty_flow !== undefined) updatePayload.care_warranty_flow = care_warranty_flow;
         if (care_warranty_stage !== undefined) updatePayload.care_warranty_stage = care_warranty_stage;
+        if (aftersale_receiver_name !== undefined) updatePayload.aftersale_receiver_name = aftersale_receiver_name;
+        if (debt_checked !== undefined) updatePayload.debt_checked = !!debt_checked;
+        if (debt_checked_notes !== undefined) updatePayload.debt_checked_notes = debt_checked_notes;
+        if (debt_checked_by_name !== undefined) updatePayload.debt_checked_by_name = debt_checked_by_name;
+        if (delivery_creator_name !== undefined) updatePayload.delivery_creator_name = delivery_creator_name;
+        if (delivery_shipper_phone !== undefined) updatePayload.delivery_shipper_phone = delivery_shipper_phone;
+        if (delivery_staff_name !== undefined) updatePayload.delivery_staff_name = delivery_staff_name;
+        if (delivery_received_at !== undefined) updatePayload.delivery_received_at = delivery_received_at || null;
 
-        const { data: currentItem } = await supabaseAdmin.from('order_products').select('after_sale_stage, order_id, current_phase, care_warranty_flow, care_warranty_stage').eq('id', id).single();
+        const { data: currentItem } = await supabaseAdmin.from('order_products').select('after_sale_stage, phase_stage, order_id, current_phase, care_warranty_flow, care_warranty_stage, completion_photos').eq('id', id).single();
         const oldCareFlow = currentItem?.care_warranty_flow ?? null;
         const oldCareStage = currentItem?.care_warranty_stage ?? null;
+
+        // Vào lại từ đầu 1 chu kỳ Bảo hành/Chăm sóc: gom ghi chú + ảnh cũ vào lịch sử, xoá trắng để điền lại
+        const CARE_WARRANTY_ENTRY_STAGES: string[] = [WARRANTY_STAGE_ORDER[0], CARE_STAGE_ORDER[0]];
+        let archivedReentryNotes: string | null = null;
+        let archivedReentryPhotos: string[] = [];
+        const isReenteringCareWarranty = care_warranty_stage !== undefined
+            && CARE_WARRANTY_ENTRY_STAGES.includes(care_warranty_stage)
+            && care_warranty_stage !== oldCareStage;
+        if (isReenteringCareWarranty && currentItem?.order_id) {
+            const oldPhotos: string[] = Array.isArray(currentItem.completion_photos) ? currentItem.completion_photos : [];
+            const { data: orderRow } = await supabaseAdmin.from('orders').select('notes').eq('id', currentItem.order_id).single();
+            const oldOrderNotes: string = orderRow?.notes || '';
+            if (oldOrderNotes || oldPhotos.length > 0) {
+                archivedReentryNotes = oldOrderNotes || null;
+                archivedReentryPhotos = oldPhotos;
+                updatePayload.completion_photos = [];
+                await supabaseAdmin.from('orders').update({ notes: '' }).eq('id', currentItem.order_id);
+            }
+        }
 
         if (care_warranty_flow !== undefined) {
             if (care_warranty_flow === 'warranty') {
@@ -791,17 +873,24 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             updatePayload.current_phase = 'after_sale';
             updatePayload.phase_stage = stage;
         }
-        const oldStage = currentItem?.after_sale_stage || 'after1';
+        const oldStage = resolveAfterSaleOldStage(currentItem);
 
         if (stage !== undefined && stage !== oldStage) {
-            assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
-            if (oldStage === 'after1_debt' && stage === 'after2' && currentItem?.order_id) {
-                const { data: orderRow } = await supabaseAdmin
-                    .from('orders')
-                    .select('debt_checked, debt_checked_by_name')
-                    .eq('id', currentItem.order_id)
-                    .single();
-                assertDebtCheckCompleteForStageMove(oldStage, stage, orderRow);
+            const oldIdx = AFTER_SALE_STAGE_ORDER.indexOf(oldStage as any);
+            const newIdx = AFTER_SALE_STAGE_ORDER.indexOf(stage as any);
+            const isSingleStepBack = allow_step_back && oldIdx >= 0 && newIdx >= 0 && oldIdx - newIdx === 1;
+            // phase_stage / after_sale_stage đôi khi lệch còn after1 trong khi UI đã ở Kiểm nợ —
+            // cho phép after1 → after2 khi xác nhận kiểm nợ (debt_checked).
+            const isDebtCheckAdvance =
+                stage === 'after2'
+                && (oldStage === 'after1' || oldStage === 'after1_debt')
+                && debt_checked === true;
+            // Hoàn thành kỹ thuật / chu kỳ bảo hành: luôn được vào lại after1 dù after_sale_stage cũ là after4
+            const isEnterAfterSaleFromWorkflow =
+                stage === 'after1'
+                && currentItem?.current_phase !== 'after_sale';
+            if (!isSingleStepBack && !isDebtCheckAdvance && !isEnterAfterSaleFromWorkflow) {
+                assertForwardStageMove(AFTER_SALE_STAGE_ORDER, oldStage, stage);
             }
         }
 
@@ -828,15 +917,34 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
         }
 
         // Đồng bộ bước xuống dịch vụ của đúng sản phẩm này (không đụng SP khác trên đơn)
-        if (stage !== undefined && care_warranty_flow === undefined && product?.id) {
-            await supabaseAdmin
-                .from('order_product_services')
-                .update({
-                    current_phase: 'after_sale',
-                    phase_stage: stage,
-                    after_sale_stage: stage,
-                })
-                .eq('order_product_id', id);
+        if (product?.id && (stage !== undefined || care_warranty_flow !== undefined || care_warranty_stage !== undefined)) {
+            const svcUpdate: Record<string, unknown> = {};
+            if (care_warranty_flow === 'care' || care_warranty_flow === 'warranty') {
+                svcUpdate.current_phase = care_warranty_flow;
+                svcUpdate.phase_stage = care_warranty_stage || (care_warranty_flow === 'care' ? 'care6' : 'war1');
+                if (stage !== undefined) svcUpdate.after_sale_stage = stage;
+            } else if (care_warranty_stage !== undefined && (oldCareFlow === 'care' || oldCareFlow === 'warranty' || product.current_phase === 'care' || product.current_phase === 'warranty')) {
+                svcUpdate.current_phase = product.current_phase || oldCareFlow;
+                svcUpdate.phase_stage = care_warranty_stage;
+            } else if (stage !== undefined && care_warranty_flow === undefined) {
+                svcUpdate.current_phase = 'after_sale';
+                svcUpdate.phase_stage = stage;
+                svcUpdate.after_sale_stage = stage;
+            }
+            if (Object.keys(svcUpdate).length > 0) {
+                const { error: svcErr } = await supabaseAdmin
+                    .from('order_product_services')
+                    .update(svcUpdate)
+                    .eq('order_product_id', id);
+                if (svcErr) {
+                    // Retry without optional columns some DBs may lack
+                    const { after_sale_stage: _drop, ...rest } = svcUpdate as any;
+                    await supabaseAdmin
+                        .from('order_product_services')
+                        .update(Object.keys(rest).length ? rest : svcUpdate)
+                        .eq('order_product_id', id);
+                }
+            }
         }
 
         // 🔔 WH1: Fire webhook — Lưu thông tin nhận đồ (khi sales_step_data được cập nhật)
@@ -851,14 +959,36 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
 
         // Record log if stage changed
         if (stage !== undefined && oldStage !== stage) {
-            await supabaseAdmin.from('order_after_sale_stage_log').insert({
-                order_id: product.order_id,
-                entity_type: 'order_product',
-                entity_id: id,
-                from_stage: oldStage,
-                to_stage: stage,
-                created_by: userId
-            });
+            const stagePhotos = normalizeMediaRefs(move_photos);
+            const stageNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(move_notes),
+                summarizeMediaUpload(stagePhotos, 'after-sale'),
+            ]) || null;
+            try {
+                await supabaseAdmin.from('order_after_sale_stage_log').insert({
+                    order_id: product.order_id,
+                    entity_type: 'order_product',
+                    entity_id: id,
+                    from_stage: oldStage,
+                    to_stage: stage,
+                    created_by: userId,
+                    notes: stageNotes,
+                    photos: stagePhotos.length ? stagePhotos : null,
+                });
+            } catch (logErr) {
+                try {
+                    await supabaseAdmin.from('order_after_sale_stage_log').insert({
+                        order_id: product.order_id,
+                        entity_type: 'order_product',
+                        entity_id: id,
+                        from_stage: oldStage,
+                        to_stage: stage,
+                        created_by: userId,
+                    });
+                } catch (fallbackErr) {
+                    console.error('order_after_sale_stage_log insert error (order_product):', logErr, fallbackErr);
+                }
+            }
         }
 
         const newCareFlow = care_warranty_flow !== undefined ? (care_warranty_flow || null) : oldCareFlow;
@@ -870,6 +1000,13 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
             const flowType = newCareFlow === 'warranty' || ['war1', 'war2', 'war3'].includes(newCareStage)
                 ? 'warranty'
                 : 'care';
+            const careLogPhotos = normalizeMediaRefs(
+                archivedReentryPhotos.length ? archivedReentryPhotos : move_photos
+            );
+            const careLogNotes = buildLightweightHistoryNote([
+                sanitizeHistoryNotes(archivedReentryNotes ?? move_notes),
+                summarizeMediaUpload(careLogPhotos, flowType === 'warranty' ? 'bảo hành' : 'chăm sóc'),
+            ]) || null;
             try {
                 const careRow: Record<string, unknown> = {
                     order_id: product.order_id,
@@ -879,6 +1016,8 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                     to_stage: newCareStage,
                     flow_type: flowType,
                     created_by: userId ?? null,
+                    notes: careLogNotes,
+                    photos: careLogPhotos.length ? careLogPhotos : null,
                 };
                 await supabaseAdmin.from('order_care_warranty_log').insert(careRow);
             } catch (logErr) {
@@ -889,6 +1028,8 @@ router.patch('/:id/after-sale-data', authenticate, async (req: AuthenticatedRequ
                         to_stage: newCareStage,
                         flow_type: flowType,
                         created_by: userId ?? null,
+                        notes: careLogNotes,
+                        photos: careLogPhotos.length ? careLogPhotos : null,
                     });
                 } catch (fallbackErr) {
                     console.error('order_care_warranty_log insert error (order_product):', logErr, fallbackErr);

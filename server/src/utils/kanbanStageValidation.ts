@@ -11,6 +11,22 @@ export const AFTER_SALE_STAGE_ORDER = [
 export const WARRANTY_STAGE_ORDER = ['war1', 'war2', 'war3'] as const;
 export const CARE_STAGE_ORDER = ['care6', 'care12', 'care-custom'] as const;
 
+/** Ưu tiên stage aftersale hợp lệ đã đi xa nhất (tránh phase_stage / after_sale_stage lệch). */
+export function resolveAfterSaleOldStage(item: {
+    after_sale_stage?: string | null;
+    phase_stage?: string | null;
+} | null | undefined): string {
+    if (!item) return 'after1';
+    const order = AFTER_SALE_STAGE_ORDER as readonly string[];
+    const candidates = [item.after_sale_stage, item.phase_stage].filter(
+        (s): s is string => !!s && order.includes(s),
+    );
+    if (candidates.length === 0) {
+        return item.after_sale_stage || item.phase_stage || 'after1';
+    }
+    return candidates.reduce((best, s) => (order.indexOf(s) > order.indexOf(best) ? s : best));
+}
+
 export function assertForwardStageMove(
     columnOrder: readonly string[],
     oldStage: string | null | undefined,
@@ -23,24 +39,10 @@ export function assertForwardStageMove(
     if (oldIdx < 0 || newIdx < 0) return;
 
     if (newIdx < oldIdx) {
-        throw new ApiError('Không được quay ngược quy trình', 400);
+        throw new ApiError(`Không được quay ngược quy trình (${oldStage} → ${newStage})`, 400);
     }
     if (newIdx - oldIdx > 1) {
-        throw new ApiError('Chỉ được chuyển sang bước liền kề, không được nhảy cóc', 400);
+        throw new ApiError(`Chỉ được chuyển sang bước liền kề, không được nhảy cóc (${oldStage} → ${newStage})`, 400);
     }
 }
 
-/** Kiểm nợ → Đóng gói: bắt buộc đã tick xác nhận kiểm nợ trên đơn */
-export function assertDebtCheckCompleteForStageMove(
-    oldStage: string,
-    newStage: string,
-    order: { debt_checked?: boolean; debt_checked_by_name?: string | null } | null | undefined,
-): void {
-    if (oldStage !== 'after1_debt' || newStage !== 'after2') return;
-    if (!order?.debt_checked || !order.debt_checked_by_name?.trim()) {
-        throw new ApiError(
-            'Vui lòng tick "Xác nhận đã kiểm nợ" và chọn Người thu tiền trước khi chuyển bước',
-            400,
-        );
-    }
-}

@@ -56,6 +56,12 @@ export const VIEW_DEFINITIONS: ViewDefinition[] = [
     { id: 'kpi', label: 'KPI', group: 'Nhân sự', pathPrefixes: ['kpi'] },
     { id: 'commissions', label: 'Bảng hoa hồng', group: 'Nhân sự', pathPrefixes: ['commissions'] },
     { id: 'salary-advances', label: 'Ứng lương', group: 'Nhân sự', pathPrefixes: ['salary-advances'] },
+    {
+        id: 'salary-advances/approval',
+        label: 'Xem trạng thái duyệt Ứng lương',
+        group: 'Nhân sự',
+        pathPrefixes: [],
+    },
     { id: 'violations', label: 'Vi phạm / Thưởng', group: 'Nhân sự', pathPrefixes: ['violations'] },
     { id: 'salary', label: 'Bảng lương', group: 'Nhân sự', pathPrefixes: ['salary'] },
     { id: 'training', label: 'Đào tạo', group: 'Nhân sự', pathPrefixes: ['training'] },

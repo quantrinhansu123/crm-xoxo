@@ -6,6 +6,7 @@ import { notifyCrmMaster } from '../utils/webhookNotifier.js';
 import { syncInvoiceWithOrder } from '../utils/billingHelper.js';
 import { checkAndCompleteOrder } from '../utils/orderHelper.js';
 import {
+    createOrderIncomeTransaction,
     distributeOrphanDepositToProducts,
     insertPaymentRecord,
     reconcileOrderDeposits,
@@ -506,33 +507,16 @@ router.post('/:id/collect-payment', authenticate, requireSale, async (req: Authe
             await checkAndCompleteOrder(order.id);
             syncInvoiceWithOrder(order.id, payment_method).catch(() => undefined);
 
-            const { data: lastTrans } = await supabaseAdmin
-                .from('transactions')
-                .select('code')
-                .like('code', 'PT%')
-                .order('created_at', { ascending: false })
-                .limit(1);
-
-            let transCode = 'PT000001';
-            if (lastTrans?.length) {
-                const lastNum = parseInt(lastTrans[0].code.replace('PT', ''), 10);
-                transCode = `PT${String(lastNum + 1).padStart(6, '0')}`;
-            }
-
-            await supabaseAdmin.from('transactions').insert({
-                code: transCode,
-                type: 'income',
-                category: 'Thanh toán đơn hàng',
+            await createOrderIncomeTransaction({
+                orderId: order.id,
+                orderCode: order.order_code,
                 amount: payAmount,
-                payment_method: payment_method || 'cash',
+                paymentMethod: payment_method || 'cash',
                 notes: `${payContent} - ${order.order_code}`,
-                date: new Date().toISOString().split('T')[0],
-                order_id: order.id,
-                order_code: order.order_code,
-                status: 'approved',
-                created_by: req.user!.id,
-                approved_by: req.user!.id,
-                approved_at: new Date().toISOString(),
+                createdBy: req.user!.id,
+                createdByName: req.user!.name,
+                category: paymentKind === 'deposit' ? 'Tiền cọc' : 'Thanh toán đơn hàng',
+                orderProductId: alloc.order_product_id || null,
             });
 
             results.push({ order_id: order.id, order_code: order.order_code, amount: payAmount, payment });
@@ -593,11 +577,14 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
 // Create customer
 router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, res, next) => {
     try {
-        const { name, phone, email, type, company, tax_code, address, source, notes, assigned_to, dob, zalo_user_id, customer_zalo_user_id } = req.body;
+        const { name, phone, email, type, company, tax_code, address, source, notes, assigned_to, dob, zalo_user_id, customer_zalo_user_id, zalo_phone, customer_zalo_phone } = req.body;
 
         if (!name || !phone) {
             throw new ApiError('Tên và số điện thoại là bắt buộc', 400);
         }
+
+        const resolvedZaloPhone = zalo_phone || customer_zalo_phone || null;
+        const resolvedZaloUserId = zalo_user_id || customer_zalo_user_id || null;
 
         const { data: customer, error } = await supabaseAdmin
             .from('customers')
@@ -615,8 +602,10 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
                 assigned_to: assigned_to || req.user!.id,
                 created_by: req.user!.id,
                 dob: dob || null,
-                zalo_user_id: zalo_user_id || customer_zalo_user_id || null,
-                customer_zalo_user_id: customer_zalo_user_id || zalo_user_id || null,
+                zalo_phone: resolvedZaloPhone,
+                customer_zalo_phone: resolvedZaloPhone,
+                zalo_user_id: resolvedZaloUserId,
+                customer_zalo_user_id: resolvedZaloUserId,
             })
             .select()
             .single();
@@ -640,7 +629,18 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
 router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
     try {
         const { id } = req.params;
-        const updateFields = req.body;
+        const updateFields = { ...req.body };
+
+        if (updateFields.zalo_phone !== undefined || updateFields.customer_zalo_phone !== undefined) {
+            const zaloPhone = updateFields.zalo_phone ?? updateFields.customer_zalo_phone ?? null;
+            updateFields.zalo_phone = zaloPhone;
+            updateFields.customer_zalo_phone = zaloPhone;
+        }
+        if (updateFields.zalo_user_id !== undefined || updateFields.customer_zalo_user_id !== undefined) {
+            const zaloUserId = updateFields.zalo_user_id ?? updateFields.customer_zalo_user_id ?? null;
+            updateFields.zalo_user_id = zaloUserId;
+            updateFields.customer_zalo_user_id = zaloUserId;
+        }
 
         const { data: customer, error } = await supabaseAdmin
             .from('customers')
@@ -650,7 +650,7 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
             .single();
 
         if (error) {
-            throw new ApiError('Lỗi khi cập nhật khách hàng', 500);
+            throw new ApiError('Lỗi khi cập nhật khách hàng: ' + error.message, 500);
         }
 
         notifyCrmMaster('customer.updated', { customer });

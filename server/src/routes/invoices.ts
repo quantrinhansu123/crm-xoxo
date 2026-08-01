@@ -6,6 +6,7 @@ import { processInvoicePayment, processInvoiceCancellation } from '../utils/bill
 import { notifyFinanceEvent } from '../utils/financeNotifications.js';
 import { deleteOrderCascade } from '../utils/orderDeletionHelper.js';
 import { syncOrderPayment } from '../utils/orderHelper.js';
+import { syncOrderPaymentsToCashBook } from '../utils/paymentRecordsHelper.js';
 
 
 const router = Router();
@@ -55,6 +56,18 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             throw new ApiError('Lỗi khi lấy danh sách hóa đơn', 500);
         }
 
+        // Heal nhẹ: đồng bộ phiếu thu đơn trên trang này lên sổ quỹ nếu thiếu
+        const orderIds = [...new Set((invoices || []).map((inv: any) => inv.order_id).filter(Boolean))];
+        await Promise.all(
+            orderIds.map(async (orderId: string) => {
+                try {
+                    await syncOrderPaymentsToCashBook(orderId);
+                } catch (syncErr) {
+                    console.warn('[Invoices] list syncOrderPaymentsToCashBook failed:', orderId, syncErr);
+                }
+            }),
+        );
+
         res.json({
             status: 'success',
             data: {
@@ -64,6 +77,79 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                     limit: Number(limit),
                     total: count || 0,
                 }
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Thống kê hóa đơn (không phân trang) — dùng cho card tổng trên UI.
+ * Doanh số = tổng HĐ chưa hủy; Doanh thu đã TT = tổng HĐ status=paid.
+ */
+router.get('/stats', authenticate, async (req: AuthenticatedRequest, res, next) => {
+    try {
+        const { from_date, to_date } = req.query;
+
+        let query = supabaseAdmin
+            .from('invoices')
+            .select('status, total_amount, created_at');
+
+        if (from_date && typeof from_date === 'string') {
+            const from = new Date(from_date);
+            from.setHours(0, 0, 0, 0);
+            query = query.gte('created_at', from.toISOString());
+        }
+        if (to_date && typeof to_date === 'string') {
+            const to = new Date(to_date);
+            to.setHours(23, 59, 59, 999);
+            query = query.lte('created_at', to.toISOString());
+        }
+
+        const { data: rows, error } = await query;
+        if (error) {
+            throw new ApiError('Lỗi khi lấy thống kê hóa đơn: ' + error.message, 500);
+        }
+
+        const invoices = rows || [];
+        const num = (v: unknown) => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+        };
+
+        let draft = 0;
+        let pending = 0;
+        let paid = 0;
+        let cancelled = 0;
+        let salesAmount = 0;
+        let paidAmount = 0;
+
+        for (const inv of invoices) {
+            const amount = num(inv.total_amount);
+            const status = String(inv.status || '');
+            if (status === 'draft') draft += 1;
+            else if (status === 'pending') pending += 1;
+            else if (status === 'paid') paid += 1;
+            else if (status === 'cancelled') cancelled += 1;
+
+            if (status !== 'cancelled') salesAmount += amount;
+            if (status === 'paid') paidAmount += amount;
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                total: invoices.length,
+                draft,
+                pending,
+                paid,
+                cancelled,
+                /** Doanh số: tổng giá trị HĐ chưa hủy */
+                salesAmount,
+                /** Doanh thu đã thanh toán */
+                paidAmount,
+                totalAmount: salesAmount,
             },
         });
     } catch (error) {
@@ -91,11 +177,24 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
             throw new ApiError('Không tìm thấy hóa đơn', 404);
         }
 
+        // Heal: payment_records có trên HĐ nhưng thiếu trên sổ quỹ → tạo transactions còn thiếu
+        if (invoice.order_id) {
+            try {
+                await syncOrderPaymentsToCashBook(invoice.order_id);
+            } catch (syncErr) {
+                console.warn('[Invoices] syncOrderPaymentsToCashBook failed:', syncErr);
+            }
+        }
+
         // 1. Fetch from payment_records (captured during order flow)
-        const { data: pRecords } = await supabaseAdmin
+        const { data: pRecordsRaw } = await supabaseAdmin
             .from('payment_records')
             .select('*')
             .eq('order_id', invoice.order_id);
+
+        const pRecords = (pRecordsRaw || []).filter(
+            (p) => (p.transaction_status || 'approved') !== 'cancelled'
+        );
 
         // 2. Fetch from transactions (manual entry or linked)
         // We look for match in order_id OR matching order_code (e.g., HD10)
@@ -116,8 +215,11 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
         tQuery = tQuery.or(searchTerms.join(','));
         const { data: tRecords } = await tQuery;
 
-        // 3. Merge and unify
+        // 3. Merge and unify — ưu tiên mã PT sổ quỹ; tránh đếm trùng payment_records
         const unifiedPayments = new Map();
+        const unusedTransAmounts = (tRecords || [])
+            .filter((t) => t.type === 'income')
+            .map((t) => Number(t.amount) || 0);
 
         // Process transactions first (official PT codes)
         (tRecords || []).forEach(t => {
@@ -128,32 +230,41 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                 payment_method: t.payment_method,
                 created_at: t.created_at,
                 status: t.status,
+                type: t.type,
                 description: t.notes || t.description || 'Thanh toán đơn hàng'
             });
         });
 
-        // Add payment_records (order flow)
-        (pRecords || []).forEach(p => {
-            // Unify: Check if we already have this payment via transactions (match by amount and time)
-            // If they are mostly the same, we update the transaction entries or skip
-            const alreadyInTrans = (tRecords || []).some(t => 
-                Math.abs(t.amount - p.amount) < 1 && 
-                Math.abs(new Date(t.created_at).getTime() - new Date(p.created_at).getTime()) < 300000
-            );
-            
-            if (!alreadyInTrans) {
-                const pId = `p-${p.id}`;
-                unifiedPayments.set(pId, {
-                    id: p.id,
-                    code: p.invoice_code || `PT-ORD-${p.id.slice(0, 4).toUpperCase()}`,
+        // Add payment_records chưa được cover bởi transactions (match số tiền hoặc gộp tổng)
+        const unmatchedPayments: typeof pRecords = [];
+        for (const p of pRecords) {
+            const amount = Number(p.amount) || 0;
+            const idx = unusedTransAmounts.findIndex((a) => Math.abs(a - amount) < 1);
+            if (idx >= 0) {
+                unusedTransAmounts.splice(idx, 1);
+            } else {
+                unmatchedPayments.push(p);
+            }
+        }
+
+        const unmatchedPayTotal = unmatchedPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+        const unusedTransTotal = unusedTransAmounts.reduce((s, a) => s + a, 0);
+        const aggregateCovered = unmatchedPayments.length > 0 && Math.abs(unmatchedPayTotal - unusedTransTotal) < 1;
+
+        if (!aggregateCovered) {
+            for (const p of unmatchedPayments) {
+                unifiedPayments.set(`p-${p.id}`, {
+                    id: `p-${p.id}`,
+                    code: p.invoice_code || `PT-ORD-${String(p.id).slice(0, 4).toUpperCase()}`,
                     amount: p.amount,
                     payment_method: p.payment_method,
                     created_at: p.created_at,
                     status: p.transaction_status || 'approved',
+                    type: 'income',
                     description: p.content || p.notes || 'Thanh toán đơn hàng'
                 });
             }
-        });
+        }
 
         (invoice as any).transactions = Array.from(unifiedPayments.values())
             .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -161,7 +272,7 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
         console.log(`[Invoices] Unified Debug for ${invoice.invoice_code}:`, {
             order_id: invoice.order_id,
             order_code: orderCode,
-            pRecords_count: (pRecords || []).length,
+            pRecords_count: pRecords.length,
             tRecords_count: (tRecords || []).length,
             final_count: invoice.transactions.length
         });
@@ -185,10 +296,10 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             throw new ApiError('Đơn hàng là bắt buộc', 400);
         }
 
-        // Lấy thông tin đơn hàng
+        // Lấy thông tin đơn hàng + sale
         const { data: order, error: orderError } = await supabaseAdmin
             .from('orders')
-            .select('*, customer:customers(*)')
+            .select('*, customer:customers(*), sales_user:users!orders_sales_id_fkey(id, name)')
             .eq('id', order_id)
             .single();
 
@@ -229,6 +340,9 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             throw new ApiError('Lỗi khi tạo hóa đơn: ' + error.message, 500);
         }
 
+        const salesUser = Array.isArray(order.sales_user) ? order.sales_user[0] : order.sales_user;
+        const saleName = salesUser?.name || null;
+
         notifyFinanceEvent({
             event: 'invoice.created',
             title: 'Hóa đơn mới',
@@ -238,13 +352,26 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             data: {
                 invoice_id: invoice.id,
                 invoice_code: invoice.invoice_code,
+                voucher_code: invoice.invoice_code,
                 order_id: invoice.order_id,
+                order_code: order.order_code || null,
                 customer_id: invoice.customer_id,
                 customer_name: order.customer?.name,
                 total_amount: invoice.total_amount,
                 payment_method: invoice.payment_method,
                 status: invoice.status,
                 notes: invoice.notes,
+                content: invoice.notes,
+                sale_name: saleName,
+                sales_name: saleName,
+                created_by: req.user!.id,
+                created_by_name: req.user!.name,
+                order: {
+                    order_code: order.order_code,
+                    sale_name: saleName,
+                    sales_name: saleName,
+                    created_by_name: req.user!.name,
+                },
             },
         });
 

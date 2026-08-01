@@ -69,14 +69,25 @@ export function LeadCard({
         }
     }, []);
 
-    const handleCardClick = useCallback(() => {
+    const openLeadDetail = useCallback((e?: React.MouseEvent) => {
+        const url = `/leads/${lead.id}`;
+        // Ctrl/Cmd + click hoặc giữa chuột → tab mới (chăm nhiều khách cùng lúc)
+        if (e && (e.ctrlKey || e.metaKey || e.button === 1)) {
+            e.preventDefault();
+            window.open(url, '_blank', 'noopener,noreferrer');
+            return;
+        }
+        onClick();
+    }, [lead.id, onClick]);
+
+    const handleCardClick = useCallback((e: React.MouseEvent) => {
         // Don't trigger click if long press was just fired
         if (longPressTriggered.current) {
             longPressTriggered.current = false;
             return;
         }
-        onClick();
-    }, [onClick]);
+        openLeadDetail(e);
+    }, [openLeadDetail]);
 
     const handleDelete = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -95,9 +106,18 @@ export function LeadCard({
                     className={`kanban-card bg-white rounded-lg border p-3 group ${isPhoneView ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${snapshot.isDragging ? 'shadow-lg ring-2 ring-primary/20' : 'shadow-sm hover:shadow-md'
                         }`}
                     onClick={handleCardClick}
+                    onAuxClick={(e) => {
+                        // Middle-click → mở tab mới
+                        if (e.button === 1) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openLeadDetail(e);
+                        }
+                    }}
                     onTouchStart={handleTouchStart}
                     onTouchEnd={handleTouchEnd}
                     onTouchMove={handleTouchMove}
+                    title="Click mở lead · Ctrl+Click mở tab mới"
                 >
                     {/* Header */}
                     <div className="flex items-start justify-between gap-2 mb-3">
@@ -137,7 +157,7 @@ export function LeadCard({
                                 className="h-7 w-7"
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    onClick();
+                                    openLeadDetail(e);
                                 }}
                             >
                                 <Eye className="h-3.5 w-3.5" />

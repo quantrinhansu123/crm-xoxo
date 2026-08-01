@@ -1,0 +1,69 @@
+{
+  "contract_version": "1.0.0",
+  "payload_documentation": {
+    "required_fields_meaning": "A required field must be present and non-null unless its schema explicitly permits null. A delivery missing a required field is invalid and must not be projected.",
+    "optional_fields_meaning": "An optional field may be omitted or null exactly as shown by each output's nullable_fields list. Optional fields do not change business semantics.",
+    "event_versioning_rule": "event_version identifies the immutable payload schema for an event name. It changes only for an incompatible payload-schema change; additive compatible fields retain version 1. Consumers must continue accepting v1 unchanged."
+  },
+  "outputs": {
+    "lead.projection.upsert.v1": {
+      "required_fields": ["event_id","event_name","event_version","occurred_at","lead_id","state_version","lead_state","idempotency_key","correlation_id"],
+      "optional_fields": ["external_lead_key","owner_id","owner_name","sla_id","sla_type","sla_status","sla_started_at","sla_deadline_at","sla_warning_at","sla_paused_at","sla_remaining_seconds","followup_started_at","followup_milestone_index","next_followup_at","quiet_hours_paused","outcome","outcome_reason","closed_at"],
+      "nullable_fields":  ["owner_id","owner_name","sla_id","sla_type","sla_status","sla_started_at","sla_deadline_at","sla_warning_at","sla_paused_at","sla_remaining_seconds","followup_started_at","followup_milestone_index","next_followup_at","outcome","outcome_reason","closed_at"],
+      "ordering_field": "state_version",
+      "deduplication_field": "event_id",
+      "projection_rule": "Apply only if state_version is greater than stored; equal version is accepted only as event_id duplicate; lower version is stale and ignored.",
+      "retry_behavior": "Transactional Outbox retries until CRM returns a validated acknowledgement. CRM must make event_id durable before acknowledgement.",
+      "example": {
+        "event_id": "b08eeab2-e6e5-47f3-b59f-6a51ce55cd62",
+        "event_name": "lead.projection.upsert.v1",
+        "event_version": 1,
+        "occurred_at": "2026-07-29T06:01:00Z",
+        "idempotency_key": "lead-projection:8e6e2d93-5c5d-4a40-a6bb-21eb1e90e209:7",
+        "correlation_id": "1b0a1ae8-9cb7-4f9b-b8c7-d469176dc303",
+        "lead_id": "8e6e2d93-5c5d-4a40-a6bb-21eb1e90e209",
+        "external_lead_key": "pancake:page1:conv99",
+        "lead_state": "OWNED_WAITING_CUSTOMER",
+        "state_version": 7,
+        "owner_id": "sale_12",
+        "owner_name": "Tran B",
+        "sla_id": "3f03a76b-7f15-4879-a25b-746a04f8ebc1",
+        "sla_type": "FOLLOWUP",
+        "sla_status": "ACTIVE",
+        "sla_started_at": "2026-07-29T06:01:00Z",
+        "sla_deadline_at": "2026-07-29T07:01:00Z",
+        "sla_warning_at": "2026-07-29T06:31:00Z",
+        "sla_paused_at": null,
+        "sla_remaining_seconds": null,
+        "followup_milestone_index": 1,
+        "next_followup_at": "2026-07-29T07:01:00Z",
+        "quiet_hours_paused": false,
+        "outcome": null,
+        "outcome_reason": null
+      }
+    },
+    "lead.activity.append.v1": {
+      "required_fields": ["event_id","event_name","event_version","occurred_at","lead_id","activity_type","summary","idempotency_key","correlation_id"],
+      "optional_fields": ["actor_id","state_version","metadata"],
+      "nullable_fields":  ["actor_id","state_version","metadata"],
+      "ordering_field": "occurred_at",
+      "deduplication_field": "event_id",
+      "projection_rule": "Insert once by event_id; do not alter lead business fields.",
+      "retry_behavior": "Transactional Outbox retries; repeated event_id is a no-op.",
+      "example": {
+        "event_id": "2e5d8e44-83b7-4fe9-a915-4b524fac9f2b",
+        "event_name": "lead.activity.append.v1",
+        "event_version": 1,
+        "occurred_at": "2026-07-29T06:01:00Z",
+        "idempotency_key": "activity:2e5d8e44-83b7-4fe9-a915-4b524fac9f2b",
+        "correlation_id": "1b0a1ae8-9cb7-4f9b-b8c7-d469176dc303",
+        "lead_id": "8e6e2d93-5c5d-4a40-a6bb-21eb1e90e209",
+        "state_version": 7,
+        "activity_type": "SALE_RESPONDED",
+        "actor_id": "sale_12",
+        "summary": "Sale responded; Follow-up M1 started.",
+        "metadata": {"milestone_index": 1}
+      }
+    }
+  }
+}

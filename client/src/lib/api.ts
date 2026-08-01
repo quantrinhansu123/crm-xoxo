@@ -108,6 +108,50 @@ export const leadsApi = {
         api.post<ApiResponse<{ activity: any }>>(`/leads/${id}/activities`, data),
 };
 
+/** CUTI v1.0.0 command API — CRM must not write Core state/owner/SLA fields directly */
+function cutiCommon(extra: Record<string, unknown> = {}) {
+    const cryptoObj = globalThis.crypto;
+    const uuid = () =>
+        cryptoObj?.randomUUID?.() ||
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+        });
+    return {
+        command_id: uuid(),
+        correlation_id: uuid(),
+        occurred_at: new Date().toISOString(),
+        ...extra,
+    };
+}
+
+export const cutiApi = {
+    assignOwner: (leadId: string, data: { target_owner_id: string; expected_state_version: number; reason?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/owner-assignment`, cutiCommon(data)),
+
+    reclaim: (leadId: string, data: { expected_state_version: number; reason?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/reclaim`, cutiCommon(data)),
+
+    markWon: (leadId: string, data: { expected_state_version: number; note?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/outcome/won`, cutiCommon(data)),
+
+    markFailed: (leadId: string, data: { expected_state_version: number; reason: string; note?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/outcome/failed`, cutiCommon(data)),
+
+    recordNote: (leadId: string, data: { expected_state_version: number; note: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/notes`, cutiCommon(data)),
+
+    changeAppointment: (
+        leadId: string,
+        data: {
+            expected_state_version: number;
+            appointment_scheduled_at: string | null;
+            previous_appointment_scheduled_at?: string | null;
+        },
+    ) => api.post(`/v1/cuti/leads/${leadId}/appointment`, cutiCommon(data)),
+};
+
 // Customers API
 export const customersApi = {
     getAll: (params?: { type?: string; status?: string; search?: string; page?: number; limit?: number }) =>
@@ -286,12 +330,16 @@ export const orderProductsApi = {
     getById: (id: string) =>
         api.get<ApiResponse<any>>(`/order-products/${id}`),
 
-    update: (id: string, data: { images?: string[] }) =>
+    update: (id: string, data: { images?: string[]; notes?: string }) =>
         api.patch<ApiResponse<any>>(`/order-products/${id}`, data),
 
     // Update product status
     updateStatus: (id: string, status: string, reason?: string, warranty_code?: string) =>
         api.patch<ApiResponse<any>>(`/order-products/${id}/status`, { status, ...(reason !== undefined && { reason }), ...(warranty_code !== undefined && { warranty_code }) }),
+
+    // Update a service's note
+    updateServiceNotes: (serviceId: string, notes: string) =>
+        api.patch<ApiResponse<any>>(`/order-products/services/${serviceId}/notes`, { notes }),
 
     // Assign technician to a service
     assignService: (serviceId: string, technician_id: string) =>
@@ -361,6 +409,19 @@ export const orderProductsApi = {
         due_at?: string | null;
         care_warranty_flow?: string | null;
         care_warranty_stage?: string | null;
+        move_notes?: string;
+        move_photos?: string[];
+        /** Cho phép lùi đúng 1 bước (vd. bỏ tick trong danh sách bàn giao) mà không bị chặn là lùi quy trình */
+        allow_step_back?: boolean;
+        aftersale_receiver_name?: string | null;
+        debt_checked?: boolean;
+        debt_checked_notes?: string | null;
+        debt_checked_by_name?: string | null;
+        delivery_creator_name?: string | null;
+        delivery_shipper_phone?: string | null;
+        delivery_staff_name?: string | null;
+        delivery_received_at?: string | null;
+        sales_step_data?: Record<string, unknown>;
     }) => api.patch<ApiResponse<any>>(`/order-products/${id}/after-sale-data`, data),
 
     resetServices: (id: string) =>
@@ -437,6 +498,19 @@ export const orderItemsApi = {
         due_at?: string | null;
         care_warranty_flow?: string | null;
         care_warranty_stage?: string | null;
+        move_notes?: string;
+        move_photos?: string[];
+        /** Cho phép lùi đúng 1 bước (vd. bỏ tick trong danh sách bàn giao) mà không bị chặn là lùi quy trình */
+        allow_step_back?: boolean;
+        aftersale_receiver_name?: string | null;
+        debt_checked?: boolean;
+        debt_checked_notes?: string | null;
+        debt_checked_by_name?: string | null;
+        delivery_creator_name?: string | null;
+        delivery_shipper_phone?: string | null;
+        delivery_staff_name?: string | null;
+        delivery_received_at?: string | null;
+        sales_step_data?: Record<string, unknown>;
     }) => api.patch<ApiResponse<any>>(`/order-items/${id}/after-sale-data`, data),
 };
 
@@ -456,6 +530,30 @@ export const requestsApi = {
         api.patch<ApiResponse<any>>(`/requests/partners/${id}`, data),
     updateExtension: (id: string, data: { status?: string; customer_result?: string; new_due_at?: string; valid_reason?: boolean; kpi_impact?: boolean }) =>
         api.patch<ApiResponse<any>>(`/requests/extensions/${id}`, data),
+    deleteAccessory: (
+        id: string,
+        hints?: {
+            order_item_id?: string;
+            order_product_id?: string;
+            order_product_service_id?: string;
+        },
+    ) => api.delete<ApiResponse<null>>(`/requests/accessories/${id}`, { params: hints }),
+    deletePartner: (
+        id: string,
+        hints?: {
+            order_item_id?: string;
+            order_product_id?: string;
+            order_product_service_id?: string;
+        },
+    ) => api.delete<ApiResponse<null>>(`/requests/partners/${id}`, { params: hints }),
+    deleteExtension: (
+        id: string,
+        hints?: {
+            order_item_id?: string;
+            order_product_id?: string;
+            order_product_service_id?: string;
+        },
+    ) => api.delete<ApiResponse<null>>(`/requests/extensions/${id}`, { params: hints }),
 };
 
 // Upsell Tickets API (admin/manager)
@@ -479,6 +577,18 @@ export const invoicesApi = {
         limit?: number;
     }) =>
         api.get<PaginatedResponse<{ invoices: any[] }>>('/invoices', { params }),
+
+    getStats: (params?: { from_date?: string; to_date?: string }) =>
+        api.get<ApiResponse<{
+            total: number;
+            draft: number;
+            pending: number;
+            paid: number;
+            cancelled: number;
+            salesAmount: number;
+            paidAmount: number;
+            totalAmount: number;
+        }>>('/invoices/stats', { params }),
 
     getById: (id: string) =>
         api.get<ApiResponse<{ invoice: any }>>(`/invoices/${id}?t=${Date.now()}`),
@@ -760,7 +870,12 @@ export const payrollBatchesApi = {
     getById: (id: string) =>
         api.get<ApiResponse<{ batch: any; records: any[] }>>(`/payroll-batches/${id}`),
 
-    generate: (data: { month: number; year: number; apply_technician_kpi_commission_policy?: boolean }) =>
+    generate: (data: {
+        month: number;
+        year: number;
+        apply_technician_kpi_commission_policy?: boolean;
+        user_ids?: string[];
+    }) =>
         api.post<ApiResponse<{ batch: any }>>('/payroll-batches/generate', data),
 
     updateStatus: (id: string, status: string) =>
@@ -941,8 +1056,17 @@ export const transactionsApi = {
     update: (id: string, data: any) =>
         api.put<ApiResponse<{ transaction: any }>>(`/transactions/${id}`, data),
 
-    delete: (id: string) =>
-        api.delete<ApiResponse<null>>(`/transactions/${id}`),
+    delete: (id: string, hard?: boolean) =>
+        api.delete<ApiResponse<null>>(`/transactions/${id}`, { params: hard ? { hard: 1 } : undefined }),
+
+    bulkDelete: (ids: string[], hard?: boolean) =>
+        api.post<ApiResponse<{ deleted: number; skipped?: number }>>('/transactions/bulk-delete', { ids, hard: !!hard }),
+
+    getEditLogs: (params?: { type?: 'income' | 'expense'; limit?: number }) =>
+        api.get<ApiResponse<{ logs: any[] }>>('/transactions/edit-logs', { params }),
+
+    getEditLogsById: (id: string) =>
+        api.get<ApiResponse<{ logs: any[] }>>(`/transactions/${id}/edit-logs`),
 };
 
 export const productChatsApi = {

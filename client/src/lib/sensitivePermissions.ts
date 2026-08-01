@@ -39,6 +39,22 @@ export function canApproveInApprovalCenter(
     return user?.role === 'admin' || user?.role === 'manager';
 }
 
+const SALARY_ADVANCE_APPROVAL_VIEW = 'salary-advances/approval';
+const SALARY_ADVANCE_APPROVAL_ROLES = ['admin', 'manager'] as const;
+
+/**
+ * Xem trạng thái duyệt/từ chối + tên người duyệt trong Ứng lương — thông tin nhạy cảm,
+ * mặc định chỉ Admin/Manager thấy; có thể cấp riêng cho một Kế toán cụ thể qua Thiết lập
+ * nhân viên mà không cần cấp luôn quyền Duyệt/Từ chối (xem canApproveInApprovalCenter).
+ */
+export function canViewSalaryAdvanceApproval(
+    user: Pick<User, 'role' | 'allowed_views' | 'uses_role_defaults'> | null | undefined,
+): boolean {
+    if (!user) return false;
+    const roleAllowed = (SALARY_ADVANCE_APPROVAL_ROLES as readonly string[]).includes(user.role);
+    return canAccessView(user, SALARY_ADVANCE_APPROVAL_VIEW, roleAllowed);
+}
+
 /** Thao tác Kanban / form kỹ thuật (kéo thả, mua PK, gửi ĐT, …) — Sale mặc định chỉ xem */
 export function canOperateWorkflow(
     user: Pick<User, 'role' | 'allowed_views' | 'uses_role_defaults' | 'view_actions'> | null | undefined,

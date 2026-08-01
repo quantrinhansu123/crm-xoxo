@@ -1,7 +1,7 @@
-import type { Order, OrderItem } from '@/hooks/useOrders';
+import type { OrderItem } from '@/hooks/useOrders';
 import { toast } from 'sonner';
 
-function parsePhotoList(value: unknown): string[] {
+export function parsePhotoList(value: unknown): string[] {
     if (Array.isArray(value)) {
         return value.filter((url): url is string => typeof url === 'string' && url.length > 0);
     }
@@ -23,15 +23,34 @@ export type After1FormOverride = {
     completion_photos?: string[];
 };
 
-/** Ảnh hoàn thiện → Kiểm nợ */
+/** Giữ ảnh/người chụp đã lưu ở bước trước nếu form hiện tại chưa điền lại. */
+export function resolveAfter1CompletionData(
+    product: Pick<OrderItem, 'completion_photos' | 'aftersale_receiver_name'> | null | undefined,
+    formOverride?: After1FormOverride,
+): { photos: string[]; receiver: string } {
+    const formPhotos = formOverride?.completion_photos;
+    const photos =
+        formPhotos && formPhotos.length > 0
+            ? formPhotos
+            : parsePhotoList(product?.completion_photos);
+    const receiver = (
+        formOverride?.aftersale_receiver_name?.trim()
+        || (product as any)?.aftersale_receiver_name?.trim()
+        || ''
+    );
+    return { photos, receiver };
+}
+
+/**
+ * Ảnh hoàn thiện → Kiểm nợ
+ * Mỗi sản phẩm trong cùng đơn phải điền độc lập — nhận dữ liệu từ chính sản phẩm (product/item), không dùng chung cấp đơn.
+ */
 export function getAfter1ToDebtValidationErrors(
-    order: Pick<Order, 'aftersale_receiver_name'> | null | undefined,
-    product: Pick<OrderItem, 'completion_photos'> | null | undefined,
+    product: Pick<OrderItem, 'completion_photos' | 'aftersale_receiver_name'> | null | undefined,
     formOverride?: After1FormOverride,
 ): string[] {
     const errors: string[] = [];
-    const receiver = (formOverride?.aftersale_receiver_name ?? order?.aftersale_receiver_name ?? '').trim();
-    const photos = formOverride?.completion_photos ?? parsePhotoList(product?.completion_photos);
+    const { photos, receiver } = resolveAfter1CompletionData(product, formOverride);
 
     if (!receiver) {
         errors.push('Chọn "Người chụp After"');
@@ -48,22 +67,19 @@ export type After1DebtFormOverride = {
     debt_checked_by_name?: string;
 };
 
-/** Kiểm nợ → Đóng gói & Giao hàng */
+/**
+ * Kiểm nợ → Đóng gói & Giao hàng
+ * Bắt buộc tick "Xác nhận đã kiểm nợ" trước khi chuyển bước.
+ */
 export function getAfter1DebtToAfter2ValidationErrors(
-    order: Pick<Order, 'debt_checked' | 'debt_checked_by_name'> | null | undefined,
+    product?: Pick<OrderItem, 'debt_checked' | 'debt_checked_by_name'> | null,
     formOverride?: After1DebtFormOverride,
 ): string[] {
     const errors: string[] = [];
-    const debtChecked = formOverride?.debt_checked ?? order?.debt_checked;
-    const collector = (formOverride?.debt_checked_by_name ?? order?.debt_checked_by_name ?? '').trim();
-
+    const debtChecked = formOverride?.debt_checked ?? !!(product as any)?.debt_checked;
     if (!debtChecked) {
         errors.push('Tick "Xác nhận đã kiểm nợ"');
     }
-    if (!collector) {
-        errors.push('Chọn "Người thu tiền"');
-    }
-
     return errors;
 }
 

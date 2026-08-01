@@ -303,6 +303,7 @@ export function OrderDetailPage() {
     const [failItemId, setFailItemId] = useState<string>('');
     const [showConfirmDoneDialog, setShowConfirmDoneDialog] = useState(false);
     const [confirmDoneItemIds, setConfirmDoneItemIds] = useState<string[]>([]);
+    const [confirmDoneProductId, setConfirmDoneProductId] = useState<string | null>(null);
     const [isV2ServiceForDone, setIsV2ServiceForDone] = useState(false);
 
     const [showProductDialog, setShowProductDialog] = useState(false);
@@ -601,18 +602,23 @@ export function OrderDetailPage() {
         if (!group) return;
 
         const leadItem = group.services.find((s) => getItemCurrentStep(s.id)) ?? group.services[0];
-        if (!leadItem) return;
+        // Cho phép kéo SP (chỉ có product head) sang Hoàn thành / Thất bại
+        if (!leadItem && !group.product) return;
 
         if (targetRoomId === 'done') {
-            const itemIds = [...group.services.map(s => s.id)];
-            if (group.product?.id) itemIds.push(group.product.id);
-            setConfirmDoneItemIds(itemIds);
-            setIsV2ServiceForDone(group.services.some(s => s.item_type === 'service' || s.item_type === 'package'));
+            // Chỉ complete dịch vụ — product head V2 cập nhật riêng (tránh 404 /order-items/:productId/complete)
+            setConfirmDoneItemIds(group.services.map(s => s.id).filter(Boolean));
+            setConfirmDoneProductId(group.product?.id || null);
+            setIsV2ServiceForDone(
+                group.services.some(s => s.item_type === 'service' || s.item_type === 'package')
+                || !!group.product?.is_customer_item
+            );
             setShowConfirmDoneDialog(true);
         } else if (targetRoomId === 'fail') {
-            setFailItemId(leadItem.id);
+            setFailItemId(leadItem?.id || group.product!.id);
             setShowFailDialog(true);
         } else {
+            if (!leadItem) return;
             const room = [...TECH_ROOMS].find(r => r.id === targetRoomId);
             if (room) {
                 setMoveStepItemId(leadItem.id);
@@ -631,11 +637,34 @@ export function OrderDetailPage() {
         setShowProductDialog(true);
     };
 
-    /** Mở ProductDetailDialog kèm callback move — sau khi user xác nhận, card tự chuyển và dialog tự đóng */
-    const handleOpenProductDialogWithMove = (group: any, roomId: string, moveCallback: () => Promise<void>) => {
+    /** Các bước kết thúc — không mở form thao tác sau khi chuyển tới */
+    const skipOpenFormAfterMove = (roomId?: string) =>
+        !roomId || roomId === 'step5' || roomId === 'after4' || roomId === 'done' || roomId === 'fail';
+
+    /** Mở ProductDetailDialog kèm callback move — sau khi xác nhận chuyển bước về view kanban (không mở form bước đích) */
+    const handleOpenProductDialogWithMove = (
+        group: any,
+        roomId: string,
+        moveCallback: () => Promise<void>,
+        destinationRoomId?: string,
+    ) => {
         setSelectedProductGroup(group);
         setCurrentRoomId(roomId);
-        setPendingMoveCallback(() => moveCallback); // store callback in state
+        setPendingMoveCallback(() => async () => {
+            await moveCallback();
+            // Aftersale: luôn về kanban. Sales/khác: giữ mở form bước đích nếu không phải bước kết thúc.
+            const isAftersaleDest = !!destinationRoomId?.startsWith('after');
+            if (!isAftersaleDest && !skipOpenFormAfterMove(destinationRoomId)) {
+                window.setTimeout(() => {
+                    setSelectedProductGroup(group);
+                    setCurrentRoomId(destinationRoomId!);
+                    setPendingMoveCallback(null);
+                    setShowProductDialog(true);
+                }, 120);
+            } else if (isAftersaleDest) {
+                setActiveTab('aftersale');
+            }
+        });
         setShowProductDialog(true);
     };
 
@@ -764,14 +793,14 @@ export function OrderDetailPage() {
                         <ArrowLeft className="h-5 w-5" />
                     </Button>
                     <div>
-                        <h1 className="text-xl sm:text-2xl font-bold flex flex-wrap items-center gap-2 sm:gap-3">
-                            <ShoppingBag className="h-5 w-5 sm:h-6 sm:w-6 text-primary" />
+                        <h1 className="text-2xl sm:text-3xl font-bold flex flex-wrap items-center gap-3 sm:gap-4">
+                            <ShoppingBag className="h-6 w-6 sm:h-7 sm:w-7 text-primary" />
                             <span className="truncate max-w-[200px] sm:max-w-none">{order.order_code}</span>
                             <Badge variant={getStatusVariant(order.status) as any}>
                                 {columns.find(c => c.id === order.status)?.title || order.status}
                             </Badge>
                         </h1>
-                        <div className="text-muted-foreground text-sm flex items-center gap-2">
+                        <div className="text-muted-foreground text-base flex items-center gap-2">
                             <span>Chi tiết đơn hàng</span>
                         </div>
                         {hasPendingOrderEditApproval && (
@@ -842,7 +871,7 @@ export function OrderDetailPage() {
                 <TabsList className="mb-0 flex h-auto w-full min-w-0 max-w-full justify-start gap-0 overflow-x-auto rounded-none border-b bg-white px-1 no-scrollbar md:mb-4 md:mt-0 md:h-10 md:w-auto md:gap-1 md:rounded-lg md:border-0 md:bg-muted/50 md:p-1">
                     <TabsTrigger
                         value="detail"
-                        className="shrink-0 gap-1 rounded-none border-b-2 border-transparent px-3 py-2.5 text-xs font-medium text-muted-foreground data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:font-bold data-[state=active]:text-foreground data-[state=active]:shadow-none md:rounded-md md:border-0 md:px-2.5 md:py-1.5 md:data-[state=active]:bg-white md:gap-2 md:text-sm"
+                        className="shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-4 py-3 text-sm font-semibold text-muted-foreground data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:font-bold data-[state=active]:text-foreground data-[state=active]:shadow-none md:rounded-md md:border-0 md:px-3 md:py-2 md:data-[state=active]:bg-white md:gap-2 md:text-base"
                     >
                         <FileText className="h-3.5 w-3.5 md:h-4 md:w-4" />
                         Chi tiết
@@ -859,7 +888,7 @@ export function OrderDetailPage() {
                     </TabsTrigger>
                     <TabsTrigger
                         value="sales"
-                        className="shrink-0 gap-1 rounded-none border-b-2 border-transparent px-3 py-2.5 text-xs font-medium text-muted-foreground data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:font-bold data-[state=active]:text-foreground data-[state=active]:shadow-none md:rounded-md md:border-0 md:px-2.5 md:py-1.5 md:data-[state=active]:bg-white md:gap-2 md:text-sm"
+                        className="shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-4 py-3 text-sm font-semibold text-muted-foreground data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:font-bold data-[state=active]:text-foreground data-[state=active]:shadow-none md:rounded-md md:border-0 md:px-3 md:py-2 md:data-[state=active]:bg-white md:gap-2 md:text-base"
                     >
                         <ShoppingBag className="h-3.5 w-3.5 md:h-4 md:w-4" />
                         <span className="md:hidden">Sales</span>
@@ -1392,6 +1421,7 @@ export function OrderDetailPage() {
                 open={showConfirmDoneDialog}
                 onOpenChange={setShowConfirmDoneDialog}
                 itemIds={confirmDoneItemIds}
+                productId={confirmDoneProductId}
                 isV2Service={isV2ServiceForDone}
                 onSuccess={async () => {
                     const updated = await reloadOrder();

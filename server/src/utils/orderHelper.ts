@@ -223,7 +223,7 @@ export async function checkAndCompleteOrder(orderId: string): Promise<string> {
             // Guard: only set phase_stage='done' for items still in workflow phase
             // Items in care/warranty/after_sale must not be touched
             try {
-                const afterSaleUpdate = { current_phase: 'after_sale', phase_stage: 'after1' };
+                const afterSaleUpdate = { current_phase: 'after_sale', phase_stage: 'after1', after_sale_stage: 'after1' };
                 const { data: prods } = await supabaseAdmin
                     .from('order_products')
                     .select('id')

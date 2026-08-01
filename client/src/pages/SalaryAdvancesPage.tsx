@@ -14,8 +14,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSalaryAdvances, type SalaryAdvance } from '@/hooks/useSalaryAdvances';
-import { useUsers } from '@/hooks/useUsers';
 import { cn } from '@/lib/utils';
+import { canApproveInApprovalCenter, canViewSalaryAdvanceApproval } from '@/lib/sensitivePermissions';
 
 // ─── Status Config ──────────────────────────────────────────────
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -46,7 +46,6 @@ function fmtDateTime(dateStr: string): string {
 export function SalaryAdvancesPage() {
     const { user } = useAuth();
     const { advances, summary, loading, fetchAdvances, createAdvance, approveAdvance, rejectAdvance, deleteAdvance } = useSalaryAdvances();
-    const { users, fetchUsers } = useUsers();
 
     // Period
     const now = new Date();
@@ -62,20 +61,22 @@ export function SalaryAdvancesPage() {
     const [showRejectDialog, setShowRejectDialog] = useState(false);
     const [selectedAdvance, setSelectedAdvance] = useState<SalaryAdvance | null>(null);
 
-    // Form state
-    const [formUserId, setFormUserId] = useState('');
+    // Form state — nhân viên luôn là người đăng nhập
     const [formAmount, setFormAmount] = useState('');
     const [formReason, setFormReason] = useState('');
     const [formNotes, setFormNotes] = useState('');
     const [rejectionReason, setRejectionReason] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
-    const isAdmin = user?.role === 'admin' || user?.role === 'manager';
+    // Duyệt/Từ chối: chỉ Admin/Manager (giống Mục phê duyệt Upsell, Sửa đơn, Gia hạn, …)
+    const canApprove = canApproveInApprovalCenter(user);
+    // Xem trạng thái duyệt/người duyệt: thông tin nhạy cảm — mặc định theo canApprove,
+    // nhưng có thể cấp riêng cho một Kế toán qua Thiết lập nhân viên > Phân quyền.
+    const canViewApproval = canViewSalaryAdvanceApproval(user);
 
     useEffect(() => {
         fetchAdvances({ month, year });
-        fetchUsers();
-    }, [month, year, fetchAdvances, fetchUsers]);
+    }, [month, year, fetchAdvances]);
 
     // Navigation
     const goToPrevMonth = () => {
@@ -100,22 +101,16 @@ export function SalaryAdvancesPage() {
         return list;
     }, [advances, statusFilter, searchTerm]);
 
-    // Active employees only
-    const activeUsers = useMemo(() =>
-        users.filter(u => u.status === 'active' && u.role !== 'admin'),
-        [users]
-    );
-
     // ── Handlers ─────────────────────────────────────────────────
     const handleCreate = async () => {
-        if (!formUserId || !formAmount) {
+        if (!user?.id || !formAmount) {
             toast.error('Vui lòng điền đầy đủ thông tin');
             return;
         }
         setSubmitting(true);
         try {
             await createAdvance({
-                user_id: formUserId,
+                user_id: user.id,
                 amount: Number(formAmount),
                 month,
                 year,
@@ -168,7 +163,6 @@ export function SalaryAdvancesPage() {
     };
 
     const resetForm = () => {
-        setFormUserId('');
         setFormAmount('');
         setFormReason('');
         setFormNotes('');
@@ -212,26 +206,29 @@ export function SalaryAdvancesPage() {
                         </Button>
                     </div>
 
-                    {/* Status filter */}
-                    <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="h-[34px] w-[140px] text-[13px] border-gray-200 bg-white shadow-sm rounded-lg">
-                            <div className="flex items-center gap-1.5">
-                                <Filter className="h-3.5 w-3.5 text-gray-400" />
-                                <SelectValue placeholder="Trạng thái" />
-                            </div>
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">Tất cả</SelectItem>
-                            <SelectItem value="pending">Chờ duyệt</SelectItem>
-                            <SelectItem value="approved">Đã duyệt</SelectItem>
-                            <SelectItem value="rejected">Từ chối</SelectItem>
-                            <SelectItem value="deducted">Đã trừ lương</SelectItem>
-                        </SelectContent>
-                    </Select>
+                    {/* Status filter — chỉ hiện khi có quyền xem trạng thái duyệt */}
+                    {canViewApproval && (
+                        <Select value={statusFilter} onValueChange={setStatusFilter}>
+                            <SelectTrigger className="h-[34px] w-[140px] text-[13px] border-gray-200 bg-white shadow-sm rounded-lg">
+                                <div className="flex items-center gap-1.5">
+                                    <Filter className="h-3.5 w-3.5 text-gray-400" />
+                                    <SelectValue placeholder="Trạng thái" />
+                                </div>
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Tất cả</SelectItem>
+                                <SelectItem value="pending">Chờ duyệt</SelectItem>
+                                <SelectItem value="approved">Đã duyệt</SelectItem>
+                                <SelectItem value="rejected">Từ chối</SelectItem>
+                                <SelectItem value="deducted">Đã trừ lương</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    )}
                 </div>
 
                 <Button
                     onClick={() => { resetForm(); setShowCreateDialog(true); }}
+                    disabled={!user?.id}
                     className="h-[34px] px-4 text-[12px] font-medium bg-orange-500 hover:bg-orange-600 text-white rounded-lg shadow-sm gap-1.5"
                 >
                     <Plus className="h-3.5 w-3.5" />
@@ -270,10 +267,14 @@ export function SalaryAdvancesPage() {
                             <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 w-[220px]">Nhân viên</th>
                             <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 text-right w-[150px]">Số tiền</th>
                             <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 w-[200px]">Lý do</th>
-                            <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 text-center w-[120px]">Trạng thái</th>
+                            {canViewApproval && (
+                                <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 text-center w-[120px]">Trạng thái</th>
+                            )}
                             <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 w-[140px]">Ngày tạo</th>
-                            <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 w-[140px]">Người duyệt</th>
-                            {isAdmin && (
+                            {canViewApproval && (
+                                <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 w-[140px]">Người duyệt</th>
+                            )}
+                            {canApprove && (
                                 <th className="px-4 py-3 text-[12px] font-bold text-gray-600 border-b border-gray-200 text-center w-[100px]">Thao tác</th>
                             )}
                         </tr>
@@ -293,27 +294,31 @@ export function SalaryAdvancesPage() {
                                     <td className="px-4 py-3">
                                         <p className="text-[12px] text-gray-600 line-clamp-2">{advance.reason || '---'}</p>
                                     </td>
-                                    <td className="px-4 py-3 text-center">
-                                        <span className={cn(
-                                            "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border",
-                                            statusCfg.bg, statusCfg.color
-                                        )}>
-                                            {statusCfg.icon}
-                                            {statusCfg.label}
-                                        </span>
-                                    </td>
+                                    {canViewApproval && (
+                                        <td className="px-4 py-3 text-center">
+                                            <span className={cn(
+                                                "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border",
+                                                statusCfg.bg, statusCfg.color
+                                            )}>
+                                                {statusCfg.icon}
+                                                {statusCfg.label}
+                                            </span>
+                                        </td>
+                                    )}
                                     <td className="px-4 py-3">
                                         <p className="text-[12px] text-gray-500">{fmtDate(advance.created_at)}</p>
                                     </td>
-                                    <td className="px-4 py-3">
-                                        <p className="text-[12px] text-gray-500">
-                                            {advance.approver?.name || (advance.approved_at ? 'Đã duyệt' : '---')}
-                                        </p>
-                                        {advance.approved_at && (
-                                            <p className="text-[10px] text-gray-400">{fmtDateTime(advance.approved_at)}</p>
-                                        )}
-                                    </td>
-                                    {isAdmin && (
+                                    {canViewApproval && (
+                                        <td className="px-4 py-3">
+                                            <p className="text-[12px] text-gray-500">
+                                                {advance.approver?.name || (advance.approved_at ? 'Đã duyệt' : '---')}
+                                            </p>
+                                            {advance.approved_at && (
+                                                <p className="text-[10px] text-gray-400">{fmtDateTime(advance.approved_at)}</p>
+                                            )}
+                                        </td>
+                                    )}
+                                    {canApprove && (
                                         <td className="px-4 py-3 text-center">
                                             {advance.status === 'pending' ? (
                                                 <div className="flex items-center justify-center gap-1">
@@ -367,7 +372,7 @@ export function SalaryAdvancesPage() {
 
                         {filteredAdvances.length === 0 && (
                             <tr>
-                                <td colSpan={isAdmin ? 7 : 6} className="px-4 py-16 text-center">
+                                <td colSpan={4 + (canViewApproval ? 2 : 0) + (canApprove ? 1 : 0)} className="px-4 py-16 text-center">
                                     <div className="flex flex-col items-center gap-3">
                                         <div className="h-12 w-12 rounded-full bg-gray-100 flex items-center justify-center">
                                             <DollarSign className="h-6 w-6 text-gray-400" />
@@ -393,18 +398,12 @@ export function SalaryAdvancesPage() {
                     <div className="space-y-4 py-2">
                         <div>
                             <Label className="text-[12px] font-semibold text-gray-600 uppercase">Nhân viên *</Label>
-                            <Select value={formUserId} onValueChange={setFormUserId}>
-                                <SelectTrigger className="mt-1.5 h-[38px]">
-                                    <SelectValue placeholder="Chọn nhân viên..." />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {activeUsers.map(u => (
-                                        <SelectItem key={u.id} value={u.id}>
-                                            {u.name} ({u.employee_code || u.role})
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Input
+                                className="mt-1.5 h-[38px] bg-gray-50"
+                                value={user?.name || ''}
+                                readOnly
+                                disabled
+                            />
                         </div>
 
                         <div>
@@ -453,7 +452,7 @@ export function SalaryAdvancesPage() {
                         </DialogClose>
                         <Button
                             onClick={handleCreate}
-                            disabled={submitting || !formUserId || !formAmount}
+                            disabled={submitting || !user?.id || !formAmount}
                             className="h-[36px] text-[13px] bg-orange-500 hover:bg-orange-600 text-white"
                         >
                             {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Plus className="h-4 w-4 mr-1.5" />}

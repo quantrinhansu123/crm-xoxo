@@ -1,4 +1,5 @@
 import { Draggable } from '@hello-pangea/dnd';
+import type { MouseEventHandler } from 'react';
 import { Calendar, Trash2, User, Wrench } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -18,12 +19,13 @@ interface OrderCardProps {
     productGroup: ProductGroup;
     columnId: string;
     index: number;
-    onClick: () => void;
+    href: string;
+    onClick: MouseEventHandler<HTMLAnchorElement>;
     draggable?: boolean;
     onDelete?: (order: Order) => void;
 }
 
-export function OrderCard({ draggableId, order, productGroup, columnId, index, onClick, draggable = true, onDelete }: OrderCardProps) {
+export function OrderCard({ draggableId, order, productGroup, columnId, index, href, onClick, draggable = true, onDelete }: OrderCardProps) {
     const { product, services } = productGroup;
 
     const effectiveProduct = product;
@@ -48,6 +50,15 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
         productGroup.product?.care_warranty_flow === 'warranty' ||
         !!productGroup.product?.warranty_code ||
         productGroup.services?.some(s => s.care_warranty_flow === 'warranty');
+
+    // Cần thu nợ (TN): After sale nhưng chưa qua bước Kiểm nợ (after1 / after1_debt)
+    // Chỉ lấy after_sale_stage — không fallback phase_stage (có thể là war*/care* của chu kỳ khác)
+    const afterSaleStage = (productGroup.product as any)?.after_sale_stage
+        || (productGroup.services?.[0] as any)?.after_sale_stage
+        || null;
+    const needsDebtCollection =
+        columnId === 'after_sale' &&
+        (!afterSaleStage || afterSaleStage === 'after1' || afterSaleStage === 'after1_debt');
 
     const technicianNames = (() => {
         const names = new Set<string>();
@@ -105,12 +116,13 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
     })();
 
     const renderCard = (provided?: any, isDragging = false) => (
-        <div
+        <a
             ref={provided?.innerRef}
             {...(provided?.draggableProps ?? {})}
             {...(provided?.dragHandleProps ?? {})}
+            href={href}
             onClick={onClick}
-            className={`kanban-card p-3 rounded-xl bg-white border shadow-sm cursor-pointer text-sm ${isDragging ? 'shadow-lg ring-2 ring-primary/20' : ''}`}
+            className={`kanban-card block p-3 rounded-xl bg-white border shadow-sm cursor-pointer text-sm ${isDragging ? 'shadow-lg ring-2 ring-primary/20' : ''}`}
         >
                     <div className="flex gap-2 mb-2">
                         <Avatar className="h-12 w-12 shrink-0 rounded-lg overflow-hidden bg-muted">
@@ -136,6 +148,14 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
                                         BH
                                     </Badge>
                                 )}
+                                {needsDebtCollection && (
+                                    <Badge
+                                        className="bg-red-100 text-red-700 border-red-300 hover:bg-red-100 text-[9px] px-1 py-0 h-3.5 shrink-0"
+                                        title="Cần thu nợ"
+                                    >
+                                        TN
+                                    </Badge>
+                                )}
                             </div>
                             <div className="text-[10px] text-primary font-medium mt-0.5 truncate" title={order.customer?.name}>
                                 {order.customer?.name || 'N/A'}
@@ -152,6 +172,7 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
                                 className="h-7 w-7 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
                                 title="Xóa đơn hàng"
                                 onClick={(e) => {
+                                    e.preventDefault();
                                     e.stopPropagation();
                                     onDelete(order);
                                 }}
@@ -220,7 +241,7 @@ export function OrderCard({ draggableId, order, productGroup, columnId, index, o
                             <span className="truncate">{order.sales_user?.name || 'N/A'}</span>
                         </div>
                     </div>
-        </div>
+        </a>
     );
 
     if (!draggable) {

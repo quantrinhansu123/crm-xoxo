@@ -108,7 +108,7 @@ export function MobileInvoicesList({ invoices, loading, onView, onEdit, onDelete
                             <div className="flex h-[20px] items-center gap-1">
                                 <p className="min-w-0 flex-1 truncate text-[10px] leading-none text-muted-foreground">
                                     {customer?.phone && <span>{customer.phone} · </span>}
-                                    {payLabel} · {formatDate(invoice.created_at)}
+                                    {payLabel} · Ngày tạo {formatDate(invoice.created_at)}
                                 </p>
                                 <p className="shrink-0 text-[13px] font-bold leading-none text-primary">
                                     {formatCurrency(amount)}

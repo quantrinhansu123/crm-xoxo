@@ -6,6 +6,11 @@ export interface Customer {
     code?: string;
     name: string;
     phone: string;
+    /** Số Zalo khách (có thể khác SĐT liên hệ) */
+    zalo_phone?: string | null;
+    customer_zalo_phone?: string | null;
+    zalo_user_id?: string | null;
+    customer_zalo_user_id?: string | null;
     dob?: string;
     email?: string;
     type: 'individual' | 'company';

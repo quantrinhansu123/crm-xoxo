@@ -41,6 +41,7 @@ const MOBILE_ORDER_STAT_STYLES: Record<string, { bg: string; label: string }> = 
     in_progress: { bg: 'bg-orange-500', label: 'Đang thực hiện' },
     done: { bg: 'bg-emerald-600', label: 'Đã hoàn thiện' },
     after_sale: { bg: 'bg-teal-600', label: 'After sale' },
+    archived: { bg: 'bg-slate-600', label: 'Lưu trữ' },
     cancelled: { bg: 'bg-rose-500', label: 'Đã huỷ' },
 };
 
@@ -68,6 +69,7 @@ export function OrdersPage() {
     // Confirm done dialog states
     const [showConfirmDoneDialog, setShowConfirmDoneDialog] = useState(false);
     const [confirmDoneItemIds, setConfirmDoneItemIds] = useState<string[]>([]);
+    const [confirmDoneProductId, setConfirmDoneProductId] = useState<string | null>(null);
     const [isV2ServiceForDone, setIsV2ServiceForDone] = useState(false);
     const [orderToCheckStatus, setOrderToCheckStatus] = useState<string | null>(null);
 
@@ -100,45 +102,70 @@ export function OrdersPage() {
         order: Order,
         group: { product: OrderItem | null; services: OrderItem[] },
     ) => {
-        const itemIds: string[] = [];
-        if (group.product) itemIds.push(group.product.id);
-        group.services.forEach(s => itemIds.push(s.id));
-
-        setConfirmDoneItemIds(itemIds);
+        setConfirmDoneItemIds(group.services.map(s => s.id).filter(Boolean));
+        setConfirmDoneProductId(group.product?.id || null);
         setIsV2ServiceForDone(
-            group.services.some(s => s.item_type === 'service' || s.item_type === 'package'),
+            group.services.some(s => s.item_type === 'service' || s.item_type === 'package')
+            || !!(group.product as any)?.is_customer_item,
         );
         setOrderToCheckStatus(order.id);
         setShowConfirmDoneDialog(true);
     };
 
-    const getGroupStatus = (group: { product: OrderItem | null; services: OrderItem[] }, fallbackOrder: Order): string => {
+    /** SP đã vào Lưu trữ / tab Care|Warranty — không dùng care_warranty_flow đơn độc
+     * (BH còn gắn flow=warranty khi vẫn đang after1–after3). */
+    const isArchivedToCareWarranty = (item?: (OrderItem & {
+        after_sale_stage?: string | null;
+        current_phase?: string | null;
+        care_warranty_flow?: string | null;
+        care_warranty_stage?: string | null;
+        phase_stage?: string | null;
+    }) | null) => {
+        if (!item) return false;
+        return (
+            item.after_sale_stage === 'after4'
+            || item.current_phase === 'care'
+            || item.current_phase === 'warranty'
+        );
+    };
+
+    /** null = ẩn (hiếm); 'archived' = cột Lưu trữ trên /orders */
+    const getGroupStatus = (group: { product: OrderItem | null; services: OrderItem[] }, fallbackOrder: Order): string | null => {
+        const allItems = [group.product, ...(group.services || [])].filter(Boolean) as OrderItem[];
         const itemStatus = group.product?.status || group.services?.[0]?.status;
-        
+
+        // 1. Sales / Warranty steps (Before Sale) - Highest priority
+        // Tạo HD Bảo hành (step1–4) vẫn hiện ở Before Sale dù after_sale_stage còn after4
+        if (itemStatus && ['step1', 'step2', 'step3', 'step4', 'pending'].includes(itemStatus)) {
+            return 'before_sale';
+        }
+
+        // 2. Đã Lưu trữ (after4 / Care khen / Bảo hành) → cột Lưu trữ
+        if (allItems.some((it) => isArchivedToCareWarranty(it as any))) {
+            return 'archived';
+        }
+
         if (!itemStatus) {
             return fallbackOrder.status;
         }
 
-        // 1. Sales / Warranty steps (Before Sale) - Highest priority
-        // If an item is being handled by Sales/Warranty, it belongs in "Before Sale"
-        if (['step1', 'step2', 'step3', 'step4', 'pending'].includes(itemStatus)) return 'before_sale';
-
-        // 2. Check for technical workflow progress (In Progress)
-        // If sales are done/confirmed and any item in the group is assigned or being worked on
-        const allItems = [group.product, ...group.services].filter(Boolean) as OrderItem[];
-        const hasActiveTechSteps = allItems.some(item => 
+        // 3. Check for technical workflow progress (In Progress)
+        const hasActiveTechSteps = allItems.some(item =>
             item.order_item_steps?.some(step => ['in_progress', 'assigned'].includes(step.status))
         );
         if (hasActiveTechSteps) return 'in_progress';
 
-        // 3. Explicit In Progress / Processing statuses (from lead item)
+        // 4. Explicit In Progress / Processing statuses (from lead item)
         if (['assigned', 'in_progress', 'processing'].includes(itemStatus)) return 'in_progress';
-        
-        // 4. Completion / After sale statuses
-        if (['completed', 'done'].includes(itemStatus)) return 'done';
+
+        // 5. Completion / After sale statuses
+        if (['completed', 'done'].includes(itemStatus)) {
+            if (fallbackOrder.status === 'after_sale') return 'after_sale';
+            return 'done';
+        }
         if (['delivered', 'after_sale'].includes(itemStatus)) return 'after_sale';
-        
-        // 5. Fallback to order status (e.g. for step5 which is technically "chốt đơn" but waiting for tech)
+
+        // 6. Fallback to order status
         return fallbackOrder.status;
     };
 
@@ -228,7 +255,7 @@ export function OrdersPage() {
             const groups = getOrderProductGroups(order);
             groups.forEach((group, index) => {
                 const groupStatus = getGroupStatus(group, order);
-                if (groupStatus === status) {
+                if (groupStatus && groupStatus === status) {
                     result.push({ order, group, groupIndex: index });
                 }
             });
@@ -603,7 +630,7 @@ export function OrdersPage() {
                     )}
 
                     {/* Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
                         {columns.map((column) => {
                             const count = getCardsByStatus(column.id).length;
                             return (
@@ -620,7 +647,7 @@ export function OrdersPage() {
                     </div>
 
                     <div className="pb-6">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                             {columns.map((column) => (
                                 <div key={column.id} className="min-w-0">
                                     <Card className={`${column.bgColor} border ${column.borderColor} h-full`}>
@@ -672,7 +699,15 @@ export function OrdersPage() {
                                                                 columnId={column.id}
                                                                 index={index}
                                                                 draggable={false}
-                                                                onClick={() => navigate(`/orders/${order.id}`)}
+                                                                href={`/orders/${order.id}`}
+                                                                onClick={(event) => {
+                                                                    const orderPath = `/orders/${order.id}`;
+                                                                    if (event.ctrlKey || event.metaKey) {
+                                                                        return;
+                                                                    }
+                                                                    event.preventDefault();
+                                                                    navigate(orderPath);
+                                                                }}
                                                                 onDelete={canDelete ? handleDeleteOrder : undefined}
                                                             />
                                                         ))}
@@ -723,6 +758,7 @@ export function OrdersPage() {
                 open={showConfirmDoneDialog}
                 onOpenChange={setShowConfirmDoneDialog}
                 itemIds={confirmDoneItemIds}
+                productId={confirmDoneProductId}
                 isV2Service={isV2ServiceForDone}
                 onSuccess={async () => {
                     await fetchOrders();

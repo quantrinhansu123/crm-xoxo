@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../config/supabase.js';
+import { notifyFinanceEvent } from './financeNotifications.js';
 
 export function isPaymentSchemaColumnError(error: { message?: string; code?: string } | null): boolean {
     if (!error) return false;
@@ -308,6 +309,9 @@ export async function reconcileOrderDeposits(opts: {
         });
     }
 
+    // Đảm bảo phiếu thu cọc cũng xuất hiện trên sổ quỹ
+    await syncOrderPaymentsToCashBook(opts.orderId);
+
     const orderPaid = Number(order.paid_amount) || 0;
     if (orderPaid < serviceDepositTotal) {
         const remaining = Math.max(0, (Number(order.total_amount) || 0) - serviceDepositTotal);
@@ -321,6 +325,30 @@ export async function reconcileOrderDeposits(opts: {
             })
             .eq('id', opts.orderId);
     }
+}
+
+/** Sinh mã PT/PC an toàn hơn (tránh trùng UNIQUE do race / chỉ lấy 1 bản ghi mới nhất). */
+export async function generateNextVoucherCode(type: 'income' | 'expense' = 'income'): Promise<string> {
+    const prefix = type === 'income' ? 'PT' : 'PC';
+    const { data: transactions } = await supabaseAdmin
+        .from('transactions')
+        .select('code')
+        .like('code', `${prefix}%`)
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+    let maxNumber = 0;
+    for (const trans of transactions || []) {
+        const num = parseInt(String(trans.code || '').replace(prefix, ''), 10);
+        if (!isNaN(num) && num > maxNumber) maxNumber = num;
+    }
+    return `${prefix}${String(maxNumber + 1).padStart(6, '0')}`;
+}
+
+function isUniqueViolation(error: { code?: string; message?: string } | null): boolean {
+    if (!error) return false;
+    const msg = (error.message || '').toLowerCase();
+    return error.code === '23505' || msg.includes('duplicate') || msg.includes('unique');
 }
 
 /** Ghi phiếu thu tiền cọc theo từng SP khi tạo/cập nhật đơn */
@@ -367,6 +395,129 @@ export async function recordProductDepositPayments(opts: {
     return { total, payments };
 }
 
+/**
+ * Đồng bộ payment_records → sổ quỹ (transactions).
+ * Hóa đơn đọc cả 2 bảng; sổ quỹ chỉ đọc transactions — thiếu sync sẽ mất phiếu thu trên sổ quỹ.
+ */
+export async function syncOrderPaymentsToCashBook(orderId: string): Promise<{ created: number }> {
+    if (!orderId) return { created: 0 };
+
+    const { data: order } = await supabaseAdmin
+        .from('orders')
+        .select('id, order_code')
+        .eq('id', orderId)
+        .maybeSingle();
+
+    if (!order) return { created: 0 };
+
+    const { data: paymentRows } = await supabaseAdmin
+        .from('payment_records')
+        .select('id, amount, payment_method, content, notes, created_by, created_at, order_product_id, transaction_category, transaction_status')
+        .eq('order_id', orderId)
+        .order('created_at', { ascending: true });
+
+    const payments = (paymentRows || []).filter(
+        (p) => (p.transaction_status || 'approved') !== 'cancelled' && Number(p.amount) > 0,
+    );
+
+    if (payments.length === 0) return { created: 0 };
+
+    const { data: transactionRows } = await supabaseAdmin
+        .from('transactions')
+        .select('id, amount, status')
+        .eq('order_id', orderId)
+        .eq('type', 'income')
+        .neq('status', 'cancelled');
+
+    const unusedAmounts = (transactionRows || []).map((t) => Number(t.amount) || 0);
+
+    // Match 1-1 theo số tiền trước
+    const unmatchedPayments: typeof payments = [];
+    for (const pay of payments) {
+        const amount = Number(pay.amount) || 0;
+        const idx = unusedAmounts.findIndex((a) => Math.abs(a - amount) < 1);
+        if (idx >= 0) {
+            unusedAmounts.splice(idx, 1);
+        } else {
+            unmatchedPayments.push(pay);
+        }
+    }
+
+    // Trường hợp gộp: nhiều payment_records = 1 phiếu thu tổng trên sổ quỹ
+    const unmatchedPayTotal = unmatchedPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const unusedTransTotal = unusedAmounts.reduce((s, a) => s + a, 0);
+    if (unmatchedPayments.length > 0 && Math.abs(unmatchedPayTotal - unusedTransTotal) < 1) {
+        return { created: 0 };
+    }
+
+    let created = 0;
+    for (const pay of unmatchedPayments) {
+        const amount = Number(pay.amount) || 0;
+        if (amount <= 0) continue;
+
+        const notes =
+            pay.notes ||
+            pay.content ||
+            `Đồng bộ phiếu thu từ đơn ${order.order_code}`;
+        const category =
+            pay.transaction_category ||
+            (String(pay.content || '').toLowerCase().includes('cọc') ? 'Tiền cọc' : 'Thanh toán đơn hàng');
+        const date = pay.created_at
+            ? new Date(pay.created_at).toISOString().split('T')[0]
+            : new Date().toISOString().split('T')[0];
+
+        let inserted = false;
+        for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
+            const transCode = await generateNextVoucherCode('income');
+            const payload: Record<string, unknown> = {
+                code: transCode,
+                type: 'income',
+                category,
+                amount,
+                payment_method: pay.payment_method || 'cash',
+                notes: `${notes}${notes.includes(order.order_code) ? '' : ` - ${order.order_code}`}`,
+                date,
+                order_id: order.id,
+                order_code: order.order_code,
+                status: 'approved',
+                created_by: pay.created_by,
+                approved_by: pay.created_by,
+                approved_at: pay.created_at || new Date().toISOString(),
+            };
+            if (pay.order_product_id) {
+                payload.order_product_id = pay.order_product_id;
+            }
+
+            const { error } = await supabaseAdmin.from('transactions').insert(payload);
+            if (!error) {
+                inserted = true;
+                created += 1;
+            } else if (isUniqueViolation(error)) {
+                continue;
+            } else if (String(error.message || '').includes('order_product_id')) {
+                delete payload.order_product_id;
+                const retry = await supabaseAdmin.from('transactions').insert(payload);
+                if (!retry.error) {
+                    inserted = true;
+                    created += 1;
+                } else {
+                    console.error('[syncOrderPaymentsToCashBook] insert error:', retry.error.message);
+                    break;
+                }
+            } else {
+                console.error('[syncOrderPaymentsToCashBook] insert error:', error.message);
+                break;
+            }
+        }
+    }
+
+    if (created > 0) {
+        console.log(`[syncOrderPaymentsToCashBook] order ${order.order_code}: created ${created} missing income voucher(s)`);
+    }
+
+    return { created };
+}
+
 export async function createOrderIncomeTransaction(opts: {
     orderId: string;
     orderCode: string;
@@ -374,36 +525,105 @@ export async function createOrderIncomeTransaction(opts: {
     paymentMethod: string;
     notes: string;
     createdBy: string;
+    createdByName?: string;
     category?: string;
-}): Promise<void> {
-    if (opts.amount <= 0) return;
+    orderProductId?: string | null;
+    date?: string;
+    imageUrl?: string | null;
+}): Promise<{ id?: string; code?: string } | null> {
+    if (opts.amount <= 0) return null;
 
-    const { data: lastTrans } = await supabaseAdmin
-        .from('transactions')
-        .select('code')
-        .like('code', 'PT%')
-        .order('created_at', { ascending: false })
-        .limit(1);
+    let transaction: { id: string; code: string } | null = null;
+    let lastError: { message?: string } | null = null;
 
-    let transCode = 'PT000001';
-    if (lastTrans?.length) {
-        const lastNum = parseInt(lastTrans[0].code.replace('PT', ''), 10);
-        transCode = `PT${String(lastNum + 1).padStart(6, '0')}`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const transCode = await generateNextVoucherCode('income');
+        const payload: Record<string, unknown> = {
+            code: transCode,
+            type: 'income',
+            category: opts.category || 'Thanh toán đơn hàng',
+            amount: opts.amount,
+            payment_method: opts.paymentMethod || 'cash',
+            notes: opts.notes,
+            date: opts.date || new Date().toISOString().split('T')[0],
+            order_id: opts.orderId,
+            order_code: opts.orderCode,
+            status: 'approved',
+            created_by: opts.createdBy,
+            approved_by: opts.createdBy,
+            approved_at: new Date().toISOString(),
+        };
+        if (opts.imageUrl) payload.image_url = opts.imageUrl;
+        if (opts.orderProductId) payload.order_product_id = opts.orderProductId;
+
+        const { data, error } = await supabaseAdmin
+            .from('transactions')
+            .insert(payload)
+            .select('id, code')
+            .single();
+
+        if (!error && data) {
+            transaction = data;
+            break;
+        }
+
+        lastError = error;
+        if (error && String(error.message || '').includes('order_product_id') && payload.order_product_id) {
+            delete payload.order_product_id;
+            const retry = await supabaseAdmin.from('transactions').insert(payload).select('id, code').single();
+            if (!retry.error && retry.data) {
+                transaction = retry.data;
+                break;
+            }
+            lastError = retry.error;
+        }
+        if (!isUniqueViolation(error)) break;
     }
 
-    await supabaseAdmin.from('transactions').insert({
-        code: transCode,
-        type: 'income',
-        category: opts.category || 'Thanh toán đơn hàng',
-        amount: opts.amount,
-        payment_method: opts.paymentMethod || 'cash',
-        notes: opts.notes,
-        date: new Date().toISOString().split('T')[0],
-        order_id: opts.orderId,
-        order_code: opts.orderCode,
-        status: 'approved',
-        created_by: opts.createdBy,
-        approved_by: opts.createdBy,
-        approved_at: new Date().toISOString(),
+    if (!transaction) {
+        console.error('[createOrderIncomeTransaction] insert error:', lastError?.message);
+        return null;
+    }
+
+    let actorName = opts.createdByName || null;
+    let actorRole = 'sale';
+    if (!actorName && opts.createdBy) {
+        const { data: user } = await supabaseAdmin
+            .from('users')
+            .select('id, name, role')
+            .eq('id', opts.createdBy)
+            .maybeSingle();
+        actorName = user?.name || null;
+        actorRole = user?.role || 'sale';
+    }
+
+    notifyFinanceEvent({
+        event: 'receipt.created',
+        title: 'Phiếu thu mới',
+        message: `${actorName || 'Hệ thống'} đã tạo phiếu thu ${transaction.code}`,
+        actor: { id: opts.createdBy, name: actorName || 'Hệ thống', role: actorRole },
+        recipientUserIds: [opts.createdBy],
+        data: {
+            transaction_id: transaction.id,
+            receipt_id: transaction.id,
+            code: transaction.code,
+            voucher_code: transaction.code,
+            type: 'income',
+            category: opts.category || 'Thanh toán đơn hàng',
+            amount: opts.amount,
+            payment_method: opts.paymentMethod || 'cash',
+            status: 'approved',
+            order_id: opts.orderId,
+            order_code: opts.orderCode,
+            notes: opts.notes,
+            content: opts.notes,
+            reason: opts.notes,
+            created_by: opts.createdBy,
+            created_by_name: actorName,
+            collector_name: actorName,
+            received_by_name: actorName,
+        },
     });
+
+    return transaction;
 }

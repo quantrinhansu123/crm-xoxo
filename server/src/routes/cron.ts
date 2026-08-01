@@ -1,9 +1,10 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { checkAllSLA } from '../utils/slaManager.js';
+import { checkAllSLA } from '../utils/leadSlaStateMachine.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { supabaseAdmin } from '../config/supabase.js';
 import { autoLogKpiViolation } from '../utils/kpiViolationLogger.js';
 import { fireWebhook } from '../utils/webhookNotifier.js';
+import { buildFrontendUrl } from '../config/index.js';
 
 const router = Router();
 
@@ -49,6 +50,24 @@ router.get('/check-sla', verifyCronSecret, async (req: Request, res: Response, n
 });
 
 /**
+ * GET /api/cron/cuti-outbox
+ * Flush CUTI transactional outbox retries
+ */
+router.get('/cuti-outbox', verifyCronSecret, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { publishPendingOutbox } = await import('../cuti/outbox.js');
+        const delivered = await publishPendingOutbox(Number(req.query.limit) || 50);
+        res.json({
+            status: 'success',
+            delivered,
+            timestamp: new Date().toISOString(),
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
  * GET /api/cron/test-webhook
  * Trigger a dummy webhook to verify n8n integration
  */
@@ -61,7 +80,7 @@ router.get('/test-webhook', verifyCronSecret, async (req: Request, res: Response
             message: 'Đây là tin nhắn test từ hệ thống CRM SLA Engine',
             triggered_by: 'Manual Trigger',
             tele_id_sale: '123456789', // Dummy ID for testing
-            link_lead: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/leads/test-id`,
+            link_lead: buildFrontendUrl('/leads/test-id'),
             server_time: new Date().toISOString()
         });
         

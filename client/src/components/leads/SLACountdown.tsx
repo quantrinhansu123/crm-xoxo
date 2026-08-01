@@ -11,6 +11,8 @@ interface SLACountdownProps {
         current_deadline_at?: string;
         current_rule_index?: number;
         sla_state?: string;
+        sla_paused_at?: string | null;
+        sla_remaining_seconds?: number | null;
         created_at?: string;
     };
     size?: 'sm' | 'md' | 'lg';
@@ -26,14 +28,38 @@ export function SLACountdown({ lead, size = 'md', className }: SLACountdownProps
     }, []);
 
     const slaData = useMemo(() => {
-        // Only show for assigned leads that are not chot_don, huy, fail, FINISHED, RECLAIMED, STOPPED
         const endStages = ['chot_don', 'huy', 'fail'];
-        const endStates = ['FINISHED', 'RECLAIMED', 'STOPPED'];
+        const endStates = [
+            'FINISHED', 'RECLAIMED', 'STOPPED',
+            'STOPPED_WON', 'STOPPED_FAILED',
+        ];
         
-        if (!lead.assigned_to || 
+        if (
             endStages.includes(lead.pipeline_stage || '') || 
-            endStates.includes(lead.sla_state || '')) {
+            endStates.includes(lead.sla_state || '')
+        ) {
             return null;
+        }
+
+        // Shared pool without active deadline — no countdown
+        if (
+            (lead.sla_state === 'SHARED_WAITING_SALE' || lead.sla_state === 'UNASSIGNED_IDLE') &&
+            !lead.current_deadline_at
+        ) {
+            return null;
+        }
+
+        if (lead.sla_paused_at || lead.sla_state === 'PAUSED_FOLLOWUP') {
+            const rem = Number((lead as any).sla_remaining_seconds || 0);
+            const m = Math.floor(rem / 60);
+            const s = rem % 60;
+            return {
+                remainingTime: `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`,
+                label: 'Tạm dừng',
+                colorClass: 'bg-slate-500 text-white',
+                isBlinking: false,
+                isSpeedRule: false,
+            };
         }
 
         if (lead.sla_state === 'PAUSED_APPOINTMENT') {
@@ -106,19 +132,18 @@ export function SLACountdown({ lead, size = 'md', className }: SLACountdownProps
             colorClass = 'bg-red-600 text-white';
             isBlinking = true;
         } else {
-            const ratio = remainingSec / totalSec;
-            if (ratio <= 0.5) {
-                // Warning phase
-                colorClass = 'bg-amber-500 text-white';
-                
-                // Alert threshold phase (bắt đầu nhấp nháy đỏ)
-                let warnThresholdSec = 45 * 60; // 45 phút = 2700 giây cho tất cả mốc dài
-                if (currentMilestone <= 3) warnThresholdSec = 90; // 90 giây cho mốc 3 phút
+            // Đỏ chớp: 90s cuối (mốc 3p) hoặc 45p cuối (mốc dài) — ưu tiên trước ngưỡng 50%
+            let warnThresholdSec = 45 * 60;
+            if (currentMilestone <= 3) warnThresholdSec = 90;
 
-                if (remainingSec <= warnThresholdSec) {
-                    colorClass = 'bg-red-500 text-white';
-                    isBlinking = true;
-                }
+            const ratio = remainingSec / totalSec;
+            if (remainingSec <= warnThresholdSec) {
+                colorClass = 'bg-red-500 text-white';
+                isBlinking = true;
+            } else if (ratio <= 0.5) {
+                colorClass = 'bg-amber-500 text-white';
+            } else {
+                colorClass = 'bg-emerald-500 text-white';
             }
         }
 

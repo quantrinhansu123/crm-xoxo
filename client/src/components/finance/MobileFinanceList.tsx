@@ -4,7 +4,8 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal, Trash2, Eye, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import { MoreHorizontal, Trash2, Eye, ArrowUpRight, ArrowDownLeft, History } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface Voucher {
     id: string;
@@ -24,6 +25,9 @@ interface MobileFinanceListProps {
     loading: boolean;
     onView?: (voucher: Voucher) => void;
     onDelete?: (voucherId: string) => void;
+    selectedIds?: string[];
+    onToggleSelect?: (id: string) => void;
+    onViewHistory?: (id: string) => void;
 }
 
 function formatCurrency(amount: number): string {
@@ -46,6 +50,9 @@ export function MobileFinanceList({
     loading,
     onView,
     onDelete,
+    selectedIds = [],
+    onToggleSelect,
+    onViewHistory,
 }: MobileFinanceListProps) {
     if (loading) {
         return (
@@ -75,12 +82,22 @@ export function MobileFinanceList({
                 const isIncome = voucher.type === 'income';
                 const TypeIcon = isIncome ? ArrowDownLeft : ArrowUpRight;
 
+                const isSelected = selectedIds.includes(voucher.id);
+
                 return (
                     <Card key={voucher.id} className="overflow-hidden hover:shadow-md transition-shadow">
                         <CardContent className="p-3">
                             <div className="flex items-start justify-between gap-2">
                                 {/* Left side - Icon + Info */}
                                 <div className="flex items-start gap-2 flex-1 min-w-0">
+                                    {onToggleSelect && (
+                                        <Checkbox
+                                            checked={isSelected}
+                                            onCheckedChange={() => onToggleSelect(voucher.id)}
+                                            aria-label="Chọn phiếu"
+                                            className="mt-2 shrink-0"
+                                        />
+                                    )}
                                     <div className={`p-2 rounded-lg shrink-0 ${
                                         isIncome
                                             ? 'bg-green-100 text-green-600'
@@ -120,32 +137,42 @@ export function MobileFinanceList({
                                         {isIncome ? '+' : '-'}{formatCurrency(voucher.amount)}
                                     </p>
 
-                                    {(onView || onDelete) && (
-                                        <DropdownMenu>
-                                            <DropdownMenuTrigger asChild>
-                                                <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                                                    <MoreHorizontal className="h-4 w-4" />
-                                                </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                                {onView && (
-                                                    <DropdownMenuItem onClick={() => onView(voucher)}>
-                                                        <Eye className="h-4 w-4 mr-2" />
-                                                        Xem
-                                                    </DropdownMenuItem>
-                                                )}
-                                                {onDelete && (
-                                                    <DropdownMenuItem
-                                                        onClick={() => onDelete(voucher.id)}
-                                                        className="text-destructive"
-                                                    >
-                                                        <Trash2 className="h-4 w-4 mr-2" />
-                                                        Xóa
-                                                    </DropdownMenuItem>
-                                                )}
-                                            </DropdownMenuContent>
-                                        </DropdownMenu>
-                                    )}
+                                    <div className="flex items-center gap-0.5">
+                                        {onDelete && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 w-7 p-0 text-rose-600 hover:bg-rose-50"
+                                                title="Xóa"
+                                                onClick={() => onDelete(voucher.id)}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        )}
+                                        {(onView || onViewHistory) && (
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                                                        <MoreHorizontal className="h-4 w-4" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    {onView && (
+                                                        <DropdownMenuItem onClick={() => onView(voucher)}>
+                                                            <Eye className="h-4 w-4 mr-2" />
+                                                            Xem
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {onViewHistory && (
+                                                        <DropdownMenuItem onClick={() => onViewHistory(voucher.id)}>
+                                                            <History className="h-4 w-4 mr-2" />
+                                                            Lịch sử sửa
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </CardContent>

@@ -19,8 +19,20 @@ interface RevenueData {
     total: number;
     previousPeriod: number;
     growth: number;
+    invoiceCount?: number;
     byMonth: { month: string; value: number }[];
     bySource: { source: string; value: number; percent: number }[];
+}
+
+interface AccountingData {
+    totalIncome: number;
+    totalExpense: number;
+    balance: number;
+    previousIncome: number;
+    previousExpense: number;
+    previousBalance: number;
+    incomeByCategory: { category: string; amount: number }[];
+    expenseByCategory: { category: string; amount: number }[];
 }
 
 interface SalesData {
@@ -39,6 +51,7 @@ interface HRData {
 
 interface ReportSummary {
     revenue: RevenueData;
+    accounting: AccountingData;
     sales: SalesData;
     hr: HRData;
 }
@@ -258,13 +271,27 @@ export function ReportsPage() {
     };
 
     // Default empty data
-    const emptyRevenue: RevenueData = { total: 0, previousPeriod: 0, growth: 0, byMonth: [], bySource: [] };
+    const emptyRevenue: RevenueData = { total: 0, previousPeriod: 0, growth: 0, invoiceCount: 0, byMonth: [], bySource: [] };
+    const emptyAccounting: AccountingData = {
+        totalIncome: 0,
+        totalExpense: 0,
+        balance: 0,
+        previousIncome: 0,
+        previousExpense: 0,
+        previousBalance: 0,
+        incomeByCategory: [],
+        expenseByCategory: [],
+    };
     const emptySales: SalesData = { totalOrders: 0, totalCustomers: 0, avgOrderValue: 0, topProducts: [], bySalesperson: [] };
     const emptyHR: HRData = { totalEmployees: 0, totalSalary: 0, byDepartment: [] };
 
     const revenueData = reportData?.revenue || emptyRevenue;
+    const accountingData = reportData?.accounting || emptyAccounting;
     const salesData = reportData?.sales || emptySales;
     const hrData = reportData?.hr || emptyHR;
+    const balanceGrowth = accountingData.previousBalance !== 0
+        ? Number((((accountingData.balance - accountingData.previousBalance) / Math.abs(accountingData.previousBalance)) * 100).toFixed(1))
+        : (accountingData.balance !== 0 ? 100 : 0);
 
     // Get period label
     const periodLabels: Record<string, string> = {
@@ -293,17 +320,45 @@ export function ReportsPage() {
             reportContent = `
                 <div class="summary-cards">
                     <div class="card">
-                        <h3>Tổng doanh thu</h3>
+                        <h3>Tổng thu (hạch toán)</h3>
+                        <p class="value">${formatCurrency(accountingData.totalIncome)}</p>
+                    </div>
+                    <div class="card">
+                        <h3>Tổng chi (hạch toán)</h3>
+                        <p class="value">${formatCurrency(accountingData.totalExpense)}</p>
+                    </div>
+                    <div class="card">
+                        <h3>Số dư kỳ</h3>
+                        <p class="value">${formatCurrency(accountingData.balance)}</p>
+                    </div>
+                    <div class="card">
+                        <h3>Doanh thu thuần (HĐ đã TT)</h3>
                         <p class="value">${formatCurrency(revenueData.total)}</p>
                         <p class="change ${revenueData.growth >= 0 ? 'positive' : 'negative'}">
                             ${revenueData.growth >= 0 ? '+' : ''}${revenueData.growth.toFixed(1)}% so với kỳ trước
                         </p>
                     </div>
-                    <div class="card">
-                        <h3>Kỳ trước</h3>
-                        <p class="value">${formatCurrency(revenueData.previousPeriod)}</p>
-                    </div>
                 </div>
+                ${accountingData.incomeByCategory?.length > 0 ? `
+                <div class="section">
+                    <h3>Thu theo danh mục</h3>
+                    <table>
+                        <thead><tr><th>Danh mục</th><th>Số tiền</th></tr></thead>
+                        <tbody>
+                            ${accountingData.incomeByCategory.map(c => `<tr><td>${c.category}</td><td>${formatCurrency(c.amount)}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>` : ''}
+                ${accountingData.expenseByCategory?.length > 0 ? `
+                <div class="section">
+                    <h3>Chi theo danh mục</h3>
+                    <table>
+                        <thead><tr><th>Danh mục</th><th>Số tiền</th></tr></thead>
+                        <tbody>
+                            ${accountingData.expenseByCategory.map(c => `<tr><td>${c.category}</td><td>${formatCurrency(c.amount)}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>` : ''}
                 ${revenueData.byMonth?.length > 0 ? `
                 <div class="section">
                     <h3>Doanh thu theo tháng</h3>
@@ -316,9 +371,9 @@ export function ReportsPage() {
                 </div>` : ''}
                 ${revenueData.bySource?.length > 0 ? `
                 <div class="section">
-                    <h3>Doanh thu theo nguồn</h3>
+                    <h3>Cơ cấu đơn hoàn thành theo nguồn</h3>
                     <table>
-                        <thead><tr><th>Nguồn</th><th>Doanh thu</th><th>Tỷ lệ</th></tr></thead>
+                        <thead><tr><th>Nguồn</th><th>Giá trị</th><th>Tỷ lệ</th></tr></thead>
                         <tbody>
                             ${revenueData.bySource.map(s => `<tr><td>${s.source}</td><td>${formatCurrency(s.value)}</td><td>${s.percent.toFixed(1)}%</td></tr>`).join('')}
                         </tbody>
@@ -606,36 +661,111 @@ export function ReportsPage() {
 
                 {/* Revenue Report */}
                 <TabsContent value="revenue" className="space-y-6">
-                    {/* Overview Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <StatCard
-                            title="Tổng doanh thu"
-                            value={revenueData.total}
-                            change={revenueData.growth}
-                            icon={DollarSign}
-                            color="green"
-                        />
-                        <StatCard
-                            title="Kỳ trước"
-                            value={revenueData.previousPeriod}
-                            icon={TrendingUp}
-                            color="blue"
-                        />
-                        <StatCard
-                            title="Tăng trưởng"
-                            value={`${revenueData.growth}%`}
-                            icon={TrendingUp}
-                            color="purple"
-                        />
-                        <StatCard
-                            title="Trung bình/tháng"
-                            value={revenueData.byMonth.length > 0 ? Math.round(revenueData.total / revenueData.byMonth.length) : 0}
-                            icon={BarChart3}
-                            color="amber"
-                        />
+                    {/* Hạch toán sổ quỹ — cùng nguồn với trang Tài chính */}
+                    <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-3">Hạch toán sổ quỹ (phiếu thu/chi đã duyệt)</p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <StatCard
+                                title="Tổng thu"
+                                value={accountingData.totalIncome}
+                                icon={TrendingUp}
+                                color="green"
+                            />
+                            <StatCard
+                                title="Tổng chi"
+                                value={accountingData.totalExpense}
+                                icon={TrendingDown}
+                                color="amber"
+                            />
+                            <StatCard
+                                title="Số dư kỳ"
+                                value={accountingData.balance}
+                                change={balanceGrowth}
+                                icon={DollarSign}
+                                color="blue"
+                            />
+                            <StatCard
+                                title="Số dư kỳ trước"
+                                value={accountingData.previousBalance}
+                                icon={BarChart3}
+                                color="purple"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Doanh thu từ hóa đơn đã thanh toán */}
+                    <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-3">
+                            Doanh thu thuần (hóa đơn đã thanh toán{revenueData.invoiceCount != null ? ` · ${revenueData.invoiceCount} HĐ` : ''})
+                        </p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <StatCard
+                                title="Tổng doanh thu"
+                                value={revenueData.total}
+                                change={revenueData.growth}
+                                icon={DollarSign}
+                                color="green"
+                            />
+                            <StatCard
+                                title="Kỳ trước"
+                                value={revenueData.previousPeriod}
+                                icon={TrendingUp}
+                                color="blue"
+                            />
+                            <StatCard
+                                title="Tăng trưởng"
+                                value={`${revenueData.growth}%`}
+                                icon={TrendingUp}
+                                color="purple"
+                            />
+                            <StatCard
+                                title="Trung bình/tháng"
+                                value={revenueData.byMonth.length > 0 ? Math.round(revenueData.total / revenueData.byMonth.length) : 0}
+                                icon={BarChart3}
+                                color="amber"
+                            />
+                        </div>
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-6">
+                        {/* Income / Expense by category */}
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    <PieChart className="h-5 w-5 text-primary" />
+                                    Thu chi theo danh mục
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                {(accountingData.incomeByCategory.length > 0 || accountingData.expenseByCategory.length > 0) ? (
+                                    <div className="space-y-4">
+                                        {accountingData.incomeByCategory.slice(0, 5).map((item, index) => (
+                                            <div key={`inc-${index}`} className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="h-3 w-3 rounded-full bg-emerald-500" />
+                                                    <span className="text-sm">{item.category}</span>
+                                                    <Badge variant="outline" className="text-xs">Thu</Badge>
+                                                </div>
+                                                <span className="font-medium text-emerald-600">{formatCurrency(item.amount)}</span>
+                                            </div>
+                                        ))}
+                                        {accountingData.expenseByCategory.slice(0, 5).map((item, index) => (
+                                            <div key={`exp-${index}`} className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="h-3 w-3 rounded-full bg-red-500" />
+                                                    <span className="text-sm">{item.category}</span>
+                                                    <Badge variant="outline" className="text-xs">Chi</Badge>
+                                                </div>
+                                                <span className="font-medium text-red-600">{formatCurrency(item.amount)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-center text-muted-foreground py-8">Chưa có phiếu thu/chi đã duyệt trong kỳ</p>
+                                )}
+                            </CardContent>
+                        </Card>
+
                         {/* Revenue by Month */}
                         <Card>
                             <CardHeader>
@@ -657,17 +787,17 @@ export function ReportsPage() {
                         </Card>
 
                         {/* Revenue by Source */}
-                        <Card>
+                        <Card className="md:col-span-2">
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2">
                                     <PieChart className="h-5 w-5 text-primary" />
-                                    Doanh thu theo nguồn
+                                    Cơ cấu đơn hoàn thành theo nguồn
                                 </CardTitle>
                             </CardHeader>
                             <CardContent>
                                 {revenueData.bySource.length > 0 ? (
-                                    <>
-                                        <div className="flex items-center justify-center mb-6">
+                                    <div className="grid md:grid-cols-2 gap-6 items-center">
+                                        <div className="flex items-center justify-center">
                                             <DonutChart
                                                 data={revenueData.bySource.map((item, index) => {
                                                     const colors = ['#10b981', '#3b82f6', '#a855f7', '#f59e0b'];
@@ -678,7 +808,7 @@ export function ReportsPage() {
                                                         color: colors[index % colors.length]
                                                     };
                                                 })}
-                                                total={revenueData.total}
+                                                total={revenueData.bySource.reduce((s, i) => s + i.value, 0)}
                                                 size={160}
                                                 strokeWidth={28}
                                             />
@@ -700,7 +830,7 @@ export function ReportsPage() {
                                                 );
                                             })}
                                         </div>
-                                    </>
+                                    </div>
                                 ) : (
                                     <p className="text-center text-muted-foreground py-8">Chưa có dữ liệu</p>
                                 )}

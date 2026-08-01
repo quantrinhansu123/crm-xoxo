@@ -7,20 +7,22 @@ import { autoCreateInvoice, syncInvoiceWithOrder } from '../utils/billingHelper.
 import {
     createOrderIncomeTransaction,
     distributeDepositAcrossCustomerItems,
+    fetchOrderPaymentRecords,
+    insertPaymentRecord,
     recordProductDepositPayments,
+    syncOrderPaymentsToCashBook,
 } from '../utils/paymentRecordsHelper.js';
-import { notifyFinanceEvent } from '../utils/financeNotifications.js';
 import { notifyCrmMaster } from '../utils/webhookNotifier.js';
 import { buildCrmOrderUrl, getManagerRecipients, notifyCrmMasterUser } from '../utils/n8nCrmEvents.js';
-import { fetchOrderPaymentRecords, insertPaymentRecord } from '../utils/paymentRecordsHelper.js';
 import { deleteOrderCascade } from '../utils/orderDeletionHelper.js';
 
 
 const router = Router();
+
 async function getOrderNotificationContext(orderId: string) {
     const { data: order, error } = await supabaseAdmin
         .from('orders')
-        .select('id, order_code, sales_id, due_at, customer:customers(id, name, phone, zalo_user_id, customer_zalo_user_id), sales_user:users!orders_sales_id_fkey(id, name, role, telegram_chat_id)')
+        .select('id, order_code, sales_id, due_at, customer:customers(id, name, phone, zalo_phone, customer_zalo_phone, zalo_user_id, customer_zalo_user_id), sales_user:users!orders_sales_id_fkey(id, name, role, telegram_chat_id)')
         .eq('id', orderId)
         .maybeSingle();
 
@@ -42,6 +44,9 @@ function notifyOrderSalesUser(event: string, context: any, extra: Record<string,
         return;
     }
 
+    const saleName = context.salesUser?.name || null;
+    const createdByName = context.createdByName || context.order?.created_by_name || null;
+
     notifyCrmMasterUser(event, {
         target_user_id: targetUserId,
         target_role: context.salesUser?.role || 'sale',
@@ -50,8 +55,13 @@ function notifyOrderSalesUser(event: string, context: any, extra: Record<string,
             id: context.order.id,
             order_code: context.order.order_code,
             return_due_at: context.order.due_at || null,
+            sale_name: saleName,
+            sales_name: saleName,
+            created_by_name: createdByName,
+            status: context.order.status || null,
         },
         customer: context.customer ? {
+            id: context.customer.id,
             name: context.customer.name,
             phone: context.customer.phone,
             zalo_user_id: context.customer.zalo_user_id || context.customer.customer_zalo_user_id || null,
@@ -62,6 +72,10 @@ function notifyOrderSalesUser(event: string, context: any, extra: Record<string,
             role: context.salesUser.role || 'sale',
             telegram_chat_id: context.salesUser.telegram_chat_id || null,
         } : null,
+        sale_name: saleName,
+        sales_name: saleName,
+        created_by_name: createdByName,
+        order_code: context.order.order_code,
         links: { crm_url: buildCrmOrderUrl(context.order.order_code || context.order.id) },
         ...extra,
     });
@@ -80,22 +94,58 @@ function notifyOrderCustomerZalo(event: string, context: any, extra: Record<stri
         return;
     }
 
+    const customerName = context.customer?.name || null;
+    const customerPhone = context.customer?.phone || null;
+    const zaloPhone = context.customer?.zalo_phone
+        || context.customer?.customer_zalo_phone
+        || customerPhone
+        || null;
+    const productName = extra.product_name || extra.item?.product_name || null;
+    const currentStep = extra.current_step || extra.event_step || event;
+    const status = extra.status || context.order?.status || null;
+    const imageUrl = extra.image_url || extra.product_image_url || extra.links?.image_url || null;
+    const videoUrl = extra.video_url || extra.links?.video_url || null;
+
     notifyCrmMasterUser(event, {
         target_user_id: zaloUserId,
         target_role: 'customer',
         channel: 'zalo',
+        event,
+        current_step: currentStep,
+        status,
+        order_code: context.order.order_code,
+        product_name: productName,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        zalo_phone: zaloPhone,
+        customer_zalo_phone: zaloPhone,
+        zalo_user_id: zaloUserId,
+        image_url: imageUrl,
+        video_url: videoUrl,
+        product_image_url: imageUrl,
         order: {
             id: context.order.id,
             order_code: context.order.order_code,
             return_due_at: context.order.due_at || null,
+            status: context.order.status || null,
+            sale_name: context.salesUser?.name || null,
+            sales_name: context.salesUser?.name || null,
         },
         customer: context.customer ? {
             id: context.customer.id,
-            name: context.customer.name,
-            phone: context.customer.phone,
+            name: customerName,
+            phone: customerPhone,
+            customer_name: customerName,
+            customer_phone: customerPhone,
+            zalo_phone: zaloPhone,
+            customer_zalo_phone: zaloPhone,
             zalo_user_id: zaloUserId,
         } : null,
-        links: {},
+        links: {
+            ...(imageUrl ? { image_url: imageUrl } : {}),
+            ...(videoUrl ? { video_url: videoUrl } : {}),
+            crm_url: buildCrmOrderUrl(context.order.order_code || context.order.id),
+        },
         ...extra,
     });
 }
@@ -217,7 +267,7 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                 const { data: v2Products } = await supabaseAdmin
                     .from('order_products')
                     .select(`
-                        id, order_id, product_code, name, type, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
+                        id, order_id, product_code, name, type, brand, color, size, material, condition_before, notes, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
                         services:order_product_services(
                             id, item_name, item_type, unit_price, technician_id, current_phase, phase_stage,
                             service:services(id, image, code),
@@ -280,6 +330,15 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                 due_at: product.due_at || null,
                                 surcharges: product.surcharges || [],
                                 surcharge_amount: product.surcharge_amount || 0,
+                                product_type: product.type || null,
+                                product_brand: product.brand || null,
+                                product_color: product.color || null,
+                                product_size: product.size || null,
+                                product_material: product.material || null,
+                                product_condition_before: product.condition_before || null,
+                                product_notes: product.notes || null,
+                                current_phase: product.current_phase || null,
+                                phase_stage: product.phase_stage || null,
                             });
                             if (product.services?.length) {
                                 for (const s of product.services as any[]) {
@@ -315,6 +374,8 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                         delivery_code: product.delivery_code || null,
                                         delivery_carrier: product.delivery_carrier || null,
                                         delivery_type: product.delivery_type || null,
+                                        current_phase: product.current_phase || s.current_phase || null,
+                                        phase_stage: product.phase_stage || s.phase_stage || null,
                                     });
                                 }
                             }
@@ -324,6 +385,7 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                 }
             }
 
+            res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
             return res.json({
                 status: 'success',
                 data: {
@@ -372,7 +434,7 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             const { data: v2Products } = await supabaseAdmin
                 .from('order_products')
                 .select(`
-                    id, order_id, product_code, name, type, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
+                    id, order_id, product_code, name, type, brand, color, size, material, condition_before, notes, images, status, sales_step_data, after_sale_stage, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, completion_photos, packaging_photos, delivery_code, delivery_carrier, delivery_type, due_at, surcharges, surcharge_amount, warranty_code,
                     services:order_product_services(
                         id, item_name, item_type, unit_price, technician_id, current_phase, phase_stage,
                         service:services(id, image, code),
@@ -436,6 +498,15 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                 due_at: product.due_at || null,
                                 surcharges: product.surcharges || [],
                                 surcharge_amount: product.surcharge_amount || 0,
+                                product_type: product.type || null,
+                                product_brand: product.brand || null,
+                                product_color: product.color || null,
+                                product_size: product.size || null,
+                                product_material: product.material || null,
+                                product_condition_before: product.condition_before || null,
+                                product_notes: product.notes || null,
+                                current_phase: product.current_phase || null,
+                                phase_stage: product.phase_stage || null,
                             });
                         if (product.services?.length) {
                             for (const s of product.services as any[]) {
@@ -472,6 +543,8 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
                                     delivery_carrier: product.delivery_carrier || null,
                                     delivery_type: product.delivery_type || null,
                                     order_item_steps: s.order_item_steps || [],
+                                    current_phase: product.current_phase || s.current_phase || null,
+                                    phase_stage: product.phase_stage || s.phase_stage || null,
                                 });
                             }
                         }
@@ -481,6 +554,7 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
             }
         }
 
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.json({
             status: 'success',
             data: {
@@ -633,7 +707,16 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                     surcharge_amount: product.surcharge_amount || 0,
                     due_at: product.due_at || null,
                     current_phase: product.current_phase || null,
-                    phase_stage: product.phase_stage || null
+                    phase_stage: product.phase_stage || null,
+                    // Mỗi sản phẩm điền độc lập — không dùng chung dữ liệu cấp đơn
+                    aftersale_receiver_name: product.aftersale_receiver_name || null,
+                    debt_checked: product.debt_checked || false,
+                    debt_checked_notes: product.debt_checked_notes || null,
+                    debt_checked_by_name: product.debt_checked_by_name || null,
+                    delivery_creator_name: product.delivery_creator_name || null,
+                    delivery_shipper_phone: product.delivery_shipper_phone || null,
+                    delivery_staff_name: product.delivery_staff_name || null,
+                    delivery_received_at: product.delivery_received_at || null,
                 });
 
                 if (product.services && product.services.length > 0) {
@@ -657,6 +740,7 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                             unit_price: s.unit_price,
                             total_price: s.unit_price,
                             status: s.status,
+                            notes: s.sale_note || null,
                             technician_id: s.technician_id,
                             technician: s.technician,
                             technicians: technicians,
@@ -668,7 +752,7 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                             assigned_at: s.assigned_at,
                             is_customer_item: true, // Mark as customer item for grouping in OrderDetailPage
                             sales_step_data: product.sales_step_data, // Inherit from parent product
-                            after_sale_stage: s.after_sale_stage ?? product.after_sale_stage ?? null,
+                            after_sale_stage: s.after_sale_stage ?? null,
                             care_warranty_flow: s.care_warranty_flow ?? product.care_warranty_flow ?? null,
                             care_warranty_stage: s.care_warranty_stage ?? product.care_warranty_stage ?? null,
                             warranty_code: product.warranty_code || null,
@@ -681,8 +765,8 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                                 id: product.id,
                                 image: product.images?.[0] || null
                             },
-                            current_phase: s.current_phase || product.current_phase || null,
-                            phase_stage: s.phase_stage || product.phase_stage || null
+                            current_phase: s.current_phase || null,
+                            phase_stage: s.phase_stage || null
                         });
                     }
                 }
@@ -775,7 +859,7 @@ router.get('/:id/kanban-logs', authenticate, async (req: AuthenticatedRequest, r
         if (tab === 'aftersale') {
             const { data: logs, error } = await supabaseAdmin
                 .from('order_after_sale_stage_log')
-                .select('id, entity_type, entity_id, from_stage, to_stage, created_by, created_at, created_by_user:users!order_after_sale_stage_log_created_by_fkey(id, name)')
+                .select('id, entity_type, entity_id, from_stage, to_stage, notes, photos, created_by, created_at, created_by_user:users!order_after_sale_stage_log_created_by_fkey(id, name)')
                 .eq('order_id', orderId)
                 .order('created_at', { ascending: false })
                 .limit(100);
@@ -854,7 +938,7 @@ router.get('/:id/kanban-logs', authenticate, async (req: AuthenticatedRequest, r
         if (tab === 'care') {
             const { data: logs, error } = await supabaseAdmin
                 .from('order_care_warranty_log')
-                .select('id, entity_type, entity_id, from_stage, to_stage, flow_type, created_by, created_at, created_by_user:users!order_care_warranty_log_created_by_fkey(id, name)')
+                .select('id, entity_type, entity_id, from_stage, to_stage, flow_type, notes, photos, created_by, created_at, created_by_user:users!order_care_warranty_log_created_by_fkey(id, name)')
                 .eq('order_id', orderId)
                 .order('created_at', { ascending: false })
                 .limit(100);
@@ -1301,6 +1385,7 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
                 paymentMethod: payment_method || 'cash',
                 notes: `Phiếu thu cọc đơn hàng - ${orderCode}`,
                 createdBy: req.user!.id,
+                createdByName: req.user!.name,
                 category: 'Tiền cọc',
             });
         } else if (paidAmountValue > 0) {
@@ -1311,10 +1396,37 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
                 paymentMethod: payment_method || 'cash',
                 notes: `Phiếu thu đơn hàng - ${orderCode}`,
                 createdBy: req.user!.id,
+                createdByName: req.user!.name,
             });
         }
 
-        notifyCrmMaster('order.created', { order, customer_items: createdCustomerItems });
+        // Resolve sale name for Telegram webhook
+        let saleNameForNotify: string | null = null;
+        if (order.sales_id) {
+            if (order.sales_id === req.user!.id) {
+                saleNameForNotify = req.user!.name;
+            } else {
+                const { data: saleUser } = await supabaseAdmin
+                    .from('users')
+                    .select('id, name')
+                    .eq('id', order.sales_id)
+                    .maybeSingle();
+                saleNameForNotify = saleUser?.name || null;
+            }
+        }
+
+        notifyCrmMaster('order.created', {
+            order: {
+                ...order,
+                sale_name: saleNameForNotify,
+                sales_name: saleNameForNotify,
+                created_by_name: req.user!.name,
+            },
+            customer_items: createdCustomerItems,
+            sale_name: saleNameForNotify,
+            sales_name: saleNameForNotify,
+            created_by_name: req.user!.name,
+        });
 
         res.status(201).json({
             status: 'success',
@@ -2119,6 +2231,9 @@ router.patch('/:id', authenticate, async (req: AuthenticatedRequest, res, next) 
 
         if (delivery_code !== undefined && delivery_code) {
             notifyOrderCustomerZalo('shipping.tracking_code.updated', orderNotifyContext, {
+                current_step: 'shipping',
+                status: order.status || 'shipping',
+                product_name: null,
                 shipping: {
                     tracking_code: delivery_code,
                     carrier_name: delivery_carrier || order.delivery_carrier || null,
@@ -2131,6 +2246,8 @@ router.patch('/:id', authenticate, async (req: AuthenticatedRequest, res, next) 
 
         if (feedback_requested === true || hd_sent === true) {
             notifyOrderCustomerZalo('aftersale.care_feedback.started', orderNotifyContext, {
+                current_step: 'care_feedback',
+                status: order.status || 'after_sale',
                 aftersale: {
                     care_type: 'care_feedback',
                     template_code: 'care_feedback_default',
@@ -2298,8 +2415,9 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
     try {
         const { id } = req.params;
         const { content, amount, payment_method, image_url, notes, order_product_id } = req.body;
+        const amountNum = Number(amount);
 
-        if (!content || !amount || amount <= 0) {
+        if (!content || !Number.isFinite(amountNum) || amountNum <= 0) {
             throw new ApiError('Nội dung và số tiền là bắt buộc', 400);
         }
 
@@ -2319,7 +2437,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
             order_id: order.id,
             order_code: order.order_code,
             content,
-            amount,
+            amount: amountNum,
             payment_method: payment_method || 'cash',
             image_url: image_url || null,
             notes: notes || null,
@@ -2337,7 +2455,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
         }
 
         // Update order's paid_amount and remaining_debt
-        const newPaidAmount = (order.paid_amount || 0) + amount;
+        const newPaidAmount = (order.paid_amount || 0) + amountNum;
         const newRemainingDebt = Math.max(0, order.total_amount - newPaidAmount);
         const newPaymentStatus = newRemainingDebt <= 0 ? 'paid' : (newPaidAmount > 0 ? 'partial' : 'unpaid');
 
@@ -2359,20 +2477,6 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
         // Check for auto-completion (Paid + All Services Done)
         await checkAndCompleteOrder(id);
 
-        // Also create a transaction record for Thu Chi
-        const { data: lastTrans } = await supabaseAdmin
-            .from('transactions')
-            .select('code')
-            .like('code', 'PT%')
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-        let transCode = 'PT000001';
-        if (lastTrans && lastTrans.length > 0) {
-            const lastNum = parseInt(lastTrans[0].code.replace('PT', ''), 10);
-            transCode = `PT${String(lastNum + 1).padStart(6, '0')}`;
-        }
-
         // Find associated invoice to link and update
         const { data: invoice } = await supabaseAdmin
             .from('invoices')
@@ -2383,48 +2487,23 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
             .limit(1)
             .maybeSingle();
 
-        const { error: transError } = await supabaseAdmin
-            .from('transactions')
-            .insert({
-                code: transCode,
-                type: 'income',
-                category: 'Thanh toán đơn hàng',
-                amount,
-                payment_method: payment_method || 'cash',
-                notes: `${content} - ${order.order_code}`,
-                image_url,
-                date: new Date().toISOString().split('T')[0],
-                order_id: order.id,
-                order_code: order.order_code,
-                status: 'approved',
-                created_by: req.user!.id,
-                approved_by: req.user!.id,
-                approved_at: new Date().toISOString(),
-            });
+        // Phiếu thu sổ quỹ — dùng helper có retry mã PT (tránh mất phiếu khi trùng UNIQUE)
+        const createdTrans = await createOrderIncomeTransaction({
+            orderId: order.id,
+            orderCode: order.order_code,
+            amount: amountNum,
+            paymentMethod: payment_method || 'cash',
+            notes: `${content} - ${order.order_code}`,
+            createdBy: req.user!.id,
+            createdByName: req.user!.name,
+            category: 'Thanh toán đơn hàng',
+            orderProductId: order_product_id || null,
+            imageUrl: image_url || null,
+        });
 
-        if (transError) {
-            console.error('Error creating transaction for payment:', transError);
-        } else {
-            console.log(`Created transaction ${transCode} for order ${order.order_code} payment`);
-            await notifyFinanceEvent({
-                event: 'receipt.created',
-                title: 'Phiếu thu mới',
-                message: `${req.user!.name} đã tạo phiếu thu ${transCode}`,
-                actor: req.user!,
-                recipientUserIds: [req.user!.id],
-                data: {
-                    code: transCode,
-                    type: 'income',
-                    category: 'Thanh toán đơn hàng',
-                    amount,
-                    payment_method: payment_method || 'cash',
-                    status: 'approved',
-                    order_id: order.id,
-                    order_code: order.order_code,
-                    invoice_id: invoice?.id,
-                    notes: `${content} - ${order.order_code}`,
-                },
-            });
+        if (!createdTrans) {
+            // Fallback heal nếu insert trực tiếp thất bại
+            await syncOrderPaymentsToCashBook(order.id);
         }
 
         // 3. Create a record in finance_transactions for consistent tracking and Invoices view
@@ -2436,7 +2515,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                 .insert({
                     code: financeTransCode,
                     type: 'income',
-                    amount, // The specific payment amount recorded now
+                    amount: amountNum, // The specific payment amount recorded now
                     category: 'Thanh toán đơn hàng',
                     description: `${content} - Hóa đơn ${invoice.id.slice(0, 8)} - ${order.order_code}`,
                     customer_id: (order as any).customer_id || null, 
@@ -2471,7 +2550,7 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
                     payment_status: newPaymentStatus,
                 }
             },
-            message: `Đã ghi nhận thanh toán ${amount.toLocaleString()}đ`,
+            message: `Đã ghi nhận thanh toán ${amountNum.toLocaleString()}đ`,
         });
     } catch (error) {
         next(error);
