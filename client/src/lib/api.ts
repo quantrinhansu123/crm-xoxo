@@ -108,6 +108,50 @@ export const leadsApi = {
         api.post<ApiResponse<{ activity: any }>>(`/leads/${id}/activities`, data),
 };
 
+/** CUTI v1.0.0 command API — CRM must not write Core state/owner/SLA fields directly */
+function cutiCommon(extra: Record<string, unknown> = {}) {
+    const cryptoObj = globalThis.crypto;
+    const uuid = () =>
+        cryptoObj?.randomUUID?.() ||
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+        });
+    return {
+        command_id: uuid(),
+        correlation_id: uuid(),
+        occurred_at: new Date().toISOString(),
+        ...extra,
+    };
+}
+
+export const cutiApi = {
+    assignOwner: (leadId: string, data: { target_owner_id: string; expected_state_version: number; reason?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/owner-assignment`, cutiCommon(data)),
+
+    reclaim: (leadId: string, data: { expected_state_version: number; reason?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/reclaim`, cutiCommon(data)),
+
+    markWon: (leadId: string, data: { expected_state_version: number; note?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/outcome/won`, cutiCommon(data)),
+
+    markFailed: (leadId: string, data: { expected_state_version: number; reason: string; note?: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/outcome/failed`, cutiCommon(data)),
+
+    recordNote: (leadId: string, data: { expected_state_version: number; note: string }) =>
+        api.post(`/v1/cuti/leads/${leadId}/notes`, cutiCommon(data)),
+
+    changeAppointment: (
+        leadId: string,
+        data: {
+            expected_state_version: number;
+            appointment_scheduled_at: string | null;
+            previous_appointment_scheduled_at?: string | null;
+        },
+    ) => api.post(`/v1/cuti/leads/${leadId}/appointment`, cutiCommon(data)),
+};
+
 // Customers API
 export const customersApi = {
     getAll: (params?: { type?: string; status?: string; search?: string; page?: number; limit?: number }) =>

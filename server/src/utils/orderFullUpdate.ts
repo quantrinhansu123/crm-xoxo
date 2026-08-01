@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { syncInvoiceWithOrder } from './billingHelper.js';
+import { createOrderIncomeTransaction } from './paymentRecordsHelper.js';
 
 export interface FullOrderUpdatePayload {
     customer_id: string;
@@ -25,17 +26,18 @@ const LEGACY_ORDER_DEPOSIT_NOTE_MARKERS = [
 async function syncOrderPaymentTransaction(order: any, paidAmountValue: number, paymentMethod: string | undefined, userId: string) {
     const { data: orderTransactions } = await supabaseAdmin
         .from('transactions')
-        .select('id, amount, payment_method, status, notes, created_at')
+        .select('id, amount, payment_method, status, notes, created_at, category')
         .eq('order_id', order.id)
         .eq('type', 'income')
-        .eq('category', 'Thanh toán đơn hàng')
         .neq('status', 'cancelled')
         .order('created_at', { ascending: true })
         .limit(50);
 
     const existingTransaction = (orderTransactions || []).find((transaction: any) => {
         const notes = String(transaction?.notes || '');
-        return LEGACY_ORDER_DEPOSIT_NOTE_MARKERS.some(marker => notes.includes(marker));
+        const category = String(transaction?.category || '');
+        const isDepositCategory = category === 'Tiền cọc' || category === 'Thanh toán đơn hàng' || category === 'Đặt cọc';
+        return isDepositCategory && LEGACY_ORDER_DEPOSIT_NOTE_MARKERS.some(marker => notes.includes(marker));
     });
 
     if (paidAmountValue <= 0) {
@@ -68,34 +70,15 @@ async function syncOrderPaymentTransaction(order: any, paidAmountValue: number, 
         return;
     }
 
-    const { data: lastTrans } = await supabaseAdmin
-        .from('transactions')
-        .select('code')
-        .like('code', 'PT%')
-        .order('created_at', { ascending: false })
-        .limit(1);
-    let tCodeValue = 'PT000001';
-    if (lastTrans && lastTrans.length > 0) {
-        const lNum = parseInt(lastTrans[0].code.replace('PT', ''), 10);
-        tCodeValue = `PT${String(lNum + 1).padStart(6, '0')}`;
-    }
-
-    const { error } = await supabaseAdmin.from('transactions').insert({
-        code: tCodeValue,
-        type: 'income',
-        category: 'Thanh toán đơn hàng',
+    await createOrderIncomeTransaction({
+        orderId: order.id,
+        orderCode: order.order_code,
         amount: paidAmountValue,
-        payment_method: paymentMethod || 'cash',
+        paymentMethod: paymentMethod || 'cash',
         notes: `${ORDER_DEPOSIT_TRANSACTION_NOTE_PREFIX} - ${order.order_code}`,
-        date: new Date().toISOString().split('T')[0],
-        order_id: order.id,
-        order_code: order.order_code,
-        status: 'approved',
-        created_by: userId,
-        approved_by: userId,
-        approved_at: new Date().toISOString(),
+        createdBy: userId,
+        category: 'Tiền cọc',
     });
-    if (error) console.error('[OrderUpdateFull] Transaction recording failed:', error);
 }
 
 export async function applyFullOrderUpdate(orderId: string, payload: FullOrderUpdatePayload, userId: string) {

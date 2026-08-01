@@ -47,7 +47,9 @@ import { violationsRouter } from './routes/violations.js';
 import { salaryConfigsRouter } from './routes/salary-configs.js';
 import { commissionTablesRouter } from './routes/commission-tables.js';
 import { mediaRouter } from './routes/media.js';
-import { checkAllSLA } from './utils/slaManager.js';
+import cutiRouter from './routes/cuti.js';
+import { checkAllSLA } from './utils/leadSlaStateMachine.js';
+import { publishPendingOutbox } from './cuti/outbox.js';
 
 const app = express();
 
@@ -142,6 +144,8 @@ app.use('/api/payroll-batches', payrollBatchesRouter);
 app.use('/api/salary-advances', salaryAdvancesRouter);
 app.use('/api/violations', violationsRouter);
 app.use('/api/media', mediaRouter);
+app.use('/v1/cuti', cutiRouter);
+app.use('/api/v1/cuti', cutiRouter); // alias for reverse-proxies that prefix /api
 
 // Error handling
 app.use(errorHandler);
@@ -153,11 +157,14 @@ const host = '0.0.0.0';
 app.listen(port, host, () => {
     console.log(`🚀 Server running on http://${host}:${port}`);
     console.log(`📊 Environment: ${config.nodeEnv}`);
-    console.log(`🕒 Last Reload: ${new Date().toLocaleString()} (delete-fix-v4)`);
+    console.log(`🕒 Last Reload: ${new Date().toLocaleString()} (CUTI v1.0.0)`);
     
-    // Start SLA Manager
+    // Start SLA Manager + CUTI outbox publisher
     console.log(`⏱️ Starting SLA Manager cron job`);
     setInterval(checkAllSLA, 60000); // Check every minute
+    setInterval(() => {
+        publishPendingOutbox(40).catch((err) => console.error('[CUTI] outbox tick:', err));
+    }, 15000);
 });
 
 export default app;

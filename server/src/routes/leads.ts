@@ -1,12 +1,66 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { authenticate, AuthenticatedRequest, requireSale } from '../middleware/auth.js';
 import { autoLogKpiViolation } from '../utils/kpiViolationLogger.js';
 import { notifyCrmMaster } from '../utils/webhookNotifier.js';
-import { on_lead_assigned, isSlaEndStage } from '../utils/slaManager.js';
+import { isSlaEndStage } from '../utils/leadSlaStateMachine.js';
+import { assignOwner, changeAppointment, markFailed, markWon, reclaimLead } from '../cuti/commands.js';
+import {
+    deriveQuietHoursPaused,
+    deriveSlaStatus,
+    mapLegacySlaType,
+    milestoneIndex1Based,
+    normalizeCutiLeadState,
+} from '../cuti/index.js';
+
+function enrichCutiProjection(lead: any) {
+    if (!lead) return lead;
+    const lead_state = normalizeCutiLeadState(lead.sla_state);
+    const sla_type = mapLegacySlaType(lead.sla_type);
+    return {
+        ...lead,
+        lead_id: lead.id,
+        lead_state,
+        state_version: Number(lead.version || 0),
+        owner_id: lead.assigned_to || null,
+        owner_name: lead.assigned_user?.name || lead.owner_sale || null,
+        sla_type,
+        sla_status: deriveSlaStatus(lead),
+        sla_deadline_at: lead.current_deadline_at || null,
+        sla_warning_at: lead.warning_at || null,
+        followup_milestone_index: milestoneIndex1Based(lead),
+        next_followup_at:
+            sla_type === 'FOLLOWUP' && deriveSlaStatus(lead) === 'ACTIVE'
+                ? lead.current_deadline_at || null
+                : null,
+        quiet_hours_paused: deriveQuietHoursPaused(lead),
+        appointment_scheduled_at: lead.appointment_scheduled_at ?? lead.appointment_time ?? null,
+    };
+}
 
 const router = Router();
+
+/** Core-owned fields CRM must not write directly (CUTI v1.0.0). */
+const FORBIDDEN_CORE_DIRECT_FIELDS = [
+    'sla_state',
+    'sla_type',
+    'current_deadline_at',
+    'warning_at',
+    'qualifying_from_at',
+    'current_milestone_index',
+    'version',
+    'state_version',
+    'outcome',
+    'outcome_reason',
+    'closed_at',
+    'active_sla_id',
+    'sla_paused_at',
+    'sla_remaining_seconds',
+    'followup_started_at',
+    'last_event_id',
+];
 
 /** Chuỗi rỗng → null để tránh vi phạm unique index trên cột optional */
 function optionalText(value: unknown): string | null {
@@ -77,7 +131,7 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
         res.json({
             status: 'success',
             data: {
-                leads,
+                leads: (leads || []).map(enrichCutiProjection),
                 pagination: {
                     page: Number(page),
                     limit: Number(limit),
@@ -108,7 +162,7 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
 
         res.json({
             status: 'success',
-            data: { lead },
+            data: { lead: enrichCutiProjection(lead) },
         });
     } catch (error) {
         next(error);
@@ -141,10 +195,17 @@ router.post('/', authenticate, requireSale, async (req: AuthenticatedRequest, re
                 company: optionalText(company),
                 address: optionalText(address),
                 notes: optionalText(notes),
+                crm_note: optionalText(notes),
                 // Default to the first pipeline stage used by the CRM UI
                 status: 'xac_dinh_nhu_cau',
                 pipeline_stage: 'xac_dinh_nhu_cau',
                 assigned_to: assigned_to || req.user!.id,
+                // CUTI v1: owned create → OWNED_WAITING_CUSTOMER; else SHARED_WAITING_SALE
+                sla_state: (assigned_to || req.user!.id) ? 'OWNED_WAITING_CUSTOMER' : 'SHARED_WAITING_SALE',
+                assign_state: (assigned_to || req.user!.id) ? 'assigned' : 'unassigned',
+                version: 1,
+                state_changed_at: new Date().toISOString(),
+                appointment_scheduled_at: appointment_time || null,
                 created_by: req.user!.id,
                 dob: optionalText(dob),
                 fb_thread_id: normalizedFbThreadId,
@@ -187,16 +248,104 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
         const { id } = req.params;
         const { name, phone, email, source, company, address, notes, status, assigned_to, pipeline_stage, dob, delivery_method, tracking_code, shipping_fee } = req.body;
 
+        // Reject direct Core field writes (CUTI boundary)
+        const forbidden = FORBIDDEN_CORE_DIRECT_FIELDS.filter((f) => req.body[f] !== undefined);
+        if (forbidden.length > 0) {
+            throw new ApiError(
+                `CUTI: không được ghi trực tiếp Core fields: ${forbidden.join(', ')}. Dùng /v1/cuti/leads/...`,
+                400,
+            );
+        }
+
         // Get current lead to check for status change and assigned_to change
         const { data: currentLead } = await supabaseAdmin
             .from('leads')
-            .select('status, pipeline_stage, assigned_to')
+            .select('status, pipeline_stage, assigned_to, version, appointment_time, appointment_scheduled_at')
             .eq('id', id)
             .single();
+
+        if (!currentLead) {
+            throw new ApiError('Không tìm thấy lead', 404);
+        }
 
         const oldStatus = currentLead?.status || currentLead?.pipeline_stage;
         const oldAssignedTo = currentLead?.assigned_to;
         const newStatus = status || pipeline_stage;
+        const expectedVersion = Number(currentLead.version || 0);
+        const commonCmd = {
+            actor_id: req.user!.id,
+            actor_role: req.user!.role,
+            command_id: randomUUID(),
+            expected_state_version: expectedVersion,
+            occurred_at: new Date().toISOString(),
+            correlation_id: randomUUID(),
+        };
+
+        // Route terminal outcomes through CUTI commands
+        const nextStage = pipeline_stage || status;
+        if (nextStage && isSlaEndStage(String(nextStage))) {
+            const result =
+                String(nextStage) === 'chot_don'
+                    ? await markWon(id, { ...commonCmd, note: notes })
+                    : await markFailed(id, {
+                          ...commonCmd,
+                          reason: String(nextStage),
+                          note: notes,
+                      });
+            if (result.httpStatus !== 200 || (result.body as any).status !== 'ACCEPTED') {
+                return res.status(result.httpStatus).json(result.body);
+            }
+            // Continue with non-Core display fields below (pipeline_stage already set by command)
+        }
+
+        // Route owner assignment / reclaim through CUTI
+        if (assigned_to !== undefined && assigned_to !== oldAssignedTo) {
+            const ownerResult = assigned_to
+                ? await assignOwner(id, {
+                      ...commonCmd,
+                      command_id: randomUUID(),
+                      expected_state_version: Number(
+                          (await supabaseAdmin.from('leads').select('version').eq('id', id).maybeSingle()).data
+                              ?.version || expectedVersion,
+                      ),
+                      target_owner_id: assigned_to,
+                      reason: 'CRM_PUT_ASSIGN',
+                  })
+                : await reclaimLead(id, {
+                      ...commonCmd,
+                      command_id: randomUUID(),
+                      expected_state_version: Number(
+                          (await supabaseAdmin.from('leads').select('version').eq('id', id).maybeSingle()).data
+                              ?.version || expectedVersion,
+                      ),
+                      reason: 'CRM_PUT_RECLAIM',
+                  });
+            if (ownerResult.httpStatus !== 200 || !['ACCEPTED', 'DUPLICATE_NOOP'].includes((ownerResult.body as any).status)) {
+                return res.status(ownerResult.httpStatus).json(ownerResult.body);
+            }
+        }
+
+        // Appointment set/clear via CUTI command
+        if (req.body.appointment_time !== undefined || req.body.appointment_scheduled_at !== undefined) {
+            const appt =
+                req.body.appointment_scheduled_at !== undefined
+                    ? req.body.appointment_scheduled_at
+                    : req.body.appointment_time;
+            const apptResult = await changeAppointment(id, {
+                ...commonCmd,
+                command_id: randomUUID(),
+                expected_state_version: Number(
+                    (await supabaseAdmin.from('leads').select('version').eq('id', id).maybeSingle()).data
+                        ?.version || expectedVersion,
+                ),
+                appointment_scheduled_at: appt,
+                previous_appointment_scheduled_at:
+                    currentLead.appointment_scheduled_at || currentLead.appointment_time || null,
+            });
+            if (apptResult.httpStatus !== 200 || !['ACCEPTED', 'DUPLICATE_NOOP'].includes((apptResult.body as any).status)) {
+                return res.status(apptResult.httpStatus).json(apptResult.body);
+            }
+        }
 
         const updateData: Record<string, any> = {
             updated_at: new Date().toISOString(),
@@ -209,16 +358,9 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
         if (company !== undefined) updateData.company = company;
         if (address !== undefined) updateData.address = address;
         if (notes !== undefined) updateData.notes = notes;
-        if (status) updateData.status = status;
-        if (pipeline_stage) updateData.pipeline_stage = pipeline_stage;
+        if (status && !isSlaEndStage(String(status))) updateData.status = status;
+        if (pipeline_stage && !isSlaEndStage(String(pipeline_stage))) updateData.pipeline_stage = pipeline_stage;
 
-        // Sang Chốt đơn / Hủy / Fail → dừng Rule SLA
-        const nextStage = pipeline_stage || status;
-        if (nextStage && isSlaEndStage(String(nextStage))) {
-            updateData.sla_state = 'STOPPED';
-            updateData.current_deadline_at = null;
-        }
-        if (assigned_to) updateData.assigned_to = assigned_to;
         if (dob !== undefined) updateData.dob = dob;
         if (req.body.fb_link !== undefined) updateData.fb_link = req.body.fb_link;
         if (req.body.fb_profile_name !== undefined) updateData.fb_profile_name = req.body.fb_profile_name;
@@ -235,22 +377,6 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
         if (delivery_method !== undefined) updateData.delivery_method = delivery_method;
         if (tracking_code !== undefined) updateData.tracking_code = tracking_code;
         if (shipping_fee !== undefined) updateData.shipping_fee = shipping_fee;
-
-        // SLA Shield: Pause SLA if appointment_time is updated
-        if (req.body.appointment_time !== undefined) {
-            updateData.appointment_time = req.body.appointment_time;
-            if (req.body.appointment_time) {
-                updateData.sla_state = 'PAUSED_APPOINTMENT';
-            }
-        }
-
-        // SLA Shield: Pause SLA if next_followup_time is updated
-        if (req.body.next_followup_time !== undefined) {
-            updateData.next_followup_time = req.body.next_followup_time;
-            if (req.body.next_followup_time) {
-                updateData.sla_state = 'PAUSED_APPOINTMENT';
-            }
-        }
 
         const { data: lead, error } = await supabaseAdmin
             .from('leads')
@@ -283,17 +409,12 @@ router.put('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
                 employeeId: oldAssignedTo,
                 relatedLeadId: id,
                 ruleCode: 'lead_reclaimed',
-                ruleName: assigned_to 
+                ruleName: assigned_to
                     ? 'Thu hồi Lead (Manager chuyển giao)'
                     : 'Thu hồi Lead (Manager gỡ phân công)',
                 deductPoint: 0,
-                note: `Lead được chuyển từ sale cũ bởi ${(req as any).user?.name || (req as any).user?.id || 'unknown'}`
+                note: `Lead được chuyển từ sale cũ bởi ${(req as any).user?.name || (req as any).user?.id || 'unknown'}`,
             });
-        }
-
-        // Rule: gán/chuyển sale → khởi động lại SLA mốc 3 phút
-        if (assigned_to && assigned_to !== oldAssignedTo) {
-            await on_lead_assigned(id, assigned_to);
         }
 
         notifyCrmMaster('lead.updated', { lead });

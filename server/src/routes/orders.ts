@@ -7,12 +7,13 @@ import { autoCreateInvoice, syncInvoiceWithOrder } from '../utils/billingHelper.
 import {
     createOrderIncomeTransaction,
     distributeDepositAcrossCustomerItems,
+    fetchOrderPaymentRecords,
+    insertPaymentRecord,
     recordProductDepositPayments,
+    syncOrderPaymentsToCashBook,
 } from '../utils/paymentRecordsHelper.js';
-import { notifyFinanceEvent } from '../utils/financeNotifications.js';
 import { notifyCrmMaster } from '../utils/webhookNotifier.js';
 import { buildCrmOrderUrl, getManagerRecipients, notifyCrmMasterUser } from '../utils/n8nCrmEvents.js';
-import { fetchOrderPaymentRecords, insertPaymentRecord } from '../utils/paymentRecordsHelper.js';
 import { deleteOrderCascade } from '../utils/orderDeletionHelper.js';
 
 
@@ -2476,20 +2477,6 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
         // Check for auto-completion (Paid + All Services Done)
         await checkAndCompleteOrder(id);
 
-        // Also create a transaction record for Thu Chi
-        const { data: lastTrans } = await supabaseAdmin
-            .from('transactions')
-            .select('code')
-            .like('code', 'PT%')
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-        let transCode = 'PT000001';
-        if (lastTrans && lastTrans.length > 0) {
-            const lastNum = parseInt(lastTrans[0].code.replace('PT', ''), 10);
-            transCode = `PT${String(lastNum + 1).padStart(6, '0')}`;
-        }
-
         // Find associated invoice to link and update
         const { data: invoice } = await supabaseAdmin
             .from('invoices')
@@ -2500,55 +2487,23 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
             .limit(1)
             .maybeSingle();
 
-        const { error: transError } = await supabaseAdmin
-            .from('transactions')
-            .insert({
-                code: transCode,
-                type: 'income',
-                category: 'Thanh toán đơn hàng',
-                amount: amountNum,
-                payment_method: payment_method || 'cash',
-                notes: `${content} - ${order.order_code}`,
-                image_url,
-                date: new Date().toISOString().split('T')[0],
-                order_id: order.id,
-                order_code: order.order_code,
-                status: 'approved',
-                created_by: req.user!.id,
-                approved_by: req.user!.id,
-                approved_at: new Date().toISOString(),
-            });
+        // Phiếu thu sổ quỹ — dùng helper có retry mã PT (tránh mất phiếu khi trùng UNIQUE)
+        const createdTrans = await createOrderIncomeTransaction({
+            orderId: order.id,
+            orderCode: order.order_code,
+            amount: amountNum,
+            paymentMethod: payment_method || 'cash',
+            notes: `${content} - ${order.order_code}`,
+            createdBy: req.user!.id,
+            createdByName: req.user!.name,
+            category: 'Thanh toán đơn hàng',
+            orderProductId: order_product_id || null,
+            imageUrl: image_url || null,
+        });
 
-        if (transError) {
-            console.error('Error creating transaction for payment:', transError);
-        } else {
-            console.log(`Created transaction ${transCode} for order ${order.order_code} payment`);
-            await notifyFinanceEvent({
-                event: 'receipt.created',
-                title: 'Phiếu thu mới',
-                message: `${req.user!.name} đã tạo phiếu thu ${transCode}`,
-                actor: req.user!,
-                recipientUserIds: [req.user!.id],
-                data: {
-                    code: transCode,
-                    voucher_code: transCode,
-                    type: 'income',
-                    category: 'Thanh toán đơn hàng',
-                    amount: amountNum,
-                    payment_method: payment_method || 'cash',
-                    status: 'approved',
-                    order_id: order.id,
-                    order_code: order.order_code,
-                    invoice_id: invoice?.id,
-                    notes: `${content} - ${order.order_code}`,
-                    content: `${content} - ${order.order_code}`,
-                    reason: content,
-                    created_by: req.user!.id,
-                    created_by_name: req.user!.name,
-                    collector_name: req.user!.name,
-                    received_by_name: req.user!.name,
-                },
-            });
+        if (!createdTrans) {
+            // Fallback heal nếu insert trực tiếp thất bại
+            await syncOrderPaymentsToCashBook(order.id);
         }
 
         // 3. Create a record in finance_transactions for consistent tracking and Invoices view

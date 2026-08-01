@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { checkAllSLA } from '../utils/slaManager.js';
+import { checkAllSLA } from '../utils/leadSlaStateMachine.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { supabaseAdmin } from '../config/supabase.js';
 import { autoLogKpiViolation } from '../utils/kpiViolationLogger.js';
@@ -43,6 +43,24 @@ router.get('/check-sla', verifyCronSecret, async (req: Request, res: Response, n
             status: 'success',
             message: 'SLA check completed',
             timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * GET /api/cron/cuti-outbox
+ * Flush CUTI transactional outbox retries
+ */
+router.get('/cuti-outbox', verifyCronSecret, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { publishPendingOutbox } = await import('../cuti/outbox.js');
+        const delivered = await publishPendingOutbox(Number(req.query.limit) || 50);
+        res.json({
+            status: 'success',
+            delivered,
+            timestamp: new Date().toISOString(),
         });
     } catch (err) {
         next(err);

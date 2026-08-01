@@ -1389,14 +1389,32 @@ export function FinancePage({ currentUser, initialTab = 'income', onTabChange }:
                                         type="radio"
                                         name="fund"
                                         className="w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                        checked={fundFilter === f}
-                                        onChange={() => setFundFilter(f)}
+                                        checked={statusFilter !== 'cancelled' && fundFilter === f}
+                                        onChange={() => {
+                                            setFundFilter(f);
+                                            if (statusFilter === 'cancelled') setStatusFilter('all');
+                                        }}
                                     />
                                     <span className="text-sm font-medium group-hover:text-blue-600 transition-colors capitalize">
                                         {f === 'all' ? 'Tất cả' : f === 'cash' ? 'Tiền mặt' : f === 'transfer' ? 'Chuyển khoản' : 'Zalo Pay'}
                                     </span>
                                 </label>
                             ))}
+                            <label className="flex items-center gap-3 cursor-pointer group">
+                                <input
+                                    type="radio"
+                                    name="fund"
+                                    className="w-4 h-4 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                                    checked={statusFilter === 'cancelled'}
+                                    onChange={() => {
+                                        setFundFilter('all');
+                                        setStatusFilter('cancelled');
+                                    }}
+                                />
+                                <span className="text-sm font-medium text-rose-600 group-hover:text-rose-700 transition-colors">
+                                    Đã hủy
+                                </span>
+                            </label>
                         </div>
                     </div>
 

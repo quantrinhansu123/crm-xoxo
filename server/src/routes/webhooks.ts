@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { fireWebhook, notifyCrmMaster } from '../utils/webhookNotifier.js';
-import { on_customer_message, on_sale_message, on_lead_assigned, getVirtualTimeLeft, calculateDeadline, SLA_CYCLES } from '../utils/slaManager.js';
+import { on_customer_message, on_sale_message, on_lead_assigned, getVirtualTimeLeft, calculateDeadline, SLA_CYCLES } from '../utils/leadSlaStateMachine.js';
 import { enrichLeadSlaFields, resolveLeadCustomerMessageAt, resolveLeadStaffReplyAt, normalizeN8nLeadPayload, N8N_LEAD_NON_DB_KEYS } from '../utils/webhookPayloadAliases.js';
 
 const router = Router();
@@ -126,7 +126,7 @@ router.get('/leads/sla', verifyWebhookSecret, async (req: Request, res: Response
                 current_rule_index, sla_state, created_at, assigned_to,
                 assigned_to_user: users!leads_assigned_to_fkey(name, telegram_chat_id)
             `)
-            .eq('sla_state', 'ACTIVE')
+            .in('sla_state', ['OWNED_WAITING_SALE', 'OWNED_WAITING_CUSTOMER', 'PAUSED_FOLLOWUP'])
             .not('assigned_to', 'is', null)
             .not('pipeline_stage', 'in', '("chot_don","huy","fail")');
 
@@ -822,18 +822,12 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         assign_state: resolvedAssignedTo ? 'assigned' : 'unassigned'
     };
 
-    // Sale reply đầu khi tạo lead → thẳng ĐỢI KHÁCH 60'
-    if (createIsSaleReply && resolvedAssignedTo) {
-        const replyAt = resolveLeadStaffReplyAt(data) || effectiveLastMessageTime || new Date().toISOString();
-        insertPayload.current_rule_index = 1;
-        insertPayload.current_deadline_at = calculateDeadline(
-            new Date(replyAt),
-            SLA_CYCLES[1],
-            new Date().toISOString()
-        ).toISOString();
-        insertPayload.t_last_outbound = replyAt;
-        insertPayload.sla_state = 'ACTIVE';
-        insertPayload.last_actor = 'sale';
+    // A sale-only create event cannot invent an active customer-response SLA.
+    if (createIsSaleReply) {
+        insertPayload.assigned_to = null;
+        insertPayload.owner_sale = null;
+        insertPayload.assign_state = 'unassigned';
+        insertPayload.sla_state = 'UNASSIGNED_IDLE';
     }
 
     const { data: lead, error } = await supabaseAdmin
@@ -916,10 +910,14 @@ async function handleLeadUpsert(incomingData: any, event?: string) {
         
         // Trigger SLA — sale claim đã set 60' lúc insert
         if (normalizedLastActor === 'lead') {
-            await on_customer_message(lead, { inboundAt: resolveLeadCustomerMessageAt(data) ?? undefined });
+            await on_customer_message(lead, {
+                inboundAt: resolveLeadCustomerMessageAt(data) ?? undefined,
+                messageId: message_id || null,
+            });
         } else if (normalizedLastActor === 'sale' && !(createIsSaleReply && resolvedAssignedTo)) {
             await on_sale_message(lead, resolvedAssignedTo as string, saleName || 'Sale', {
                 outboundAt: resolveLeadStaffReplyAt(data) ?? undefined,
+                messageId: message_id || null,
             });
         }
     } else if (resolvedAssignedTo) {
@@ -1076,10 +1074,7 @@ async function handleLeadUpdate(incomingData: any) {
         }
     });
 
-    // Rule 5: Khi set lịch hẹn hoặc hẹn chăm sóc -> Pause SLA
-    if (updateData.appointment_time || updateData.next_followup_time) {
-        updateData.sla_state = 'PAUSED_APPOINTMENT';
-    }
+    // Appointment fields do not control the official owner/SLA state machine.
 
     let effectiveLastActor = normalizeMessageActor(rawLastActor, message_direction);
     let saleSlaHandledInCoreUpdate = false;
@@ -1128,44 +1123,19 @@ async function handleLeadUpdate(incomingData: any) {
     );
     let skipIntrusionMessageSla = false;
 
-    // 1. Thu hồi (n8n gửi unassigned, không có sale)
+    // n8n cannot decide owner/SLA transitions. This payload is descriptive only.
     if (!hasIncomingSale && assign_state === 'unassigned' && (assigned_to === null || assigned_to === undefined)) {
-        updateData.assigned_to = null;
-        updateData.assign_state = 'unassigned';
-        updateData.owner_sale = null;
-        updateData.sla_state = 'RECLAIMED';
-        updateData.current_deadline_at = null;
-        updateData.current_rule_index = 0;
-
-        await logLeadActivity(leadId, {
-            type: 'owner_unassigned',
-            content: `Lead đã được thu hồi và đưa về trạng thái tự do (Hệ thống quét SLA)`,
-            userName: 'Hệ thống'
-        });
+        delete updateData.assigned_to;
+        delete updateData.assign_state;
+        delete updateData.owner_sale;
     }
     // 2. Lead CHƯA có owner — CHỈ gán khi sale rep hợp lệ đầu tiên → ĐỢI KHÁCH 60'
     else if (!leadHasOwner && isValidSaleClaimReply) {
-        const replyAt = outboundReplyAt || effectiveLastMessageTime;
-        const deadline = calculateDeadline(new Date(replyAt), SLA_CYCLES[1], currentLead.created_at || replyAt);
-        updateData.assigned_to = resolvedIncomingId;
-        updateData.assign_state = 'assigned';
-        updateData.owner_sale = resolvedIncomingName || saleDisplayName || null;
-        updateData.current_rule_index = 1;
-        updateData.current_deadline_at = deadline.toISOString();
-        updateData.t_last_outbound = replyAt;
-        updateData.last_message_time = replyAt;
-        updateData.last_actor = 'sale';
-        updateData.sla_state = 'ACTIVE';
-        saleSlaHandledInCoreUpdate = true;
-
-        console.log(`[Webhook] ✅ Claim owner lead ${leadId} → ${resolvedIncomingId} (ĐỢI KHÁCH 60')`);
-
-        await logLeadActivity(leadId, {
-            type: 'owner_assigned',
-            content: `Lead được gán cho ${resolvedIncomingName || resolvedIncomingId} (sale reply đầu tiên)`,
-            userId: resolvedIncomingId!,
-            userName: resolvedIncomingName || 'Hệ thống'
-        });
+        // Persist the message first; state machine claims with deadline/version checks.
+        delete updateData.assigned_to;
+        delete updateData.assign_state;
+        delete updateData.owner_sale;
+        saleSlaHandledInCoreUpdate = false;
     }
     // 2b. Lead chưa owner nhưng payload còn UUID + tin khách/sync → BỎ QUA ownership (tránh re-bind sau revoke)
     else if (!leadHasOwner && resolvedIncomingId && !isValidSaleClaimReply) {
@@ -1276,44 +1246,6 @@ async function handleLeadUpdate(incomingData: any) {
         throw new ApiError('Lỗi khi cập nhật lead: ' + error.message, 500);
     }
 
-    // Belt-and-suspenders: chỉ force claim khi đúng sale reply hợp lệ (không re-bind từ tin khách)
-    if (
-        lead
-        && !lead.assigned_to
-        && isValidSaleClaimReply
-        && isUUID(resolvedIncomingId!)
-    ) {
-        console.warn(`[Webhook] Lead ${leadId} vẫn unassigned sau update — force claim assigned_to=${resolvedIncomingId}`);
-        const replyAt = outboundReplyAt || effectiveLastMessageTime;
-        const deadline = calculateDeadline(new Date(replyAt), SLA_CYCLES[1], currentLead.created_at || replyAt);
-        const { data: forced, error: forceErr } = await supabaseAdmin
-            .from('leads')
-            .update({
-                assigned_to: resolvedIncomingId,
-                assign_state: 'assigned',
-                owner_sale: resolvedIncomingName || saleDisplayName || lead.owner_sale || null,
-                current_rule_index: 1,
-                current_deadline_at: deadline.toISOString(),
-                t_last_outbound: replyAt,
-                last_message_time: replyAt,
-                last_actor: 'sale',
-                sla_state: 'ACTIVE',
-                updated_at: new Date().toISOString(),
-            })
-            .eq('id', leadId)
-            .is('assigned_to', null) // chỉ khi vẫn trống — tránh race overwrite
-            .select()
-            .maybeSingle();
-
-        if (!forceErr && forced) {
-            lead = forced;
-            saleSlaHandledInCoreUpdate = true;
-            console.log(`[Webhook] ✅ Force claim OK: lead ${leadId} → ${forced.assigned_to} (60')`);
-        } else if (forceErr) {
-            console.error(`[Webhook] Force claim assigned_to failed:`, forceErr.message);
-        }
-    }
-
     // 4. Lưu ghi chú vào lịch sử hoạt động nếu có
     const notesFromData = data.notes;
     if (notesFromData && notesFromData !== "") {
@@ -1345,12 +1277,14 @@ async function handleLeadUpdate(incomingData: any) {
         } else if (effectiveLastActor === 'lead') {
             await on_customer_message(lead, {
                 inboundAt: inboundMessageAt || effectiveLastMessageTime,
+                messageId: message_id || null,
             });
         } else if (effectiveLastActor === 'sale' && !saleSlaHandledInCoreUpdate) {
             const saleName = resolvedIncomingName || saleDisplayName || currentLead.owner_sale || 'Sale';
             const resolvedId = resolvedIncomingId || lead.assigned_to || currentLead.assigned_to || null;
             await on_sale_message(lead, resolvedId, saleName, {
                 outboundAt: outboundReplyAt || effectiveLastMessageTime,
+                messageId: message_id || null,
             });
         }
     } else if (last_message_text && !effectiveLastActor && !skipIntrusionMessageSla) {
@@ -1674,10 +1608,7 @@ async function handleLeadSaleMemoryUpdate(data: any) {
     addIfValid('eta_note', eta_note);
     addIfValid('sale_note_summary', sale_note_summary);
 
-    // Rule 5: Khi set lịch hẹn hoặc hẹn chăm sóc -> Pause SLA
-    if (updateData.appointment_time || updateData.next_followup_time) {
-        updateData.sla_state = 'PAUSED_APPOINTMENT';
-    }
+    // Appointment fields do not pause the official follow-up SLA.
 
     // 4. Thực thi update
     const { error } = await supabaseAdmin
@@ -1732,4 +1663,3 @@ async function logWebhookEvent(
 }
 
 export default router;
-
