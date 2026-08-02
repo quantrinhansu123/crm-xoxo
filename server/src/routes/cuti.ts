@@ -131,13 +131,22 @@ function extractReadableCutiFields(body: any): Record<string, unknown> {
 }
 
 /** Machine auth for Backend/n8n → CRM receivers (not legacy Pancake webhooks). */
+function resolveCutiReceiverSecret(): string | null {
+    const cuti = String(process.env.CUTI_RECEIVER_SECRET || '').trim();
+    const webhook = String(process.env.WEBHOOK_SECRET || '').trim();
+    // Empty string must fall through (Render often sets CUTI_RECEIVER_SECRET="")
+    if (cuti) return cuti;
+    if (webhook) return webhook;
+    return null;
+}
+
 function verifyCutiReceiverSecret(req: Request, res: Response, next: NextFunction) {
-    const secret = req.headers['x-webhook-secret'] as string | undefined;
-    const expected = process.env.CUTI_RECEIVER_SECRET || process.env.WEBHOOK_SECRET;
+    const secret = String(req.headers['x-webhook-secret'] || '').trim();
+    const expected = resolveCutiReceiverSecret();
     if (!expected) {
         return res.status(500).json({
             status: 'error',
-            message: 'CUTI receiver secret chưa được cấu hình',
+            message: 'CUTI receiver secret chưa được cấu hình (CUTI_RECEIVER_SECRET hoặc WEBHOOK_SECRET)',
         });
     }
     if (!secret || secret !== expected) {
