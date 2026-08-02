@@ -4,12 +4,24 @@ import { ApiError } from '../middleware/errorHandler.js';
 import { getFirstImage } from '../utils/n8nCrmEvents.js';
 
 const router = Router();
-const N8N_WEBHOOK_SECRET = process.env.N8N_WEBHOOK_SECRET || 'crm-n8n-webhook-secret-2026';
+
+function resolveInboundWebhookSecrets(): string[] {
+    const candidates = [
+        String(process.env.CUTI_RECEIVER_SECRET || '').trim(),
+        String(process.env.WEBHOOK_SECRET || '').trim(),
+        String(process.env.N8N_WEBHOOK_SECRET || '').trim(),
+    ].filter(Boolean);
+    return [...new Set(candidates)];
+}
 
 const verifyN8nSecret = (req: Request, res: Response, next: NextFunction) => {
-    const secret = req.headers['x-webhook-secret'];
+    const secret = String(req.headers['x-webhook-secret'] || '').trim();
+    const allowed = resolveInboundWebhookSecrets();
 
-    if (secret !== N8N_WEBHOOK_SECRET) {
+    if (!allowed.length) {
+        return res.status(500).json({ status: 'error', message: 'Webhook chưa được cấu hình' });
+    }
+    if (!secret || !allowed.includes(secret)) {
         return res.status(401).json({ status: 'error', message: 'Unauthorized - Invalid webhook secret' });
     }
 

@@ -10,21 +10,31 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
 // ============================================================
 // Middleware: Xác thực webhook bằng API Key
-// n8n cần gửi header: x-webhook-secret: <WEBHOOK_SECRET>
+// n8n gửi header: x-webhook-secret
+// Chấp nhận CUTI_RECEIVER_SECRET hoặc WEBHOOK_SECRET (cùng chuẩn với /v1/cuti/*)
 // ============================================================
-const verifyWebhookSecret = (req: Request, res: Response, next: NextFunction) => {
-    const secret = req.headers['x-webhook-secret'] as string;
-    const expectedSecret = process.env.WEBHOOK_SECRET;
+function resolveInboundWebhookSecrets(): string[] {
+    const candidates = [
+        String(process.env.CUTI_RECEIVER_SECRET || '').trim(),
+        String(process.env.WEBHOOK_SECRET || '').trim(),
+        String(process.env.N8N_WEBHOOK_SECRET || '').trim(),
+    ].filter(Boolean);
+    return [...new Set(candidates)];
+}
 
-    if (!expectedSecret) {
-        console.error('[Webhook] WEBHOOK_SECRET chưa được cấu hình trong .env');
+const verifyWebhookSecret = (req: Request, res: Response, next: NextFunction) => {
+    const secret = String(req.headers['x-webhook-secret'] || '').trim();
+    const allowed = resolveInboundWebhookSecrets();
+
+    if (!allowed.length) {
+        console.error('[Webhook] Chưa cấu hình CUTI_RECEIVER_SECRET / WEBHOOK_SECRET');
         return res.status(500).json({
             status: 'error',
             message: 'Webhook chưa được cấu hình',
         });
     }
 
-    if (!secret || secret !== expectedSecret) {
+    if (!secret || !allowed.includes(secret)) {
         console.warn('[Webhook] Unauthorized request - invalid secret');
         return res.status(401).json({
             status: 'error',

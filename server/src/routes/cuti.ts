@@ -131,25 +131,25 @@ function extractReadableCutiFields(body: any): Record<string, unknown> {
 }
 
 /** Machine auth for Backend/n8n → CRM receivers (not legacy Pancake webhooks). */
-function resolveCutiReceiverSecret(): string | null {
-    const cuti = String(process.env.CUTI_RECEIVER_SECRET || '').trim();
-    const webhook = String(process.env.WEBHOOK_SECRET || '').trim();
-    // Empty string must fall through (Render often sets CUTI_RECEIVER_SECRET="")
-    if (cuti) return cuti;
-    if (webhook) return webhook;
-    return null;
+function resolveCutiReceiverSecrets(): string[] {
+    const candidates = [
+        String(process.env.CUTI_RECEIVER_SECRET || '').trim(),
+        String(process.env.WEBHOOK_SECRET || '').trim(),
+        String(process.env.N8N_WEBHOOK_SECRET || '').trim(),
+    ].filter(Boolean);
+    return [...new Set(candidates)];
 }
 
 function verifyCutiReceiverSecret(req: Request, res: Response, next: NextFunction) {
     const secret = String(req.headers['x-webhook-secret'] || '').trim();
-    const expected = resolveCutiReceiverSecret();
-    if (!expected) {
+    const allowed = resolveCutiReceiverSecrets();
+    if (!allowed.length) {
         return res.status(500).json({
             status: 'error',
             message: 'CUTI receiver secret chưa được cấu hình (CUTI_RECEIVER_SECRET hoặc WEBHOOK_SECRET)',
         });
     }
-    if (!secret || secret !== expected) {
+    if (!secret || !allowed.includes(secret)) {
         return res.status(401).json({
             status: 'error',
             message: 'Unauthorized - Invalid receiver secret',
