@@ -15,6 +15,7 @@ import {
     receiveLeadActivityAppend,
     receiveLeadProjectionUpsert,
 } from '../cuti/receivers.js';
+import { receivePancakeMessage } from '../cuti/messages.js';
 import { OUTBOX_ACTIVITY, OUTBOX_PROJECTION } from '../cuti/types.js';
 
 const router = Router();
@@ -271,12 +272,13 @@ router.post('/outbox/publish', authenticate, async (req: AuthenticatedRequest, r
  * Backend/n8n → CRM receivers (CUTI outbox envelope).
  * Do NOT reuse /api/webhooks/n8n or /api/webhooks/n8n/raw for CUTI.
  *
- * Canonical (write gated by CUTI_RECEIVERS_ENABLED=true):
+ * Production Pancake Message (always-on, display ingest only):
+ *   POST /v1/cuti/receivers/messages
+ * Canonical projection/activity (write gated by CUTI_RECEIVERS_ENABLED=true):
  *   POST /v1/cuti/receivers/projections
  *   POST /v1/cuti/receivers/activities
- * Always-on read-only probe:
+ * Read-only probe:
  *   POST /v1/cuti/receivers/test/echo
- *   GET  /v1/cuti/receivers/test/last
  */
 function cutiWriteReceiversEnabled(): boolean {
     return String(process.env.CUTI_RECEIVERS_ENABLED || '').toLowerCase() === 'true';
@@ -288,11 +290,25 @@ function requireWriteReceivers(_req: Request, res: Response, next: NextFunction)
             status: 'rejected',
             code: 'RECEIVERS_DISABLED',
             message:
-                'Write receivers chưa bật. Dùng POST /v1/cuti/receivers/test/echo để test payload. Set CUTI_RECEIVERS_ENABLED=true sau khi echo pass.',
+                'Projection/activity write receivers chưa bật. Dùng /receivers/messages hoặc /receivers/test/echo. Set CUTI_RECEIVERS_ENABLED=true sau khi mapping pass.',
         });
     }
     return next();
 }
+
+/** Production: Pancake Message — durable message_id dedupe; no lead create / assign / Core write-back */
+router.post(
+    '/receivers/messages',
+    verifyCutiReceiverSecret,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const result = await receivePancakeMessage(req.body || {});
+            return res.status(result.httpStatus).json(result.body);
+        } catch (error) {
+            next(error);
+        }
+    },
+);
 
 router.post(
     '/receivers/projections',
