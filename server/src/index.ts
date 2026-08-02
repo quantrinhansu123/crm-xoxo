@@ -146,6 +146,7 @@ app.use('/api/violations', violationsRouter);
 app.use('/api/media', mediaRouter);
 app.use('/v1/cuti', cutiRouter);
 app.use('/api/v1/cuti', cutiRouter); // alias for reverse-proxies that prefix /api
+app.use('/api/cuti', cutiRouter); // short alias (same router; not legacy /api/webhooks/n8n*)
 
 // Error handling
 app.use(errorHandler);
@@ -157,6 +158,7 @@ const host = '0.0.0.0';
 app.listen(port, host, () => {
     console.log(`🚀 Server running on http://${host}:${port}`);
     console.log(`📊 Environment: ${config.nodeEnv}`);
+    console.log(`🔌 CUTI: /v1/cuti + /api/v1/cuti + /api/cuti (echo always-on; write receivers need CUTI_RECEIVERS_ENABLED=true)`);
     console.log(`🕒 Last Reload: ${new Date().toLocaleString()} (CUTI v1.0.0)`);
     
     // Start SLA Manager + CUTI outbox publisher

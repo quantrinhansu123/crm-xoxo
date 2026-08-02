@@ -269,15 +269,64 @@ router.post('/outbox/publish', authenticate, async (req: AuthenticatedRequest, r
 
 /**
  * Backend/n8n → CRM receivers (CUTI outbox envelope).
- * Do NOT reuse /api/webhooks/n8n or /api/webhooks/n8n/raw.
+ * Do NOT reuse /api/webhooks/n8n or /api/webhooks/n8n/raw for CUTI.
  *
- * POST /v1/cuti/receivers/lead.projection.upsert.v1
- * POST /v1/cuti/receivers/lead.activity.append.v1
- * (also mounted at /api/v1/cuti/...)
+ * Canonical (write gated by CUTI_RECEIVERS_ENABLED=true):
+ *   POST /v1/cuti/receivers/projections
+ *   POST /v1/cuti/receivers/activities
+ * Always-on read-only probe:
+ *   POST /v1/cuti/receivers/test/echo
+ *   GET  /v1/cuti/receivers/test/last
  */
+function cutiWriteReceiversEnabled(): boolean {
+    return String(process.env.CUTI_RECEIVERS_ENABLED || '').toLowerCase() === 'true';
+}
+
+function requireWriteReceivers(_req: Request, res: Response, next: NextFunction) {
+    if (!cutiWriteReceiversEnabled()) {
+        return res.status(503).json({
+            status: 'rejected',
+            code: 'RECEIVERS_DISABLED',
+            message:
+                'Write receivers chưa bật. Dùng POST /v1/cuti/receivers/test/echo để test payload. Set CUTI_RECEIVERS_ENABLED=true sau khi echo pass.',
+        });
+    }
+    return next();
+}
+
+router.post(
+    '/receivers/projections',
+    verifyCutiReceiverSecret,
+    requireWriteReceivers,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const result = await receiveLeadProjectionUpsert(req.body || {});
+            return res.status(result.httpStatus).json(result.body);
+        } catch (error) {
+            next(error);
+        }
+    },
+);
+
+router.post(
+    '/receivers/activities',
+    verifyCutiReceiverSecret,
+    requireWriteReceivers,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const result = await receiveLeadActivityAppend(req.body || {});
+            return res.status(result.httpStatus).json(result.body);
+        } catch (error) {
+            next(error);
+        }
+    },
+);
+
+/** Legacy message-type paths — same handlers, still write-gated */
 router.post(
     `/receivers/${OUTBOX_PROJECTION}`,
     verifyCutiReceiverSecret,
+    requireWriteReceivers,
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             const result = await receiveLeadProjectionUpsert(req.body || {});
@@ -291,6 +340,7 @@ router.post(
 router.post(
     `/receivers/${OUTBOX_ACTIVITY}`,
     verifyCutiReceiverSecret,
+    requireWriteReceivers,
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             const result = await receiveLeadActivityAppend(req.body || {});
@@ -302,8 +352,8 @@ router.post(
 );
 
 /**
- * Temporary read-only probe — nhận 1 payload thật, echo field mapping.
- * KHÔNG tạo/cập nhật lead, customer, hay chạy automation.
+ * Always-on read-only probe — nhận payload thật, echo mapping.
+ * KHÔNG tạo/cập nhật lead, customer, đổi trạng thái/assign, hay ghi ngược Core.
  *
  * POST /v1/cuti/receivers/test/echo
  * GET  /v1/cuti/receivers/test/last
@@ -325,7 +375,6 @@ router.post('/receivers/test/echo', verifyCutiReceiverSecret, async (req: Reques
         }).slice(0, 2000),
     );
 
-    // Persist raw body for mapping review only (webhook_logs) — no lead/customer writes
     try {
         await supabaseAdmin.from('webhook_logs').insert({
             event: 'cuti.test.echo',
@@ -344,9 +393,9 @@ router.post('/receivers/test/echo', verifyCutiReceiverSecret, async (req: Reques
     }
 
     return res.status(200).json({
-        status: 'ok',
+        status: 'accepted',
         mode: 'read_only_test',
-        message: 'Payload received; no lead/customer/automation side effects',
+        message: 'Payload received; no lead/customer/automation/Core side effects',
         received_at,
         readable_fields,
         body,
@@ -356,7 +405,7 @@ router.post('/receivers/test/echo', verifyCutiReceiverSecret, async (req: Reques
 router.get('/receivers/test/last', verifyCutiReceiverSecret, async (_req: Request, res: Response) => {
     if (lastCutiTestEcho) {
         return res.status(200).json({
-            status: 'ok',
+            status: 'accepted',
             source: 'memory',
             ...lastCutiTestEcho,
         });
@@ -373,7 +422,7 @@ router.get('/receivers/test/last', verifyCutiReceiverSecret, async (_req: Reques
 
         if (data?.payload) {
             return res.status(200).json({
-                status: 'ok',
+                status: 'accepted',
                 source: 'webhook_logs',
                 log_id: data.id,
                 received_at: data.created_at,
@@ -386,7 +435,8 @@ router.get('/receivers/test/last', verifyCutiReceiverSecret, async (_req: Reques
     }
 
     return res.status(404).json({
-        status: 'empty',
+        status: 'rejected',
+        code: 'EMPTY',
         message: 'Chưa có payload test nào',
     });
 });

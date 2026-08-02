@@ -67,16 +67,17 @@ function inboxKey(messageId: string): string {
 
 function validateEnvelope(
     body: CutiReceiverEnvelope,
-    expectedType: string,
+    expectedType: string | string[],
 ): { ok: true; envelope: Required<Pick<CutiReceiverEnvelope, 'message_id' | 'message_type' | 'occurred_at' | 'payload'>> & CutiReceiverEnvelope } | { ok: false; result: CutiReceiverResult } {
+    const allowed = Array.isArray(expectedType) ? expectedType : [expectedType];
     const fields: Record<string, string> = {};
     if (!body?.message_id || typeof body.message_id !== 'string') {
         fields.message_id = 'required';
     }
     if (!body?.message_type || typeof body.message_type !== 'string') {
         fields.message_type = 'required';
-    } else if (body.message_type !== expectedType) {
-        fields.message_type = `expected ${expectedType}`;
+    } else if (!allowed.includes(body.message_type)) {
+        fields.message_type = `expected one of: ${allowed.join(', ')}`;
     }
     if (!body?.occurred_at || typeof body.occurred_at !== 'string') {
         fields.occurred_at = 'required';
@@ -90,7 +91,7 @@ function validateEnvelope(
             result: {
                 httpStatus: 400,
                 body: {
-                    status: 'VALIDATION_ERROR',
+                    status: 'rejected',
                     code: 'INVALID_ENVELOPE',
                     fields,
                     message_id: body?.message_id ?? null,
@@ -120,7 +121,7 @@ async function dedupLookup(messageId: string, payloadHash: string): Promise<Cuti
         return {
             httpStatus: 409,
             body: {
-                status: 'CONFLICT',
+                status: 'rejected',
                 code: 'MESSAGE_ID_PAYLOAD_MISMATCH',
                 message_id: messageId,
                 message_type: existing.event_name,
@@ -133,7 +134,7 @@ async function dedupLookup(messageId: string, payloadHash: string): Promise<Cuti
     return {
         httpStatus: 200,
         body: {
-            status: 'DUPLICATE_NOOP',
+            status: 'duplicate',
             message_id: messageId,
             message_type: existing.event_name,
             outbox_id: (existing.payload as any)?.outbox_id ?? null,
@@ -313,7 +314,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
         return {
             httpStatus: 400,
             body: {
-                status: 'VALIDATION_ERROR',
+                status: 'rejected',
                 code: 'INVALID_PAYLOAD',
                 fields: { 'payload.lead_id': 'uuid required' },
                 message_id: messageId,
@@ -327,7 +328,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
         return {
             httpStatus: 400,
             body: {
-                status: 'VALIDATION_ERROR',
+                status: 'rejected',
                 code: 'INVALID_PAYLOAD',
                 fields: { 'payload.state_version': 'required number' },
                 message_id: messageId,
@@ -355,7 +356,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
         return {
             httpStatus: 404,
             body: {
-                status: 'VALIDATION_ERROR',
+                status: 'rejected',
                 code: 'LEAD_NOT_FOUND',
                 fields: { 'payload.lead_id': leadId },
                 message_id: messageId,
@@ -371,7 +372,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
         return {
             httpStatus: 409,
             body: {
-                status: 'VERSION_CONFLICT',
+                status: 'stale',
                 code: 'STALE_STATE_VERSION',
                 message_id: messageId,
                 message_type: OUTBOX_PROJECTION,
@@ -433,7 +434,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
             return {
                 httpStatus: 409,
                 body: {
-                    status: 'VERSION_CONFLICT',
+                    status: 'stale',
                     code: 'SAME_VERSION_DATA_MISMATCH',
                     message_id: messageId,
                     message_type: OUTBOX_PROJECTION,
@@ -445,7 +446,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
         }
 
         const noopBody = {
-            status: 'DUPLICATE_NOOP',
+            status: 'duplicate',
             message_id: messageId,
             message_type: OUTBOX_PROJECTION,
             outbox_id: envelope.outbox_id ?? null,
@@ -460,7 +461,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
             leadId,
             envelope: body as Record<string, unknown>,
             payloadHash,
-            resultStatus: 'DUPLICATE_NOOP',
+            resultStatus: 'duplicate',
             resultStateVersion: storedVersion,
             resultBody: noopBody,
         });
@@ -475,7 +476,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
         return {
             httpStatus: 500,
             body: {
-                status: 'ERROR',
+                status: 'rejected',
                 code: 'PROJECTION_APPLY_FAILED',
                 message: updErr.message,
                 message_id: messageId,
@@ -486,7 +487,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
     }
 
     const accepted = {
-        status: 'ACCEPTED',
+        status: 'accepted',
         message_id: messageId,
         message_type: OUTBOX_PROJECTION,
         outbox_id: envelope.outbox_id ?? null,
@@ -503,7 +504,7 @@ export async function receiveLeadProjectionUpsert(body: CutiReceiverEnvelope): P
         leadId,
         envelope: body as Record<string, unknown>,
         payloadHash,
-        resultStatus: 'ACCEPTED',
+        resultStatus: 'accepted',
         resultStateVersion: incomingVersion,
         resultBody: accepted,
     });
@@ -539,7 +540,7 @@ export async function receiveLeadActivityAppend(body: CutiReceiverEnvelope): Pro
         return {
             httpStatus: 400,
             body: {
-                status: 'VALIDATION_ERROR',
+                status: 'rejected',
                 code: 'INVALID_PAYLOAD',
                 fields,
                 message_id: messageId,
@@ -576,7 +577,7 @@ export async function receiveLeadActivityAppend(body: CutiReceiverEnvelope): Pro
             return {
                 httpStatus: 404,
                 body: {
-                    status: 'VALIDATION_ERROR',
+                    status: 'rejected',
                     code: 'LEAD_NOT_FOUND',
                     fields: { 'payload.lead_id': leadId },
                     message_id: messageId,
@@ -589,7 +590,7 @@ export async function receiveLeadActivityAppend(body: CutiReceiverEnvelope): Pro
         return {
             httpStatus: 500,
             body: {
-                status: 'ERROR',
+                status: 'rejected',
                 code: 'ACTIVITY_APPEND_FAILED',
                 message: actErr.message,
                 message_id: messageId,
@@ -606,7 +607,7 @@ export async function receiveLeadActivityAppend(body: CutiReceiverEnvelope): Pro
         .eq('id', leadId);
 
     const accepted = {
-        status: 'ACCEPTED',
+        status: 'accepted',
         message_id: messageId,
         message_type: OUTBOX_ACTIVITY,
         outbox_id: envelope.outbox_id ?? null,
@@ -623,7 +624,7 @@ export async function receiveLeadActivityAppend(body: CutiReceiverEnvelope): Pro
         leadId,
         envelope: body as Record<string, unknown>,
         payloadHash,
-        resultStatus: 'ACCEPTED',
+        resultStatus: 'accepted',
         resultStateVersion: payload.state_version != null ? Number(payload.state_version) : null,
         resultBody: accepted,
     });
