@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth.js';
 import {
     assignOwner,
@@ -10,8 +10,32 @@ import {
 } from '../cuti/commands.js';
 import type { CutiCommonCommand } from '../cuti/types.js';
 import { publishPendingOutbox } from '../cuti/outbox.js';
+import {
+    receiveLeadActivityAppend,
+    receiveLeadProjectionUpsert,
+} from '../cuti/receivers.js';
+import { OUTBOX_ACTIVITY, OUTBOX_PROJECTION } from '../cuti/types.js';
 
 const router = Router();
+
+/** Machine auth for Backend/n8n → CRM receivers (not legacy Pancake webhooks). */
+function verifyCutiReceiverSecret(req: Request, res: Response, next: NextFunction) {
+    const secret = req.headers['x-webhook-secret'] as string | undefined;
+    const expected = process.env.CUTI_RECEIVER_SECRET || process.env.WEBHOOK_SECRET;
+    if (!expected) {
+        return res.status(500).json({
+            status: 'error',
+            message: 'CUTI receiver secret chưa được cấu hình',
+        });
+    }
+    if (!secret || secret !== expected) {
+        return res.status(401).json({
+            status: 'error',
+            message: 'Unauthorized - Invalid receiver secret',
+        });
+    }
+    return next();
+}
 
 function commonFromRequest(req: AuthenticatedRequest): CutiCommonCommand {
     const body = req.body || {};
@@ -131,5 +155,39 @@ router.post('/outbox/publish', authenticate, async (req: AuthenticatedRequest, r
         next(error);
     }
 });
+
+/**
+ * Backend/n8n → CRM receivers (CUTI outbox envelope).
+ * Do NOT reuse /api/webhooks/n8n or /api/webhooks/n8n/raw.
+ *
+ * POST /v1/cuti/receivers/lead.projection.upsert.v1
+ * POST /v1/cuti/receivers/lead.activity.append.v1
+ * (also mounted at /api/v1/cuti/...)
+ */
+router.post(
+    `/receivers/${OUTBOX_PROJECTION}`,
+    verifyCutiReceiverSecret,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const result = await receiveLeadProjectionUpsert(req.body || {});
+            return res.status(result.httpStatus).json(result.body);
+        } catch (error) {
+            next(error);
+        }
+    },
+);
+
+router.post(
+    `/receivers/${OUTBOX_ACTIVITY}`,
+    verifyCutiReceiverSecret,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const result = await receiveLeadActivityAppend(req.body || {});
+            return res.status(result.httpStatus).json(result.body);
+        } catch (error) {
+            next(error);
+        }
+    },
+);
 
 export default router;
