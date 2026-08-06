@@ -1,24 +1,42 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
     Bell,
     Calendar,
-    LocateFixed,
+    Wifi,
     Clock3,
     ArrowRightLeft,
     Loader2,
-    MapPin,
     RefreshCw,
     AlertCircle,
+    CheckCircle2,
+    XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMobileAttendance } from '@/hooks/useMobileAttendance';
-import { getClientOfficeGeofence } from '@/lib/attendanceConfig';
-import { GeoLocationError } from '@/lib/geolocation';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+
+type PunchFeedback = {
+    type: 'success' | 'error';
+    title: string;
+    message: string;
+};
+
+function getPunchErrorMessage(err: unknown): string {
+    const ax = err as {
+        response?: { data?: { message?: string; error?: string } };
+        message?: string;
+    };
+    return (
+        ax.response?.data?.message ||
+        ax.response?.data?.error ||
+        ax.message ||
+        'Không thể chấm công. Vui lòng thử lại.'
+    );
+}
 
 const TZ = 'Asia/Ho_Chi_Minh';
 
@@ -62,14 +80,17 @@ function buildWeekCells(reference = new Date()) {
 
 export function AttendanceMobilePage() {
     const { user } = useAuth();
-    const office = getClientOfficeGeofence();
-    const { today, loading, punching, location, refreshLocation, punch, fetchToday } =
-        useMobileAttendance();
+    const { today, loading, punching, punch, fetchToday } = useMobileAttendance();
+    const [feedback, setFeedback] = useState<PunchFeedback | null>(null);
 
     const weekCells = useMemo(() => buildWeekCells(), []);
     const timesheet = today?.timesheet;
     const hasCheckIn = Boolean(timesheet?.check_in);
     const hasCheckOut = Boolean(timesheet?.check_out);
+    const office = today?.office;
+    const network = today?.network;
+    const wifiOk = network?.wifi_ok;
+    const enforceWifi = Boolean(network?.enforce);
 
     const statusLabel = hasCheckOut
         ? 'Đã check-out'
@@ -90,27 +111,41 @@ export function AttendanceMobilePage() {
             : 'bg-amber-600';
 
     const handlePunch = async (action: 'check_in' | 'check_out') => {
+        const actionLabel = action === 'check_in' ? 'Check-in' : 'Check-out';
+
+        if (enforceWifi && wifiOk === false) {
+            const reason = `Chấm công thất bại: chưa kết nối WiFi ${office?.wifi_name || 'văn phòng'}. IP hiện tại: ${network?.client_ip || 'không xác định'}`;
+            setFeedback({ type: 'error', title: `${actionLabel} thất bại`, message: reason });
+            toast.error(reason);
+            return;
+        }
+
         try {
-            await punch(action);
-            toast.success(action === 'check_in' ? 'Check-in thành công' : 'Check-out thành công');
-            await refreshLocation();
+            const data = await punch(action);
+            const timeLabel =
+                action === 'check_in'
+                    ? data?.check_in_label
+                    : data?.check_out_label;
+            const successMsg = timeLabel
+                ? `${actionLabel} thành công lúc ${timeLabel}`
+                : `${actionLabel} thành công`;
+            setFeedback({ type: 'success', title: `${actionLabel} thành công`, message: successMsg });
+            toast.success(successMsg);
         } catch (err: unknown) {
-            const ax = err as { response?: { data?: { message?: string } } };
-            const msg =
-                ax.response?.data?.message ??
-                (err instanceof GeoLocationError ? err.message : 'Không thể chấm công');
-            toast.error(msg);
+            const reason = getPunchErrorMessage(err);
+            setFeedback({ type: 'error', title: `${actionLabel} thất bại`, message: reason });
+            toast.error(reason);
         }
     };
 
-    const locationTitle =
-        location.address?.split(',')[0]?.trim() ||
-        (location.withinGeofence ? office.name : 'Vị trí GPS');
-    const locationSubtitle =
-        location.address ||
-        (location.latitude
-            ? `${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`
-            : office.address);
+    const wifiTitle = office?.wifi_name || 'WiFi văn phòng';
+    const wifiSubtitle = office?.name
+        ? `${office.name}${office.address ? ` · ${office.address}` : ''}`
+        : 'Kết nối WiFi công ty để chấm công';
+
+    const wifiBlocked = enforceWifi && wifiOk === false;
+    const canCheckIn = Boolean(today?.can_check_in);
+    const canCheckOut = Boolean(today?.can_check_out);
 
     return (
         <div className="min-h-[calc(100vh-4rem)] sm:min-h-[calc(100vh-8rem)] bg-[#f4f5f6] sm:bg-slate-100 sm:p-6">
@@ -180,7 +215,7 @@ export function AttendanceMobilePage() {
                             <div className="mt-6 grid grid-cols-2 gap-2">
                                 <Button
                                     className="h-12 rounded-xl bg-[#003e36] hover:bg-[#00352f]"
-                                    disabled={punching || loading || !today?.can_check_in}
+                                    disabled={punching || loading || !canCheckIn}
                                     onClick={() => handlePunch('check_in')}
                                 >
                                     {punching ? (
@@ -193,7 +228,7 @@ export function AttendanceMobilePage() {
                                 <Button
                                     variant="outline"
                                     className="h-12 rounded-xl border-amber-800 text-amber-800 hover:bg-amber-50"
-                                    disabled={punching || loading || !today?.can_check_out}
+                                    disabled={punching || loading || !canCheckOut}
                                     onClick={() => handlePunch('check_out')}
                                 >
                                     {punching ? (
@@ -204,6 +239,30 @@ export function AttendanceMobilePage() {
                                     CHECK-OUT
                                 </Button>
                             </div>
+
+                            {feedback && (
+                                <div
+                                    className={cn(
+                                        'mt-3 rounded-xl px-3 py-3 text-sm flex gap-2',
+                                        feedback.type === 'success'
+                                            ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+                                            : 'bg-red-50 text-red-900 border border-red-200',
+                                    )}
+                                    role="alert"
+                                >
+                                    {feedback.type === 'success' ? (
+                                        <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
+                                    ) : (
+                                        <XCircle className="h-5 w-5 shrink-0 text-red-600" />
+                                    )}
+                                    <div className="min-w-0">
+                                        <p className="font-semibold">{feedback.title}</p>
+                                        <p className="mt-0.5 text-[13px] leading-snug opacity-90">
+                                            {feedback.message}
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
                         </CardContent>
                     </Card>
 
@@ -212,70 +271,63 @@ export function AttendanceMobilePage() {
                             <div className="flex items-start justify-between gap-3">
                                 <div className="flex gap-3 min-w-0">
                                     <div className="h-10 w-10 shrink-0 rounded-full bg-slate-100 flex items-center justify-center">
-                                        {location.loading ? (
+                                        {loading ? (
                                             <Loader2 className="h-5 w-5 text-slate-400 animate-spin" />
-                                        ) : location.error ? (
+                                        ) : wifiBlocked ? (
                                             <AlertCircle className="h-5 w-5 text-amber-600" />
                                         ) : (
-                                            <LocateFixed
+                                            <Wifi
                                                 className={cn(
                                                     'h-5 w-5',
-                                                    location.withinGeofence ? 'text-emerald-600' : 'text-amber-600',
+                                                    wifiOk === false
+                                                        ? 'text-amber-600'
+                                                        : 'text-emerald-600',
                                                 )}
                                             />
                                         )}
                                     </div>
                                     <div className="min-w-0">
                                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                                            Vị trí hiện tại
+                                            Mạng WiFi
                                         </p>
-                                        {location.loading ? (
-                                            <p className="text-sm text-slate-500 mt-1">Đang lấy GPS…</p>
-                                        ) : location.error ? (
-                                            <>
-                                                <p className="text-sm font-medium text-amber-800 mt-1">{location.error}</p>
-                                                <Button
-                                                    variant="link"
-                                                    className="h-auto p-0 text-xs text-[#003e36]"
-                                                    onClick={() => refreshLocation()}
-                                                >
-                                                    Thử lại
-                                                </Button>
-                                            </>
+                                        {loading ? (
+                                            <p className="text-sm text-slate-500 mt-1">Đang kiểm tra IP…</p>
                                         ) : (
                                             <>
                                                 <p className="text-lg leading-[1.2] font-semibold text-slate-900 truncate">
-                                                    {locationTitle}
+                                                    {wifiTitle}
                                                 </p>
-                                                <p className="text-sm text-slate-500 line-clamp-2">{locationSubtitle}</p>
-                                                {location.accuracyM > 0 && (
-                                                    <p className="text-[11px] text-slate-400 mt-1">
-                                                        Độ chính xác ~{Math.round(location.accuracyM)}m
-                                                        {location.withinGeofence ? ' · Trong phạm vi' : ' · Ngoài phạm vi'}
-                                                    </p>
-                                                )}
+                                                <p className="text-sm text-slate-500 line-clamp-2">{wifiSubtitle}</p>
+                                                <p className="text-[11px] text-slate-400 mt-1">
+                                                    IP: {network?.client_ip || '—'}
+                                                    {!enforceWifi
+                                                        ? ' · Chưa bắt buộc WiFi'
+                                                        : wifiOk
+                                                            ? ' · Đúng WiFi văn phòng'
+                                                            : ' · Ngoài WiFi văn phòng'}
+                                                </p>
                                             </>
                                         )}
                                     </div>
                                 </div>
                                 <div className="flex flex-col items-end gap-1 shrink-0">
                                     <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-500">
-                                        GPS
+                                        IP
                                     </span>
                                     <button
                                         type="button"
-                                        onClick={() => refreshLocation()}
+                                        onClick={() => fetchToday()}
                                         className="text-slate-400 hover:text-slate-600"
-                                        aria-label="Cập nhật vị trí"
+                                        aria-label="Cập nhật mạng"
                                     >
-                                        <RefreshCw className={cn('h-3.5 w-3.5', location.loading && 'animate-spin')} />
+                                        <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
                                     </button>
                                 </div>
                             </div>
-                            {!location.loading && !location.error && !location.withinGeofence && (
+                            {wifiBlocked && (
                                 <p className="mt-3 text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2 flex gap-2">
-                                    <MapPin className="h-4 w-4 shrink-0 mt-0.5" />
-                                    Bạn đang cách {office.name} hơn {office.radiusM}m. Check-in có thể bị từ chối.
+                                    <Wifi className="h-4 w-4 shrink-0 mt-0.5" />
+                                    Hãy kết nối WiFi {wifiTitle} rồi nhấn làm mới để chấm công.
                                 </p>
                             )}
                         </CardContent>

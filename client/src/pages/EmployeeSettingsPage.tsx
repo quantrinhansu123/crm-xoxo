@@ -13,6 +13,7 @@ import {
   Shield,
 } from 'lucide-react';
 import { ViewPermissionsPanel } from '@/components/employee-settings/ViewPermissionsTab';
+import { AttendanceWifiSettingsPanel } from '@/components/employee-settings/AttendanceWifiSettingsPanel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -206,6 +207,7 @@ function AttendanceTab() {
 
   // Right sidebar anchor items
   const rightSidebarItems = [
+    { id: 'wifi-ip-setup', label: 'WiFi / IP chấm công' },
     { id: 'attendance-setup', label: 'Thiết lập chấm công' },
   ];
 
@@ -213,6 +215,10 @@ function AttendanceTab() {
     <div className="flex gap-6">
       {/* Main content */}
       <div className="flex-1 space-y-8">
+        <AttendanceWifiSettingsPanel />
+
+        <div className="h-px bg-gray-100" />
+
         {/* Shift Setup */}
         <div className="pb-6">
           <div className="flex items-center justify-between mb-1">
@@ -427,11 +433,16 @@ function AttendanceTab() {
       {/* Right sidebar anchors */}
       <div className="hidden xl:block w-[180px] flex-shrink-0">
         <div className="sticky top-4 space-y-1">
-          {rightSidebarItems.map((item) => (
+          {rightSidebarItems.map((item, idx) => (
             <a
               key={item.id}
               href={`#${item.id}`}
-              className="block text-[13px] text-orange-600 font-medium hover:text-orange-700 py-1 border-l-2 border-orange-500 pl-3"
+              className={cn(
+                'block text-[13px] font-medium py-1.5 pl-3 border-l-2 transition-colors',
+                idx === 0
+                  ? 'text-orange-600 border-orange-500'
+                  : 'text-gray-500 border-transparent hover:text-orange-600 hover:border-orange-300',
+              )}
             >
               {item.label}
             </a>

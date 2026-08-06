@@ -1,7 +1,11 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { supabaseAdmin as supabase } from '../config/supabase';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth.js';
-import { getOfficeGeofenceFromEnv, isWithinGeofence } from '../utils/attendanceGeofence.js';
+import {
+    getAttendanceWifiSettings,
+    getClientIp,
+    isWifiIpAllowed,
+} from '../utils/attendanceWifiIp.js';
 import {
     deriveCheckInStatus,
     formatWorkedDuration,
@@ -66,7 +70,10 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
         const userId = req.user!.id;
         const scheduleDate = vietnamDateString();
         const shiftInfo = await resolveTodayShift(userId, scheduleDate);
-        const office = getOfficeGeofenceFromEnv();
+        const settings = await getAttendanceWifiSettings();
+        const clientIp = getClientIp(req);
+        const wifiOk = isWifiIpAllowed(clientIp, settings.allowed_ips, settings.enforce_wifi);
+        const enforce = settings.enforce_wifi && settings.allowed_ips.length > 0;
 
         let timesheet = null;
         if (shiftInfo) {
@@ -93,15 +100,16 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
                 worked_minutes: minutes,
                 can_check_in: Boolean(shiftInfo && !timesheet?.check_in),
                 can_check_out: Boolean(shiftInfo && timesheet?.check_in && !timesheet?.check_out),
-                office: office
-                    ? {
-                        name: office.name ?? 'Văn phòng',
-                        address: office.address ?? null,
-                        lat: office.lat,
-                        lng: office.lng,
-                        radius_m: office.radiusM,
-                    }
-                    : null,
+                office: {
+                    name: settings.office_name,
+                    wifi_name: settings.wifi_name,
+                    address: settings.office_address,
+                },
+                network: {
+                    client_ip: clientIp || null,
+                    wifi_ok: wifiOk,
+                    enforce,
+                },
             },
         });
     } catch (error) {
@@ -113,30 +121,31 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
 router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const userId = req.user!.id;
-        const { action, latitude, longitude, accuracy_m, address } = req.body as {
-            action?: string;
-            latitude?: number;
-            longitude?: number;
-            accuracy_m?: number;
-            address?: string;
-        };
+        const { action } = req.body as { action?: string };
 
         if (action !== 'check_in' && action !== 'check_out') {
             res.status(400).json({ status: 'fail', message: 'action phải là check_in hoặc check_out' });
             return;
         }
-        if (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-            res.status(400).json({ status: 'fail', message: 'latitude và longitude là bắt buộc' });
-            return;
-        }
 
-        const office = getOfficeGeofenceFromEnv();
-        const withinGeofence = office ? isWithinGeofence(latitude, longitude, office) : null;
-        if (office && withinGeofence === false) {
+        const settings = await getAttendanceWifiSettings();
+        const clientIp = getClientIp(req);
+        const wifiOk = isWifiIpAllowed(clientIp, settings.allowed_ips, settings.enforce_wifi);
+        const enforce = settings.enforce_wifi && settings.allowed_ips.length > 0;
+
+        if (enforce && wifiOk === false) {
             res.status(403).json({
                 status: 'fail',
-                message: `Bạn đang ngoài phạm vi chấm công (tối đa ${office.radiusM}m từ ${office.name ?? 'văn phòng'})`,
-                data: { within_geofence: false, office },
+                message: `Chấm công thất bại: chưa kết nối WiFi ${settings.wifi_name} (${settings.office_name}). IP hiện tại: ${clientIp || 'không xác định'}`,
+                data: {
+                    wifi_ok: false,
+                    client_ip: clientIp || null,
+                    office: {
+                        name: settings.office_name,
+                        wifi_name: settings.wifi_name,
+                        address: settings.office_address,
+                    },
+                },
             });
             return;
         }
@@ -172,11 +181,8 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
                 schedule_date: scheduleDate,
                 check_in: nowIso,
                 status,
-                check_in_latitude: latitude,
-                check_in_longitude: longitude,
-                check_in_accuracy_m: accuracy_m ?? null,
-                check_in_address: address ?? null,
-                check_in_within_geofence: withinGeofence,
+                check_in_ip: clientIp || null,
+                check_in_wifi_ok: wifiOk,
                 updated_at: nowIso,
             };
 
@@ -193,7 +199,8 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
                 data: {
                     timesheet: data,
                     check_in_label: vietnamTimeLabel(nowIso),
-                    within_geofence: withinGeofence,
+                    wifi_ok: wifiOk,
+                    client_ip: clientIp || null,
                 },
             });
             return;
@@ -213,11 +220,8 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
             .update({
                 check_out: nowIso,
                 status: 'on_time',
-                check_out_latitude: latitude,
-                check_out_longitude: longitude,
-                check_out_accuracy_m: accuracy_m ?? null,
-                check_out_address: address ?? null,
-                check_out_within_geofence: withinGeofence,
+                check_out_ip: clientIp || null,
+                check_out_wifi_ok: wifiOk,
                 updated_at: nowIso,
             })
             .eq('id', existing.id)
@@ -234,7 +238,8 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
                 timesheet: data,
                 check_out_label: vietnamTimeLabel(nowIso),
                 worked_duration: formatWorkedDuration(minutes),
-                within_geofence: withinGeofence,
+                wifi_ok: wifiOk,
+                client_ip: clientIp || null,
             },
         });
     } catch (error) {
