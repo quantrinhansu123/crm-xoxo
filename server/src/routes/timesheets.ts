@@ -5,6 +5,7 @@ import {
     getAttendanceWifiSettings,
     getClientIp,
     isWifiIpAllowed,
+    readReportedPublicIp,
     resolveAttendanceIp,
 } from '../utils/attendanceWifiIp.js';
 import {
@@ -73,10 +74,12 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
         const shiftInfo = await resolveTodayShift(userId, scheduleDate);
         const settings = await getAttendanceWifiSettings();
         const observedIp = getClientIp(req);
-        const reportedPublicIp = typeof req.query.public_ip === 'string' ? req.query.public_ip : null;
+        const reportedPublicIp = readReportedPublicIp(req);
         const clientIp = resolveAttendanceIp(observedIp, reportedPublicIp);
         const wifiOk = isWifiIpAllowed(clientIp, settings.allowed_ips, settings.enforce_wifi);
         const enforce = settings.enforce_wifi && settings.allowed_ips.length > 0;
+
+        console.log('[attendance.today]', { observedIp, reportedPublicIp, clientIp, wifiOk, enforce });
 
         let timesheet = null;
         if (shiftInfo) {
@@ -109,7 +112,8 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
                     address: settings.office_address,
                 },
                 network: {
-                    client_ip: clientIp || null,
+                    // Không bao giờ trả 127.0.0.1 cho UI
+                    client_ip: clientIp || reportedPublicIp || null,
                     observed_ip: observedIp || null,
                     wifi_ok: wifiOk,
                     enforce,
@@ -125,7 +129,7 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
 router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const userId = req.user!.id;
-        const { action, public_ip: reportedPublicIp } = req.body as {
+        const { action, public_ip: bodyPublicIp } = req.body as {
             action?: string;
             public_ip?: string | null;
         };
@@ -137,6 +141,7 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
 
         const settings = await getAttendanceWifiSettings();
         const observedIp = getClientIp(req);
+        const reportedPublicIp = readReportedPublicIp(req, bodyPublicIp);
         const clientIp = resolveAttendanceIp(observedIp, reportedPublicIp);
         const wifiOk = isWifiIpAllowed(clientIp, settings.allowed_ips, settings.enforce_wifi);
         const enforce = settings.enforce_wifi && settings.allowed_ips.length > 0;
@@ -152,7 +157,7 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
             allowed: settings.allowed_ips,
         });
 
-        if (enforce && wifiOk === false) {
+        if (enforce && (!clientIp || wifiOk === false)) {
             const detail = clientIp
                 ? `IP WiFi hiện tại ${clientIp} không khớp danh sách cho phép. Thêm IP này vào Thiết lập nhân viên → Chấm công (khi đang dính đúng WiFi văn phòng).`
                 : `Không lấy được IP public của WiFi đang dùng. Kiểm tra mạng / tắt VPN rồi thử lại.`;

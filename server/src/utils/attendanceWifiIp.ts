@@ -148,24 +148,40 @@ export function getClientIp(req: Request): string {
     return normalizeIp(req.socket.remoteAddress ?? '');
 }
 
-/**
- * IP dùng để so WiFi văn phòng:
- * - Production (Render thấy IP public): dùng IP quan sát từ request
- * - Local/LAN (request = 127.0.0.1 / 192.168.*): dùng IP public WiFi mà client lấy (ipify)
- */
 export function resolveAttendanceIp(observedIp: string, reportedPublicIp?: string | null): string {
+    const reported = normalizeIp(reportedPublicIp || '');
     const observed = normalizeIp(observedIp || '');
+
+    // Ưu tiên IP public do client lấy từ WiFi (ipify) khi request đang là localhost/LAN
+    if (reported && isPublicIpv4(reported) && (!observed || !isPublicIpv4(observed))) {
+        return reported;
+    }
+
+    // Production (Render): request đã là IP public → dùng IP quan sát
     if (observed && isPublicIpv4(observed)) {
         return observed;
     }
 
-    const reported = normalizeIp(reportedPublicIp || '');
     if (reported && isPublicIpv4(reported)) {
         return reported;
     }
 
-    // Không dùng 127.0.0.1 / LAN để so với allowlist public
+    // Không bao giờ trả 127.0.0.1 / LAN làm IP WiFi
     return '';
+}
+
+/** Đọc IP public WiFi từ query / body / header */
+export function readReportedPublicIp(req: Request, bodyField?: string | null): string | null {
+    const fromBody = bodyField != null ? String(bodyField) : '';
+    const fromQuery = typeof req.query.public_ip === 'string' ? req.query.public_ip : '';
+    const header = req.headers['x-wifi-public-ip'];
+    const fromHeader = typeof header === 'string' ? header : Array.isArray(header) ? header[0] : '';
+
+    for (const candidate of [fromBody, fromQuery, fromHeader]) {
+        const ip = normalizeIp(candidate || '');
+        if (ip && isPublicIpv4(ip)) return ip;
+    }
+    return null;
 }
 
 function ipv4ToInt(ip: string): number | null {

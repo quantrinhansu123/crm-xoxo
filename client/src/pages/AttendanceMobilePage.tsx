@@ -14,6 +14,7 @@ import {
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMobileAttendance } from '@/hooks/useMobileAttendance';
+import { isLoopbackIp, isPublicIpv4 } from '@/lib/publicIp';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -80,7 +81,7 @@ function buildWeekCells(reference = new Date()) {
 
 export function AttendanceMobilePage() {
     const { user } = useAuth();
-    const { today, loading, punching, punch, fetchToday } = useMobileAttendance();
+    const { today, loading, punching, punch, fetchToday, wifiPublicIp } = useMobileAttendance();
     const [feedback, setFeedback] = useState<PunchFeedback | null>(null);
 
     const weekCells = useMemo(() => buildWeekCells(), []);
@@ -89,8 +90,20 @@ export function AttendanceMobilePage() {
     const hasCheckOut = Boolean(timesheet?.check_out);
     const office = today?.office;
     const network = today?.network;
-    const wifiOk = network?.wifi_ok;
     const enforceWifi = Boolean(network?.enforce);
+
+    // Luôn ưu tiên IP public của WiFi (ipify), không bao giờ hiển thị 127.0.0.1
+    const displayIp =
+        (wifiPublicIp && isPublicIpv4(wifiPublicIp) ? wifiPublicIp : null) ||
+        (network?.client_ip && isPublicIpv4(network.client_ip) ? network.client_ip : null) ||
+        null;
+
+    const wifiOk =
+        network?.client_ip && isPublicIpv4(network.client_ip) && network.client_ip === displayIp
+            ? network.wifi_ok
+            : displayIp
+              ? network?.wifi_ok
+              : null;
 
     const statusLabel = hasCheckOut
         ? 'Đã check-out'
@@ -113,8 +126,9 @@ export function AttendanceMobilePage() {
     const handlePunch = async (action: 'check_in' | 'check_out') => {
         const actionLabel = action === 'check_in' ? 'Check-in' : 'Check-out';
 
-        if (enforceWifi && wifiOk === false) {
-            const reason = `IP WiFi ${network?.client_ip || 'không xác định'} không khớp ${office?.wifi_name || 'văn phòng'}. Thêm đúng IP này vào Thiết lập nhân viên → Chấm công.`;
+        // Chỉ chặn trước trên client khi đã có IP public thật và server báo không khớp
+        if (enforceWifi && wifiOk === false && displayIp && !isLoopbackIp(displayIp)) {
+            const reason = `IP WiFi ${displayIp} không khớp ${office?.wifi_name || 'văn phòng'}. Thêm đúng IP này vào Thiết lập nhân viên → Chấm công.`;
             setFeedback({ type: 'error', title: `${actionLabel} thất bại`, message: reason });
             toast.error(reason);
             return;
@@ -143,7 +157,9 @@ export function AttendanceMobilePage() {
         ? `${office.name}${office.address ? ` · ${office.address}` : ''}`
         : 'Kết nối WiFi công ty để chấm công';
 
-    const wifiBlocked = enforceWifi && wifiOk === false;
+    const wifiBlocked = Boolean(
+        enforceWifi && wifiOk === false && displayIp && !isLoopbackIp(displayIp),
+    );
     const canCheckIn = Boolean(today?.can_check_in);
     const canCheckOut = Boolean(today?.can_check_out);
 
@@ -299,12 +315,16 @@ export function AttendanceMobilePage() {
                                                 </p>
                                                 <p className="text-sm text-slate-500 line-clamp-2">{wifiSubtitle}</p>
                                                 <p className="text-[11px] text-slate-400 mt-1">
-                                                    IP WiFi: {network?.client_ip || '—'}
+                                                    IP WiFi: {displayIp || 'Đang lấy…'}
                                                     {!enforceWifi
                                                         ? ' · Chưa bắt buộc WiFi'
-                                                        : wifiOk
-                                                            ? ' · Đúng WiFi văn phòng'
-                                                            : ' · Ngoài WiFi văn phòng'}
+                                                        : !displayIp
+                                                            ? ''
+                                                            : wifiOk
+                                                                ? ' · Đúng WiFi văn phòng'
+                                                                : wifiOk === false
+                                                                    ? ' · Ngoài WiFi văn phòng'
+                                                                    : ' · Đang kiểm tra…'}
                                                 </p>
                                             </>
                                         )}
@@ -327,9 +347,8 @@ export function AttendanceMobilePage() {
                             {wifiBlocked && (
                                 <p className="mt-3 text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2 flex gap-2">
                                     <Wifi className="h-4 w-4 shrink-0 mt-0.5" />
-                                    IP WiFi đang dùng ({network?.client_ip || '—'}) chưa nằm trong
-                                    danh sách cho phép. Thêm IP này vào Thiết lập nhân viên → Chấm công,
-                                    rồi nhấn làm mới.
+                                    IP WiFi đang dùng ({displayIp}) chưa nằm trong danh sách cho phép.
+                                    Thêm IP này vào Thiết lập nhân viên → Chấm công, rồi nhấn làm mới.
                                 </p>
                             )}
                         </CardContent>
