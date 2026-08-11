@@ -1607,6 +1607,32 @@ export function ProductDetailDialog({
     const invoiceProductDetails = useMemo(() => {
         if (!order) return [];
 
+        const sumSurchargeList = (list: any[] | null | undefined, percentBase: number): number => {
+            if (!Array.isArray(list) || list.length === 0) return 0;
+            return list.reduce((sum, s) => {
+                const explicit = Number(s?.amount);
+                if (Number.isFinite(explicit) && explicit > 0) return sum + explicit;
+                const value = Number(s?.value || 0);
+                const isPercent = Boolean(s?.isPercent ?? s?.is_percent);
+                return sum + (isPercent ? Math.round(percentBase * value / 100) : value);
+            }, 0);
+        };
+
+        const resolveProductSurcharge = (item: any, serviceTotal: number): number => {
+            const stored = Number(item?.surcharge_amount || 0);
+            if (stored > 0) return stored;
+            return sumSurchargeList(item?.surcharges, serviceTotal);
+        };
+
+        const resolveOrderLevelSurcharge = (): number => {
+            const stored = Number((order as any).surcharges_amount || 0);
+            if (stored > 0) return stored;
+            const subtotalForPercent =
+                Number((order as any).subtotal) ||
+                Math.max(0, Number(order.total_amount || 0) - Number((order as any).surcharges_amount || 0) + Number(order.discount || 0));
+            return sumSurchargeList((order as any).surcharges, subtotalForPercent);
+        };
+
         const buildDetail = (item: any, services: any[], name: string, code?: string) => {
             // HD Bảo hành: khách đã thanh toán & cầm về ở chu kỳ trước — chu kỳ bảo hành thu 0đ.
             // Kiểm tra cả product head và services vì dữ liệu cũ có thể chỉ lưu cờ bảo hành ở một cấp.
@@ -1631,8 +1657,8 @@ export function ProductDetailDialog({
             });
             const serviceTotal = serviceLines.reduce((sum, s) => sum + s.amount, 0);
             const depositTotal = serviceLines.reduce((sum, s) => sum + s.deposit, 0);
-            const surchargeTotal = Number(item.surcharge_amount || 0);
-            const total = serviceTotal + surchargeTotal;
+            const productSurchargeTotal = resolveProductSurcharge(item, serviceTotal);
+            const total = serviceTotal + productSurchargeTotal;
 
             return {
                 id: item.id,
@@ -1641,15 +1667,20 @@ export function ProductDetailDialog({
                 isWarranty,
                 afterSaleStage: getItemAfterSaleStage(item),
                 services: serviceLines,
-                surchargeTotal,
+                serviceTotal,
+                productSurchargeTotal,
+                surchargeTotal: productSurchargeTotal, // sẽ cộng thêm phần phụ thu cấp đơn bên dưới
+                orderSurchargeShare: 0,
                 depositTotal,
                 total,
                 collectDue: isWarranty ? 0 : Math.max(0, total - depositTotal),
             };
         };
 
+        let details: ReturnType<typeof buildDetail>[] = [];
+
         if (Array.isArray(order.customer_items) && order.customer_items.length > 0) {
-            return order.customer_items.map((item: any) => {
+            details = order.customer_items.map((item: any) => {
                 const services = Array.isArray(item.services) ? item.services : [];
                 return buildDetail(
                     item,
@@ -1658,17 +1689,38 @@ export function ProductDetailDialog({
                     item.product_code || item.item_code
                 );
             });
+        } else {
+            const customerProducts = uniqueItems.filter(item => (item as any).is_customer_item && item.item_type !== 'service');
+            details = customerProducts.map((item: any) => {
+                const services = uniqueItems.filter((service: any) =>
+                    service.item_type === 'service' &&
+                    (service.product?.id === item.id || service.item_name?.includes(`(${item.item_name})`))
+                );
+                return buildDetail(item, services, item.item_name || 'Sản phẩm', item.item_code);
+            });
         }
 
-        const customerProducts = uniqueItems.filter(item => (item as any).is_customer_item && item.item_type !== 'service');
-        return customerProducts.map((item: any) => {
-            const services = uniqueItems.filter((service: any) =>
-                service.item_type === 'service' &&
-                (service.product?.id === item.id || service.item_name?.includes(`(${item.item_name})`))
-            );
-            return buildDetail(item, services, item.item_name || 'Sản phẩm', item.item_code);
-        });
-    }, [order, uniqueItems, optimisticAfterSaleStages]);
+        // Phân bổ phụ thu cấp đơn (phí gấp / ship…) vào từng SP theo tỷ lệ tiền dịch vụ + phụ thu SP
+        const orderLevelSurcharge = resolveOrderLevelSurcharge();
+        if (orderLevelSurcharge > 0 && details.length > 0) {
+            const allocTargets = details.filter((d) => !d.isWarranty);
+            const baseSum = allocTargets.reduce((sum, d) => sum + Math.max(0, d.serviceTotal + d.productSurchargeTotal), 0);
+            let allocated = 0;
+            allocTargets.forEach((d, idx) => {
+                const base = Math.max(0, d.serviceTotal + d.productSurchargeTotal);
+                const share = idx === allocTargets.length - 1
+                    ? Math.max(0, orderLevelSurcharge - allocated)
+                    : (baseSum > 0 ? Math.round(orderLevelSurcharge * base / baseSum) : 0);
+                allocated += share;
+                d.orderSurchargeShare = share;
+                d.surchargeTotal = d.productSurchargeTotal + share;
+                d.total = d.serviceTotal + d.surchargeTotal;
+                d.collectDue = Math.max(0, d.total - d.depositTotal);
+            });
+        }
+
+        return details;
+    }, [order, uniqueItems, optimisticAfterSaleStages, product, group?.product, group?.services]);
 
     // SP cần bàn giao đợt này: còn tiền phải thu (bill > 0) HOẶC HD bảo hành (thu 0đ nhưng vẫn phải trả khách).
     const billableProductDetails = useMemo(
@@ -1720,6 +1772,11 @@ export function ProductDetailDialog({
                 // Draft có thể được tạo trước khi dữ liệu bảo hành reload; bảo hành luôn thu 0đ.
                 if (detail?.isWarranty && Number(next[id]?.amount) !== 0) {
                     next[id] = { ...next[id], amount: 0 };
+                    changed = true;
+                }
+                // Đồng bộ lại số tiền nếu draft cũ thiếu phụ thu (phí gấp/ship) so với collectDue mới
+                if (detail && !detail.isWarranty && Number(next[id]?.amount) < collectDue) {
+                    next[id] = { ...next[id], amount: collectDue };
                     changed = true;
                 }
                 if ((collectDue <= 0 && !detail?.isWarranty) || stage !== 'after1_debt') {
@@ -2319,8 +2376,20 @@ export function ProductDetailDialog({
                                                                             )}
                                                                             {item.surchargeTotal > 0 && (
                                                                                 <div className="flex justify-between gap-2 text-[11px]">
-                                                                                    <span className="text-gray-500 truncate">Phụ thu</span>
+                                                                                    <span className="text-gray-500 truncate">
+                                                                                        Phụ thu{item.orderSurchargeShare > 0 && item.productSurchargeTotal > 0
+                                                                                            ? ' (SP + đơn)'
+                                                                                            : item.orderSurchargeShare > 0
+                                                                                                ? ' (phí gấp/ship…)'
+                                                                                                : ''}
+                                                                                    </span>
                                                                                     <span className="font-bold text-gray-800 tabular-nums whitespace-nowrap">{formatCurrency(item.surchargeTotal)}</span>
+                                                                                </div>
+                                                                            )}
+                                                                            {item.surchargeTotal > 0 && item.depositTotal <= 0 && !item.isWarranty && (
+                                                                                <div className="flex justify-between gap-2 border-t border-purple-100 pt-1 text-[10px] font-bold text-purple-800">
+                                                                                    <span>Cần thu SP này</span>
+                                                                                    <span className="tabular-nums">{formatCurrency(item.collectDue)}</span>
                                                                                 </div>
                                                                             )}
                                                                         </div>
@@ -2446,12 +2515,13 @@ export function ProductDetailDialog({
                                                                                     }
                                                                                     setDebtReceiptsByProduct((prev) => ({
                                                                                         ...prev,
-                                                                                        [item.id]: prev[item.id] || {
+                                                                                        [item.id]: {
+                                                                                            payment_method: prev[item.id]?.payment_method || 'cash',
+                                                                                            photos: prev[item.id]?.photos || [],
+                                                                                            collector_name: prev[item.id]?.collector_name || formData.debt_checked_by_name || user?.name || '',
+                                                                                            notes: prev[item.id]?.notes || '',
+                                                                                            // Luôn lấy đủ số cần thu (gồm phụ thu phí gấp/ship), không giữ draft cũ thiếu phụ thu
                                                                                             amount: detail.collectDue,
-                                                                                            payment_method: 'cash',
-                                                                                            photos: [],
-                                                                                            collector_name: formData.debt_checked_by_name || user?.name || '',
-                                                                                            notes: '',
                                                                                         },
                                                                                     }));
                                                                                     setDebtHandoffTab(`receipt-${item.id}`);
