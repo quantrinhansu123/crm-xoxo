@@ -37,10 +37,50 @@ export function PaymentDialog({
         { value: 'zalopay', label: 'Zalo Pay', icon: Smartphone, color: 'text-blue-500 bg-blue-50 border-blue-200' }
     ];
 
-    const groupTotal = productGroup ? (
-        (productGroup.product?.total_price || 0) +
-        productGroup.services.reduce((sum, s) => sum + (s.total_price || 0), 0)
-    ) : 0;
+    const groupServiceTotal = productGroup
+        ? (
+            (productGroup.product?.total_price || 0) +
+            productGroup.services.reduce((sum, s) => sum + (s.total_price || 0), 0)
+        )
+        : 0;
+    const groupProductSurcharge = Number((productGroup?.product as any)?.surcharge_amount || 0);
+    const orderLevelSurcharge = Number((order as any).surcharges_amount || 0);
+
+    // Phân bổ phụ thu cấp đơn theo tỷ lệ tiền SP đang thu / tổng tiền SP (nếu biết đủ các SP trên đơn)
+    const allocateOrderSurchargeShare = (): number => {
+        if (!productGroup || orderLevelSurcharge <= 0) return 0;
+        const items = Array.isArray((order as any).customer_items) ? (order as any).customer_items : [];
+        if (items.length <= 1) return orderLevelSurcharge;
+
+        const bases = items.map((item: any) => {
+            const services = Array.isArray(item.services) ? item.services : [];
+            const serviceSum = services.reduce(
+                (sum: number, s: any) =>
+                    sum + Number(s.total_price ?? s.unit_price ?? 0) * Math.max(1, Number(s.quantity) || 1),
+                0
+            );
+            return Math.max(0, serviceSum + Number(item.surcharge_amount || 0));
+        });
+        const baseSum = bases.reduce((s: number, b: number) => s + b, 0);
+        const currentId = productGroup.product?.id;
+        const currentIdx = items.findIndex((item: any) => item.id === currentId);
+        if (currentIdx < 0 || baseSum <= 0) return orderLevelSurcharge; // fallback: gộp hết vào SP đang thu
+        // Phần dư cho SP cuối để khớp tổng phụ thu đơn
+        let allocated = 0;
+        for (let i = 0; i < bases.length; i++) {
+            const share =
+                i === bases.length - 1
+                    ? Math.max(0, orderLevelSurcharge - allocated)
+                    : Math.round((orderLevelSurcharge * bases[i]) / baseSum);
+            allocated += share;
+            if (i === currentIdx) return share;
+        }
+        return 0;
+    };
+
+    const groupTotal = productGroup
+        ? groupServiceTotal + groupProductSurcharge + allocateOrderSurchargeShare()
+        : 0;
 
     const amountToPay = paySpecificProduct ? groupTotal : order.remaining_debt || order.total_amount;
 

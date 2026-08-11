@@ -13,6 +13,11 @@ import {
     sumPaidAmountByProduct,
     sumPaymentTotalsByOrder,
 } from '../utils/paymentRecordsHelper.js';
+import {
+    enrichProductTotalsWithSurcharges,
+    isWarrantyProduct,
+    resolveOrderLevelSurcharge,
+} from '../utils/productDebtTotals.js';
 
 const router = Router();
 
@@ -128,11 +133,12 @@ router.get('/:id/debt', authenticate, async (req: AuthenticatedRequest, res, nex
         const { data: ordersRefreshed } = orderIds.length > 0
             ? await supabaseAdmin
                 .from('orders')
-                .select('id, order_code, total_amount, paid_amount, remaining_debt, payment_status, created_at, status')
+                .select('id, order_code, total_amount, paid_amount, remaining_debt, payment_status, created_at, status, surcharges_amount, surcharges, subtotal, discount')
                 .in('id', orderIds)
                 .order('created_at', { ascending: true })
             : { data: [] };
         const orderListFresh = ordersRefreshed || orderList;
+        const orderMetaById = new Map((orderListFresh || []).map((o: any) => [o.id, o]));
 
         const paymentTotals = orderIds.length > 0
             ? await sumPaymentTotalsByOrder(orderIds)
@@ -153,14 +159,14 @@ router.get('/:id/debt', authenticate, async (req: AuthenticatedRequest, res, nex
         if (orderIds.length > 0) {
             const { data: orderProducts } = await supabaseAdmin
                 .from('order_products')
-                .select('id, order_id, product_code, name, images')
+                .select('id, order_id, product_code, name, images, surcharge_amount, surcharges, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, warranty_code')
                 .in('order_id', orderIds);
 
             const productIds = (orderProducts || []).map((p) => p.id);
             const productToOrder = new Map((orderProducts || []).map((p) => [p.id, p.order_id]));
 
             const depositByProduct: Record<string, number> = {};
-            const totalByProduct: Record<string, number> = {};
+            const serviceTotalByProduct: Record<string, number> = {};
             const paidByProductFromRecords = productIds.length > 0 && orderIds.length > 0
                 ? await sumPaidAmountByProduct(orderIds)
                 : {};
@@ -178,15 +184,38 @@ router.get('/:id/debt', authenticate, async (req: AuthenticatedRequest, res, nex
                     const price = Number(svc.unit_price) || 0;
                     depositByOrder[orderId] = (depositByOrder[orderId] || 0) + dep;
                     depositByProduct[svc.order_product_id] = (depositByProduct[svc.order_product_id] || 0) + dep;
-                    totalByProduct[svc.order_product_id] = (totalByProduct[svc.order_product_id] || 0) + price;
+                    serviceTotalByProduct[svc.order_product_id] = (serviceTotalByProduct[svc.order_product_id] || 0) + price;
                 }
+            }
+
+            // Gộp phụ thu SP + phân bổ phụ thu cấp đơn (phí gấp/ship) theo từng đơn
+            const enrichedTotalByProduct: Record<string, number> = {};
+            const productsGrouped = new Map<string, any[]>();
+            for (const p of orderProducts || []) {
+                if (!productsGrouped.has(p.order_id)) productsGrouped.set(p.order_id, []);
+                productsGrouped.get(p.order_id)!.push(p);
+            }
+            for (const [orderId, prods] of productsGrouped.entries()) {
+                const orderMeta = orderMetaById.get(orderId) || {};
+                const orderSurcharge = resolveOrderLevelSurcharge(orderMeta);
+                const enriched = enrichProductTotalsWithSurcharges(
+                    (prods || []).map((p: any) => ({
+                        id: p.id,
+                        serviceTotal: serviceTotalByProduct[p.id] || 0,
+                        productSurchargeAmount: p.surcharge_amount,
+                        productSurcharges: p.surcharges,
+                        isWarranty: isWarrantyProduct(p),
+                    })),
+                    orderSurcharge
+                );
+                Object.assign(enrichedTotalByProduct, enriched);
             }
 
             for (const p of orderProducts || []) {
                 const orderId = p.order_id;
                 if (!productsByOrder[orderId]) productsByOrder[orderId] = [];
                 const images = Array.isArray(p.images) ? p.images : [];
-                const totalAmount = totalByProduct[p.id] || 0;
+                const totalAmount = enrichedTotalByProduct[p.id] || 0;
                 const svcDeposit = depositByProduct[p.id] || 0;
                 const payDeposit = paymentTotals.depositByProduct[p.id] || 0;
                 const depositAmount = Math.max(svcDeposit, payDeposit);
@@ -393,7 +422,7 @@ router.post('/:id/collect-payment', authenticate, requireSale, async (req: Authe
 
             const { data: order, error: orderError } = await supabaseAdmin
                 .from('orders')
-                .select('id, order_code, customer_id, total_amount, paid_amount, remaining_debt')
+                .select('id, order_code, customer_id, total_amount, paid_amount, remaining_debt, surcharges_amount, surcharges, subtotal, discount')
                 .eq('id', alloc.order_id)
                 .eq('customer_id', id)
                 .single();
@@ -406,31 +435,47 @@ router.post('/:id/collect-payment', authenticate, requireSale, async (req: Authe
             let productCode: string | null = null;
 
             if (alloc.order_product_id) {
-                const { data: orderProduct } = await supabaseAdmin
+                const { data: orderProducts } = await supabaseAdmin
                     .from('order_products')
-                    .select('id, product_code, order_id')
-                    .eq('id', alloc.order_product_id)
-                    .eq('order_id', order.id)
-                    .single();
+                    .select('id, product_code, order_id, surcharge_amount, surcharges, care_warranty_flow, care_warranty_stage, current_phase, phase_stage, warranty_code')
+                    .eq('order_id', order.id);
 
-                if (!orderProduct) {
+                const targetProduct = (orderProducts || []).find((p) => p.id === alloc.order_product_id);
+                if (!targetProduct) {
                     throw new ApiError(`Sản phẩm không thuộc đơn ${order.order_code}`, 400);
                 }
-                productCode = orderProduct.product_code;
+                productCode = targetProduct.product_code;
 
-                const { data: svcRows } = await supabaseAdmin
-                    .from('order_product_services')
-                    .select('unit_price, deposit_amount')
-                    .eq('order_product_id', alloc.order_product_id);
+                const productIds = (orderProducts || []).map((p) => p.id);
+                const { data: svcRows } = productIds.length > 0
+                    ? await supabaseAdmin
+                        .from('order_product_services')
+                        .select('order_product_id, unit_price, deposit_amount')
+                        .in('order_product_id', productIds)
+                    : { data: [] as Array<{ order_product_id: string; unit_price: number; deposit_amount: number }> };
 
-                const productTotal = (svcRows || []).reduce(
-                    (s, svc) => s + (Number(svc.unit_price) || 0),
-                    0
+                const serviceTotalByProduct: Record<string, number> = {};
+                const depositByProduct: Record<string, number> = {};
+                for (const svc of svcRows || []) {
+                    serviceTotalByProduct[svc.order_product_id] =
+                        (serviceTotalByProduct[svc.order_product_id] || 0) + (Number(svc.unit_price) || 0);
+                    depositByProduct[svc.order_product_id] =
+                        (depositByProduct[svc.order_product_id] || 0) + (Number(svc.deposit_amount) || 0);
+                }
+
+                const enrichedTotals = enrichProductTotalsWithSurcharges(
+                    (orderProducts || []).map((p) => ({
+                        id: p.id,
+                        serviceTotal: serviceTotalByProduct[p.id] || 0,
+                        productSurchargeAmount: p.surcharge_amount,
+                        productSurcharges: p.surcharges,
+                        isWarranty: isWarrantyProduct(p),
+                    })),
+                    resolveOrderLevelSurcharge(order)
                 );
-                const productDeposit = (svcRows || []).reduce(
-                    (s, svc) => s + (Number(svc.deposit_amount) || 0),
-                    0
-                );
+
+                const productTotal = enrichedTotals[alloc.order_product_id] || 0;
+                const productDeposit = depositByProduct[alloc.order_product_id] || 0;
                 const paidMap = await sumPaidAmountByProduct([order.id]);
                 const productPaid = paidMap[alloc.order_product_id] || 0;
                 const productRemaining = Math.max(0, productTotal - Math.max(productPaid, productDeposit));
