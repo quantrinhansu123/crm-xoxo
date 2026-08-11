@@ -160,7 +160,10 @@ export function AttendanceWifiSettingsPanel() {
                 />
                 <p className="text-[12px] text-gray-400">
                     Mỗi dòng một IP hoặc CIDR. Ví dụ: <code>42.114.71.44</code>,{' '}
-                    <code>192.168.1.0/24</code>
+                    <code>192.168.1.0/24</code>. Khi deploy cloud (Render), chỉ IP{' '}
+                    <strong>public</strong> mới khớp — dải <code>192.168.*</code> chỉ dùng khi
+                    API cùng mạng LAN. Lấy IP đúng: mở Chấm công (Mobile) xem dòng IP, hoặc
+                    ifconfig.me khi đang dính WiFi văn phòng.
                 </p>
             </div>
 

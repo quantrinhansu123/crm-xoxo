@@ -114,7 +114,7 @@ export function AttendanceMobilePage() {
         const actionLabel = action === 'check_in' ? 'Check-in' : 'Check-out';
 
         if (enforceWifi && wifiOk === false) {
-            const reason = `Chấm công thất bại: chưa kết nối WiFi ${office?.wifi_name || 'văn phòng'}. IP hiện tại: ${network?.client_ip || 'không xác định'}`;
+            const reason = `IP ${network?.client_ip || 'không xác định'} không khớp WiFi ${office?.wifi_name || 'văn phòng'}. Thêm IP này vào Thiết lập nhân viên → Chấm công.`;
             setFeedback({ type: 'error', title: `${actionLabel} thất bại`, message: reason });
             toast.error(reason);
             return;
@@ -327,7 +327,9 @@ export function AttendanceMobilePage() {
                             {wifiBlocked && (
                                 <p className="mt-3 text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2 flex gap-2">
                                     <Wifi className="h-4 w-4 shrink-0 mt-0.5" />
-                                    Hãy kết nối WiFi {wifiTitle} rồi nhấn làm mới để chấm công.
+                                    IP {network?.client_ip || '—'} chưa được phép. Thêm IP này vào
+                                    Thiết lập nhân viên → Chấm công (khi đang dính WiFi văn phòng),
+                                    rồi nhấn làm mới.
                                 </p>
                             )}
                         </CardContent>

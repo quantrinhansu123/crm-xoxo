@@ -87,25 +87,47 @@ export async function getAttendanceWifiSettings(): Promise<AttendanceWifiSetting
 }
 
 export function getClientIp(req: Request): string {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.trim()) {
-        return normalizeIp(forwarded.split(',')[0].trim());
+    const headerCandidates = [
+        req.headers['cf-connecting-ip'],
+        req.headers['true-client-ip'],
+        req.headers['x-real-ip'],
+        req.headers['x-client-ip'],
+        req.headers['x-forwarded-for'],
+    ];
+
+    for (const header of headerCandidates) {
+        if (typeof header === 'string' && header.trim()) {
+            // x-forwarded-for: client, proxy1, proxy2 → lấy IP đầu
+            return normalizeIp(header.split(',')[0].trim());
+        }
+        if (Array.isArray(header) && header[0]) {
+            return normalizeIp(String(header[0]).split(',')[0].trim());
+        }
     }
-    if (Array.isArray(forwarded) && forwarded[0]) {
-        return normalizeIp(forwarded[0].split(',')[0].trim());
-    }
-    const realIp = req.headers['x-real-ip'];
-    if (typeof realIp === 'string' && realIp.trim()) {
-        return normalizeIp(realIp.trim());
+
+    if (typeof req.ip === 'string' && req.ip.trim()) {
+        return normalizeIp(req.ip.trim());
     }
     return normalizeIp(req.socket.remoteAddress ?? '');
 }
 
 function normalizeIp(ip: string): string {
     if (!ip) return '';
-    if (ip.startsWith('::ffff:')) return ip.slice(7);
-    if (ip === '::1') return '127.0.0.1';
-    return ip;
+    let value = ip.trim();
+    // bỏ port dạng [IPv6]:port hoặc IPv4:port
+    if (value.startsWith('[') && value.includes(']')) {
+        value = value.slice(1, value.indexOf(']'));
+    } else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(value)) {
+        value = value.split(':')[0];
+    }
+    if (value.startsWith('::ffff:')) value = value.slice(7);
+    if (value === '::1') return '127.0.0.1';
+    return value;
+}
+
+function isLoopbackIp(ip: string): boolean {
+    const n = normalizeIp(ip);
+    return n === '127.0.0.1' || n === 'localhost' || n.startsWith('127.');
 }
 
 function ipv4ToInt(ip: string): number | null {
@@ -138,6 +160,12 @@ export function isWifiIpAllowed(ip: string, allowed: string[], enforce = true): 
     if (!enforce || allowed.length === 0) return null;
     if (!ip) return false;
     const normalized = normalizeIp(ip);
+
+    // Localhost khi dev — tránh kẹt vì 127.0.0.1 không nằm trong IP public văn phòng
+    if (process.env.NODE_ENV !== 'production' && isLoopbackIp(normalized)) {
+        return true;
+    }
+
     return allowed.some((rule) => {
         const r = rule.trim();
         if (!r) return false;

@@ -133,10 +133,22 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
         const wifiOk = isWifiIpAllowed(clientIp, settings.allowed_ips, settings.enforce_wifi);
         const enforce = settings.enforce_wifi && settings.allowed_ips.length > 0;
 
+        console.log('[attendance.punch]', {
+            userId,
+            action,
+            clientIp,
+            wifiOk,
+            enforce,
+            allowed: settings.allowed_ips,
+        });
+
         if (enforce && wifiOk === false) {
+            const detail = clientIp
+                ? `IP hiện tại ${clientIp} không có trong danh sách cho phép. Hãy thêm đúng IP này (lấy khi đang dính WiFi văn phòng) vào Thiết lập nhân viên → Chấm công.`
+                : `Không xác định được IP thiết bị. Thử lại trên WiFi văn phòng (tắt VPN / Private Relay).`;
             res.status(403).json({
                 status: 'fail',
-                message: `Chấm công thất bại: chưa kết nối WiFi ${settings.wifi_name} (${settings.office_name}). IP hiện tại: ${clientIp || 'không xác định'}`,
+                message: `Chấm công thất bại: ${detail}`,
                 data: {
                     wifi_ok: false,
                     client_ip: clientIp || null,

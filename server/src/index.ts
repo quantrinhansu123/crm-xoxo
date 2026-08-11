@@ -56,6 +56,8 @@ const app = express();
 
 // Disable ETag globally to ensure fresh data during debugging
 app.set('etag', false);
+// Render / reverse-proxy: cần để lấy đúng IP client từ X-Forwarded-For
+app.set('trust proxy', 1);
 
 // Middleware
 app.use(helmet());
