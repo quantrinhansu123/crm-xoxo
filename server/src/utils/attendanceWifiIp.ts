@@ -161,9 +161,9 @@ export function isWifiIpAllowed(ip: string, allowed: string[], enforce = true): 
     if (!ip) return false;
     const normalized = normalizeIp(ip);
 
-    // Localhost khi dev — tránh kẹt vì 127.0.0.1 không nằm trong IP public văn phòng
-    if (process.env.NODE_ENV !== 'production' && isLoopbackIp(normalized)) {
-        return true;
+    // Không cho phép localhost — chỉ khớp IP public/LAN trong danh sách cấu hình (vd. 14.191.162.71)
+    if (isLoopbackIp(normalized)) {
+        return false;
     }
 
     return allowed.some((rule) => {
