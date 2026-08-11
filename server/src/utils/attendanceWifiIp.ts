@@ -86,6 +86,44 @@ export async function getAttendanceWifiSettings(): Promise<AttendanceWifiSetting
     }
 }
 
+export function normalizeIp(ip: string): string {
+    if (!ip) return '';
+    let value = ip.trim();
+    if (value.startsWith('[') && value.includes(']')) {
+        value = value.slice(1, value.indexOf(']'));
+    } else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(value)) {
+        value = value.split(':')[0];
+    }
+    if (value.startsWith('::ffff:')) value = value.slice(7);
+    if (value === '::1') return '127.0.0.1';
+    return value;
+}
+
+export function isLoopbackIp(ip: string): boolean {
+    const n = normalizeIp(ip);
+    return n === '127.0.0.1' || n === 'localhost' || n.startsWith('127.');
+}
+
+/** RFC1918 + link-local — không phải IP public của WiFi WAN */
+export function isPrivateLanIp(ip: string): boolean {
+    const n = normalizeIp(ip);
+    if (!n || isLoopbackIp(n)) return true;
+    if (n.startsWith('10.')) return true;
+    if (n.startsWith('192.168.')) return true;
+    if (n.startsWith('169.254.')) return true;
+    const parts = n.split('.').map(Number);
+    if (parts.length === 4 && parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    return false;
+}
+
+export function isPublicIpv4(ip: string): boolean {
+    const n = normalizeIp(ip);
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(n)) return false;
+    const parts = n.split('.').map(Number);
+    if (parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
+    return !isPrivateLanIp(n) && !isLoopbackIp(n);
+}
+
 export function getClientIp(req: Request): string {
     const headerCandidates = [
         req.headers['cf-connecting-ip'],
@@ -97,7 +135,6 @@ export function getClientIp(req: Request): string {
 
     for (const header of headerCandidates) {
         if (typeof header === 'string' && header.trim()) {
-            // x-forwarded-for: client, proxy1, proxy2 → lấy IP đầu
             return normalizeIp(header.split(',')[0].trim());
         }
         if (Array.isArray(header) && header[0]) {
@@ -111,23 +148,24 @@ export function getClientIp(req: Request): string {
     return normalizeIp(req.socket.remoteAddress ?? '');
 }
 
-function normalizeIp(ip: string): string {
-    if (!ip) return '';
-    let value = ip.trim();
-    // bỏ port dạng [IPv6]:port hoặc IPv4:port
-    if (value.startsWith('[') && value.includes(']')) {
-        value = value.slice(1, value.indexOf(']'));
-    } else if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(value)) {
-        value = value.split(':')[0];
+/**
+ * IP dùng để so WiFi văn phòng:
+ * - Production (Render thấy IP public): dùng IP quan sát từ request
+ * - Local/LAN (request = 127.0.0.1 / 192.168.*): dùng IP public WiFi mà client lấy (ipify)
+ */
+export function resolveAttendanceIp(observedIp: string, reportedPublicIp?: string | null): string {
+    const observed = normalizeIp(observedIp || '');
+    if (observed && isPublicIpv4(observed)) {
+        return observed;
     }
-    if (value.startsWith('::ffff:')) value = value.slice(7);
-    if (value === '::1') return '127.0.0.1';
-    return value;
-}
 
-function isLoopbackIp(ip: string): boolean {
-    const n = normalizeIp(ip);
-    return n === '127.0.0.1' || n === 'localhost' || n.startsWith('127.');
+    const reported = normalizeIp(reportedPublicIp || '');
+    if (reported && isPublicIpv4(reported)) {
+        return reported;
+    }
+
+    // Không dùng 127.0.0.1 / LAN để so với allowlist public
+    return '';
 }
 
 function ipv4ToInt(ip: string): number | null {
@@ -161,7 +199,6 @@ export function isWifiIpAllowed(ip: string, allowed: string[], enforce = true): 
     if (!ip) return false;
     const normalized = normalizeIp(ip);
 
-    // Không cho phép localhost — chỉ khớp IP public/LAN trong danh sách cấu hình (vd. 14.191.162.71)
     if (isLoopbackIp(normalized)) {
         return false;
     }

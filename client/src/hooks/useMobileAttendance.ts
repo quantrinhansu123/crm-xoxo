@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { fetchWifiPublicIp } from '@/lib/publicIp';
 import type { Timesheet } from '@/hooks/useTimesheets';
 
 export interface MobileAttendanceToday {
@@ -18,6 +19,7 @@ export interface MobileAttendanceToday {
     } | null;
     network: {
         client_ip: string | null;
+        observed_ip?: string | null;
         wifi_ok: boolean | null;
         enforce: boolean;
     } | null;
@@ -31,7 +33,10 @@ export function useMobileAttendance() {
     const fetchToday = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await api.get('/timesheets/mobile/today');
+            const publicIp = await fetchWifiPublicIp();
+            const res = await api.get('/timesheets/mobile/today', {
+                params: publicIp ? { public_ip: publicIp } : undefined,
+            });
             setToday(res.data?.data ?? null);
         } catch (err) {
             console.error('fetch mobile attendance:', err);
@@ -45,7 +50,11 @@ export function useMobileAttendance() {
         async (action: 'check_in' | 'check_out') => {
             setPunching(true);
             try {
-                const res = await api.post('/timesheets/mobile/punch', { action });
+                const publicIp = await fetchWifiPublicIp();
+                const res = await api.post('/timesheets/mobile/punch', {
+                    action,
+                    public_ip: publicIp,
+                });
                 await fetchToday();
                 return res.data?.data as {
                     check_in_label?: string;

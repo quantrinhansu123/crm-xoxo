@@ -5,6 +5,7 @@ import {
     getAttendanceWifiSettings,
     getClientIp,
     isWifiIpAllowed,
+    resolveAttendanceIp,
 } from '../utils/attendanceWifiIp.js';
 import {
     deriveCheckInStatus,
@@ -71,7 +72,9 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
         const scheduleDate = vietnamDateString();
         const shiftInfo = await resolveTodayShift(userId, scheduleDate);
         const settings = await getAttendanceWifiSettings();
-        const clientIp = getClientIp(req);
+        const observedIp = getClientIp(req);
+        const reportedPublicIp = typeof req.query.public_ip === 'string' ? req.query.public_ip : null;
+        const clientIp = resolveAttendanceIp(observedIp, reportedPublicIp);
         const wifiOk = isWifiIpAllowed(clientIp, settings.allowed_ips, settings.enforce_wifi);
         const enforce = settings.enforce_wifi && settings.allowed_ips.length > 0;
 
@@ -107,6 +110,7 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
                 },
                 network: {
                     client_ip: clientIp || null,
+                    observed_ip: observedIp || null,
                     wifi_ok: wifiOk,
                     enforce,
                 },
@@ -121,7 +125,10 @@ router.get('/mobile/today', authenticate, async (req: AuthenticatedRequest, res:
 router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const userId = req.user!.id;
-        const { action } = req.body as { action?: string };
+        const { action, public_ip: reportedPublicIp } = req.body as {
+            action?: string;
+            public_ip?: string | null;
+        };
 
         if (action !== 'check_in' && action !== 'check_out') {
             res.status(400).json({ status: 'fail', message: 'action phải là check_in hoặc check_out' });
@@ -129,13 +136,16 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
         }
 
         const settings = await getAttendanceWifiSettings();
-        const clientIp = getClientIp(req);
+        const observedIp = getClientIp(req);
+        const clientIp = resolveAttendanceIp(observedIp, reportedPublicIp);
         const wifiOk = isWifiIpAllowed(clientIp, settings.allowed_ips, settings.enforce_wifi);
         const enforce = settings.enforce_wifi && settings.allowed_ips.length > 0;
 
         console.log('[attendance.punch]', {
             userId,
             action,
+            observedIp,
+            reportedPublicIp,
             clientIp,
             wifiOk,
             enforce,
@@ -144,14 +154,15 @@ router.post('/mobile/punch', authenticate, async (req: AuthenticatedRequest, res
 
         if (enforce && wifiOk === false) {
             const detail = clientIp
-                ? `IP hiện tại ${clientIp} không có trong danh sách cho phép. Hãy thêm đúng IP này (lấy khi đang dính WiFi văn phòng) vào Thiết lập nhân viên → Chấm công.`
-                : `Không xác định được IP thiết bị. Thử lại trên WiFi văn phòng (tắt VPN / Private Relay).`;
+                ? `IP WiFi hiện tại ${clientIp} không khớp danh sách cho phép. Thêm IP này vào Thiết lập nhân viên → Chấm công (khi đang dính đúng WiFi văn phòng).`
+                : `Không lấy được IP public của WiFi đang dùng. Kiểm tra mạng / tắt VPN rồi thử lại.`;
             res.status(403).json({
                 status: 'fail',
                 message: `Chấm công thất bại: ${detail}`,
                 data: {
                     wifi_ok: false,
                     client_ip: clientIp || null,
+                    observed_ip: observedIp || null,
                     office: {
                         name: settings.office_name,
                         wifi_name: settings.wifi_name,

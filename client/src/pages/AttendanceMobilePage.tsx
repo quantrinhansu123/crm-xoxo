@@ -114,7 +114,7 @@ export function AttendanceMobilePage() {
         const actionLabel = action === 'check_in' ? 'Check-in' : 'Check-out';
 
         if (enforceWifi && wifiOk === false) {
-            const reason = `IP ${network?.client_ip || 'không xác định'} không khớp WiFi ${office?.wifi_name || 'văn phòng'}. Thêm IP này vào Thiết lập nhân viên → Chấm công.`;
+            const reason = `IP WiFi ${network?.client_ip || 'không xác định'} không khớp ${office?.wifi_name || 'văn phòng'}. Thêm đúng IP này vào Thiết lập nhân viên → Chấm công.`;
             setFeedback({ type: 'error', title: `${actionLabel} thất bại`, message: reason });
             toast.error(reason);
             return;
@@ -299,7 +299,7 @@ export function AttendanceMobilePage() {
                                                 </p>
                                                 <p className="text-sm text-slate-500 line-clamp-2">{wifiSubtitle}</p>
                                                 <p className="text-[11px] text-slate-400 mt-1">
-                                                    IP: {network?.client_ip || '—'}
+                                                    IP WiFi: {network?.client_ip || '—'}
                                                     {!enforceWifi
                                                         ? ' · Chưa bắt buộc WiFi'
                                                         : wifiOk
@@ -327,8 +327,8 @@ export function AttendanceMobilePage() {
                             {wifiBlocked && (
                                 <p className="mt-3 text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2 flex gap-2">
                                     <Wifi className="h-4 w-4 shrink-0 mt-0.5" />
-                                    IP {network?.client_ip || '—'} chưa được phép. Thêm IP này vào
-                                    Thiết lập nhân viên → Chấm công (khi đang dính WiFi văn phòng),
+                                    IP WiFi đang dùng ({network?.client_ip || '—'}) chưa nằm trong
+                                    danh sách cho phép. Thêm IP này vào Thiết lập nhân viên → Chấm công,
                                     rồi nhấn làm mới.
                                 </p>
                             )}
