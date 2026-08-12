@@ -166,12 +166,66 @@ export async function applyFullOrderUpdate(orderId: string, payload: FullOrderUp
         }
     }
 
-    const { data: oldProducts } = await supabaseAdmin.from('order_products').select('id').eq('order_id', orderId);
-    if (oldProducts && oldProducts.length > 0) {
-        const productIds = oldProducts.map(p => p.id);
-        const { data: oldSvcs } = await supabaseAdmin.from('order_product_services').select('id').in('order_product_id', productIds);
-        if (oldSvcs && oldSvcs.length > 0) {
-            const svcIds = oldSvcs.map(s => s.id);
+    // Snapshot tiến trình trước khi xóa — duyệt sửa đơn không được đẩy SP về Lên đơn (sales)
+    const { data: oldProductsSnapshot } = await supabaseAdmin
+        .from('order_products')
+        .select(`
+            id, product_code, name, type, status,
+            current_phase, phase_stage, after_sale_stage, sales_step_data,
+            care_warranty_flow, care_warranty_stage, warranty_code,
+            completion_photos, packaging_photos,
+            delivery_code, delivery_carrier, delivery_type, due_at
+        `)
+        .eq('order_id', orderId);
+
+    type OldSvcSnap = {
+        id: string;
+        order_product_id: string;
+        service_id: string | null;
+        package_id: string | null;
+        item_name: string | null;
+        item_type: string | null;
+        status: string | null;
+        technician_id: string | null;
+        assigned_at: string | null;
+        current_phase: string | null;
+        phase_stage: string | null;
+        steps: any[];
+    };
+
+    const oldSvcByProductId = new Map<string, OldSvcSnap[]>();
+    const usedOldProductIds = new Set<string>();
+    const usedOldSvcIds = new Set<string>();
+    let restoredPhases: string[] = [];
+
+    if (oldProductsSnapshot && oldProductsSnapshot.length > 0) {
+        const productIds = oldProductsSnapshot.map((p) => p.id);
+        const { data: oldSvcsSnap } = await supabaseAdmin
+            .from('order_product_services')
+            .select('id, order_product_id, service_id, package_id, item_name, item_type, status, technician_id, assigned_at, current_phase, phase_stage')
+            .in('order_product_id', productIds);
+
+        const svcIds = (oldSvcsSnap || []).map((s) => s.id);
+        const stepsBySvcId = new Map<string, any[]>();
+        if (svcIds.length > 0) {
+            const { data: oldSteps } = await supabaseAdmin
+                .from('order_item_steps')
+                .select('*')
+                .in('order_product_service_id', svcIds);
+            for (const step of oldSteps || []) {
+                const key = step.order_product_service_id;
+                if (!stepsBySvcId.has(key)) stepsBySvcId.set(key, []);
+                stepsBySvcId.get(key)!.push(step);
+            }
+        }
+
+        for (const svc of oldSvcsSnap || []) {
+            const list = oldSvcByProductId.get(svc.order_product_id) || [];
+            list.push({ ...svc, steps: stepsBySvcId.get(svc.id) || [] });
+            oldSvcByProductId.set(svc.order_product_id, list);
+        }
+
+        if (svcIds.length > 0) {
             await supabaseAdmin.from('order_product_service_technicians').delete().in('order_product_service_id', svcIds);
             await supabaseAdmin.from('order_item_steps').delete().in('order_product_service_id', svcIds);
             await supabaseAdmin.from('order_product_services').delete().in('id', svcIds);
@@ -180,11 +234,55 @@ export async function applyFullOrderUpdate(orderId: string, payload: FullOrderUp
     }
     await supabaseAdmin.from('order_items').delete().eq('order_id', orderId);
 
+    const matchOldProduct = (item: any, index: number) => {
+        const snaps = oldProductsSnapshot || [];
+        if (item?.id) {
+            const byId = snaps.find((p) => p.id === item.id && !usedOldProductIds.has(p.id));
+            if (byId) return byId;
+        }
+        if (item?.product_code) {
+            const byCode = snaps.find((p) => p.product_code === item.product_code && !usedOldProductIds.has(p.id));
+            if (byCode) return byCode;
+        }
+        const byNameType = snaps.find(
+            (p) =>
+                !usedOldProductIds.has(p.id) &&
+                p.name === item?.name &&
+                (!item?.type || p.type === item.type)
+        );
+        if (byNameType) return byNameType;
+        const byIndex = snaps[index];
+        if (byIndex && !usedOldProductIds.has(byIndex.id) && byIndex.name === item?.name) return byIndex;
+        return null;
+    };
+
+    const matchOldService = (svc: any, oldSvcs: OldSvcSnap[]) => {
+        const catalogId = svc?.id || svc?.service_id || svc?.package_id || null;
+        if (catalogId) {
+            const byCatalog = oldSvcs.find((s) => {
+                if (usedOldSvcIds.has(s.id)) return false;
+                if (svc.type === 'package' || s.item_type === 'package') return s.package_id === catalogId;
+                return s.service_id === catalogId;
+            });
+            if (byCatalog) return byCatalog;
+        }
+        const byName = oldSvcs.find(
+            (s) => !usedOldSvcIds.has(s.id) && s.item_name === svc?.name
+        );
+        return byName || null;
+    };
+
     if (customer_items && Array.isArray(customer_items)) {
         const orderCode = order.order_code;
         for (let i = 0; i < customer_items.length; i++) {
             const item = customer_items[i];
             const productCode = `${orderCode}-${i + 1}`;
+            const oldProduct = matchOldProduct(item, i);
+            if (oldProduct) usedOldProductIds.add(oldProduct.id);
+
+            const productPhase = oldProduct?.current_phase || 'sales';
+            const productStage = oldProduct?.phase_stage || 'step1';
+            restoredPhases.push(productPhase);
 
             const { data: orderProduct, error: pError } = await supabaseAdmin
                 .from('order_products')
@@ -200,20 +298,44 @@ export async function applyFullOrderUpdate(orderId: string, payload: FullOrderUp
                     condition_before: item.condition_before,
                     images: item.images || [],
                     notes: item.notes,
-                    due_at: item.due_at || null,
-                    status: 'pending',
+                    due_at: item.due_at || oldProduct?.due_at || null,
+                    status: oldProduct?.status || 'pending',
                     surcharges: item.surcharges || [],
-                    surcharge_amount: Number(item.surcharge_amount) || 0
+                    surcharge_amount: Number(item.surcharge_amount) || 0,
+                    current_phase: productPhase,
+                    phase_stage: productStage,
+                    after_sale_stage: oldProduct?.after_sale_stage || null,
+                    sales_step_data: oldProduct?.sales_step_data || {},
+                    care_warranty_flow: oldProduct?.care_warranty_flow || null,
+                    care_warranty_stage: oldProduct?.care_warranty_stage || null,
+                    warranty_code: oldProduct?.warranty_code || null,
+                    completion_photos: oldProduct?.completion_photos || null,
+                    packaging_photos: oldProduct?.packaging_photos || null,
+                    delivery_code: oldProduct?.delivery_code || null,
+                    delivery_carrier: oldProduct?.delivery_carrier || null,
+                    delivery_type: oldProduct?.delivery_type || null,
                 })
                 .select()
                 .single();
 
             if (pError || !orderProduct) continue;
 
+            const oldSvcsForProduct = oldProduct ? (oldSvcByProductId.get(oldProduct.id) || []) : [];
+
             if (item.services && Array.isArray(item.services)) {
                 for (const svc of item.services) {
+                    const oldSvc = matchOldService(svc, oldSvcsForProduct);
+                    if (oldSvc) usedOldSvcIds.add(oldSvc.id);
+
                     const hasTechs = svc.technicians && svc.technicians.length > 0;
-                    const techId = hasTechs ? svc.technicians[0].technician_id : null;
+                    const techId = hasTechs
+                        ? svc.technicians[0].technician_id
+                        : (oldSvc?.technician_id || null);
+                    const svcPhase = oldSvc?.current_phase || productPhase || 'sales';
+                    const svcStage = oldSvc?.phase_stage || productStage || 'step1';
+                    const svcStatus = hasTechs
+                        ? 'assigned'
+                        : (oldSvc?.status || (techId ? 'assigned' : 'pending'));
 
                     const { data: createdSvc, error: sError } = await supabaseAdmin
                         .from('order_product_services')
@@ -226,8 +348,12 @@ export async function applyFullOrderUpdate(orderId: string, payload: FullOrderUp
                             unit_price: Number(svc.price) || 0,
                             deposit_amount: Math.max(0, Number(svc.deposit_amount) || 0),
                             technician_id: techId,
-                            status: hasTechs ? 'assigned' : 'pending',
-                            assigned_at: hasTechs ? new Date().toISOString() : null,
+                            status: svcStatus,
+                            assigned_at: hasTechs
+                                ? new Date().toISOString()
+                                : (oldSvc?.assigned_at || (techId ? new Date().toISOString() : null)),
+                            current_phase: svcPhase,
+                            phase_stage: svcStage,
                         })
                         .select()
                         .single();
@@ -262,15 +388,29 @@ export async function applyFullOrderUpdate(orderId: string, payload: FullOrderUp
                             if (sData?.workflow_id) {
                                 const { data: wSteps } = await supabaseAdmin.from('workflow_steps').select('*').eq('workflow_id', sData.workflow_id).order('step_order', { ascending: true });
                                 if (wSteps) {
-                                    const itemSteps = wSteps.map(ws => ({
-                                        order_product_service_id: createdSvc.id,
-                                        workflow_step_id: ws.id,
-                                        step_order: ws.step_order,
-                                        step_name: ws.name || `Bước ${ws.step_order}`,
-                                        department_id: ws.department_id,
-                                        status: 'pending',
-                                        estimated_duration: ws.estimated_duration
-                                    }));
+                                    const oldSteps = oldSvc?.steps || [];
+                                    const itemSteps = wSteps.map((ws: any) => {
+                                        const matched = oldSteps.find(
+                                            (os: any) =>
+                                                os.workflow_step_id === ws.id ||
+                                                (Number(os.step_order) === Number(ws.step_order) &&
+                                                    String(os.step_name || '') === String(ws.name || `Bước ${ws.step_order}`))
+                                        );
+                                        return {
+                                            order_product_service_id: createdSvc.id,
+                                            workflow_step_id: ws.id,
+                                            step_order: ws.step_order,
+                                            step_name: ws.name || `Bước ${ws.step_order}`,
+                                            department_id: ws.department_id,
+                                            status: matched?.status || 'pending',
+                                            estimated_duration: matched?.estimated_duration ?? ws.estimated_duration,
+                                            started_at: matched?.started_at || null,
+                                            completed_at: matched?.completed_at || null,
+                                            technician_id: matched?.technician_id || null,
+                                            notes: matched?.notes || null,
+                                            photos: matched?.photos || null,
+                                        };
+                                    });
                                     await supabaseAdmin.from('order_item_steps').insert(itemSteps);
                                 }
                             }
@@ -279,6 +419,29 @@ export async function applyFullOrderUpdate(orderId: string, payload: FullOrderUp
                 }
             }
         }
+    }
+
+    // Đồng bộ trạng thái đơn theo phase đã giữ (tránh badge "Đang lên đơn" trong khi SP đã ở Tiến trình)
+    const phaseRank = (p: string) =>
+        p === 'care' || p === 'warranty' ? 4 : p === 'aftersale' || p === 'after_sale' ? 3 : p === 'workflow' ? 2 : 1;
+    const maxPhase = restoredPhases.reduce((best, p) => (phaseRank(p) > phaseRank(best) ? p : best), 'sales');
+    const desiredOrderStatus =
+        maxPhase === 'care' || maxPhase === 'warranty'
+            ? (existingOrder.status === 'after_sale' || existingOrder.status === 'archived' ? existingOrder.status : 'after_sale')
+            : maxPhase === 'aftersale' || maxPhase === 'after_sale'
+                ? 'after_sale'
+                : maxPhase === 'workflow'
+                    ? 'in_progress'
+                    : existingOrder.status;
+    if (
+        desiredOrderStatus &&
+        desiredOrderStatus !== existingOrder.status &&
+        !['cancelled', 'archived'].includes(String(existingOrder.status || ''))
+    ) {
+        await supabaseAdmin
+            .from('orders')
+            .update({ status: desiredOrderStatus, updated_at: new Date().toISOString() })
+            .eq('id', orderId);
     }
 
     if (sale_items && Array.isArray(sale_items) && sale_items.length > 0) {

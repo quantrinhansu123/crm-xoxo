@@ -1766,7 +1766,9 @@ export function CreateOrderPage() {
                 clearOrderDraft(draftKey);
                 navigate(`/orders/${id}`, {
                     state: {
-                        pendingEditApproval: true
+                        pendingEditApproval: true,
+                        // Giữ người dùng ở tab đang làm việc — không ép về Lên đơn
+                        activeTab: (location.state as any)?.returnActiveTab || 'workflow',
                     }
                 });
                 return;

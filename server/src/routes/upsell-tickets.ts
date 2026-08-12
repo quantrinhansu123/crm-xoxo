@@ -147,6 +147,15 @@ router.post(
                     orderProduct = existingProduct;
                 } else {
                     const productCode = `${order.order_code}-${productIdx++}`;
+                    // SP mới trên đơn đã vào sản xuất → không đẩy về Lên đơn
+                    const inheritPhase =
+                        order.status === 'after_sale' ? 'aftersale'
+                            : order.status === 'in_progress' || order.status === 'done' ? 'workflow'
+                                : 'sales';
+                    const inheritStage =
+                        inheritPhase === 'workflow' ? 'pending'
+                            : inheritPhase === 'aftersale' ? 'after1'
+                                : 'step1';
                     const { data: newProduct } = await supabaseAdmin
                         .from('order_products')
                         .insert({
@@ -161,7 +170,9 @@ router.post(
                             condition_before: item.condition_before,
                             images: item.images || [],
                             notes: item.notes,
-                            status: 'pending'
+                            status: 'pending',
+                            current_phase: inheritPhase,
+                            phase_stage: inheritStage,
                         })
                         .select()
                         .single();
@@ -188,11 +199,15 @@ router.post(
                                     .eq('id', svc.id);
                             }
                         } else {
-                            // Insert new service
+                            // Insert new service — kế thừa phase của SP (không reset về sales)
                             totalIncrement += newPrice;
 
                             const hasTechs = svc.technicians && svc.technicians.length > 0;
                             const techId = hasTechs ? svc.technicians[0].technician_id : null;
+                            const parentPhase = orderProduct.current_phase || 'sales';
+                            const parentStage = orderProduct.phase_stage || 'step1';
+                            const svcPhase = hasTechs && parentPhase === 'sales' ? 'workflow' : parentPhase;
+                            const svcStage = hasTechs && parentPhase === 'sales' ? 'room_active' : parentStage;
 
                             const { data: createdSvc } = await supabaseAdmin
                                 .from('order_product_services')
@@ -206,6 +221,8 @@ router.post(
                                     technician_id: techId,
                                     status: hasTechs ? 'assigned' : 'pending',
                                     assigned_at: hasTechs ? new Date().toISOString() : null,
+                                    current_phase: svcPhase,
+                                    phase_stage: svcStage,
                                 })
                                 .select()
                                 .single();

@@ -767,7 +767,8 @@ export function OrderDetailPage() {
                 requireManagerApprovalAfterEdit: true,
                 requestType: 'order_edit',
                 existingPaidAmount: resolvedPaidAmount,
-                existingPaymentMethod: (order as any)?.payment_method
+                existingPaymentMethod: (order as any)?.payment_method,
+                returnActiveTab: activeTab,
             }
         });
     };
