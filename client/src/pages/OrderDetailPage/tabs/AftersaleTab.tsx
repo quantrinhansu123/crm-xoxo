@@ -19,6 +19,7 @@ import { getGroupAfterSaleStage } from '../constants';
 import {
     getAfter1ToDebtValidationErrors,
     getAfter1DebtToAfter2ValidationErrors,
+    getAfter2DeliveryValidationErrors,
     parsePhotoList,
     showAfterSaleValidationToast,
 } from '../afterSaleValidation';
@@ -705,19 +706,14 @@ export function AftersaleTab({
             const arePhotosOk = packPhotos.length > 0;
             const accessoriesReturned = !!(draggedGroup.product as any)?.sales_step_data?.after2_accessories_returned_checked;
             const productAny = draggedGroup.product as any;
-            const isPickup = (productAny.delivery_type || order.delivery_type) === 'pickup';
-            const areFieldsOk = productAny.delivery_creator_name && productAny.delivery_shipper_phone &&
-                productAny.delivery_received_at &&
-                (isPickup ? productAny.delivery_staff_name : productAny.delivery_carrier);
+            const deliveryErrors = getAfter2DeliveryValidationErrors(productAny, order.delivery_type);
             
-            if (!areFieldsOk || !arePhotosOk || !accessoriesReturned) {
+            if (deliveryErrors.length > 0 || !arePhotosOk || !accessoriesReturned) {
                 let errorMsg = "Vui lòng hoàn thành các yêu cầu sau để chuyển bước:";
                 if (!accessoriesReturned) errorMsg += '\n- Tick "Xác nhận trả đủ đồ phụ kiện cho khách"';
-                if (!areFieldsOk) {
-                    errorMsg += isPickup
-                        ? "\n- Nhập đầy đủ: NV Tạo đơn, SĐT Liên hệ, NV Giao đồ và Thời gian nhận đồ"
-                        : "\n- Nhập đầy đủ: NV Tạo đơn, SĐT ship, NV vận chuyển (đơn vị) và Thời gian khách nhận";
-                }
+                deliveryErrors.forEach((line) => {
+                    errorMsg += `\n- ${line}`;
+                });
                 if (!arePhotosOk) errorMsg += "\n- Cần ít nhất một \"Ảnh đóng gói/trả đồ\"";
                 
                 toast.error(errorMsg, { duration: 5000 });

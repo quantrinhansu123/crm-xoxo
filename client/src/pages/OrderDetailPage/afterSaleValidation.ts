@@ -91,3 +91,48 @@ export function showAfterSaleValidationToast(errors: string[]): void {
         duration: 6000,
     });
 }
+
+export type After2DeliveryForm = {
+    delivery_type?: 'ship' | 'pickup' | string | null;
+    delivery_creator_name?: string | null;
+    delivery_shipper_phone?: string | null;
+    delivery_staff_name?: string | null;
+    delivery_carrier?: string | null;
+    delivery_received_at?: string | null;
+};
+
+/** Validate giao hàng bước after2 — chỉ bắt field của phương thức đang chọn (ship hoặc khách đến lấy). */
+export function getAfter2DeliveryValidationErrors(
+    data: After2DeliveryForm,
+    orderDeliveryType?: string | null,
+): string[] {
+    const isPickup = (data.delivery_type || orderDeliveryType) === 'pickup';
+    const errors: string[] = [];
+
+    if (!String(data.delivery_shipper_phone || '').trim()) {
+        errors.push(isPickup ? 'Nhập SĐT liên hệ' : 'Nhập SDT ship lấy hàng');
+    }
+    if (!String(data.delivery_received_at || '').trim()) {
+        errors.push(isPickup ? 'Chọn thời gian nhận đồ' : 'Chọn thời gian khách nhận');
+    }
+    if (isPickup) {
+        if (!String(data.delivery_staff_name || '').trim()) {
+            errors.push('Chọn NV giao đồ');
+        }
+    } else {
+        if (!String(data.delivery_creator_name || '').trim()) {
+            errors.push('Chọn NV tạo đơn');
+        }
+        if (!String(data.delivery_carrier || '').trim()) {
+            errors.push('Chọn NV vận chuyển / đơn vị');
+        }
+    }
+    return errors;
+}
+
+export function isAfter2DeliveryFormComplete(
+    data: After2DeliveryForm,
+    orderDeliveryType?: string | null,
+): boolean {
+    return getAfter2DeliveryValidationErrors(data, orderDeliveryType).length === 0;
+}

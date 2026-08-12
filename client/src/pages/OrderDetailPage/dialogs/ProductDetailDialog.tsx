@@ -39,6 +39,7 @@ import {
 import {
     getAfter1DebtToAfter2ValidationErrors,
     getAfter1ToDebtValidationErrors,
+    getAfter2DeliveryValidationErrors,
     resolveAfter1CompletionData,
     showAfterSaleValidationToast,
 } from '../afterSaleValidation';
@@ -896,21 +897,10 @@ export function ProductDetailDialog({
         // Đóng gói → Feedback: validate đủ field + ảnh trước khi tự chuyển bước
         if (isAftersale && roomId.startsWith('after2') && !onConfirmAndMove) {
             const packPhotos = Array.isArray(formData.packaging_photos) ? formData.packaging_photos : [];
-            const isPickup = (formData.delivery_type || (order as any)?.delivery_type) === 'pickup';
-            const areFieldsOk = !!(
-                formData.delivery_creator_name
-                && formData.delivery_shipper_phone
-                && formData.delivery_received_at
-                && (isPickup ? formData.delivery_staff_name : formData.delivery_carrier)
+            const after2Errors = getAfter2DeliveryValidationErrors(
+                formData,
+                (order as any)?.delivery_type,
             );
-            const after2Errors: string[] = [];
-            if (!areFieldsOk) {
-                after2Errors.push(
-                    isPickup
-                        ? 'Nhập đầy đủ: NV Tạo đơn, SĐT Liên hệ, NV Giao đồ và Thời gian nhận đồ'
-                        : 'Nhập đầy đủ: NV Tạo đơn, SĐT ship, NV vận chuyển (đơn vị) và Thời gian khách nhận'
-                );
-            }
             if (packPhotos.length === 0) {
                 after2Errors.push('Upload ít nhất một "Ảnh đóng gói/trả đồ"');
             }
