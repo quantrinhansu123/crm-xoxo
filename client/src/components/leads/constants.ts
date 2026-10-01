@@ -98,6 +98,28 @@ export function getStatusLabel(statusId: string): string {
     return statusId;
 }
 
+/** API kanban_column → id cột giao diện hiện tại (không thêm cột mới). */
+const KANBAN_COLUMN_TO_STAGE: Record<string, string> = {
+    APPOINTMENT_SHOP: 'hen_qua_ship',
+    APPOINTMENT_SHIP: 'hen_qua_ship',
+};
+
+export function resolveLeadKanbanColumnId(lead: {
+    kanban_column?: string | null;
+    pipeline_stage?: string | null;
+    status?: string | null;
+}): string {
+    const fromApi = (lead.kanban_column || '').trim();
+    if (fromApi) {
+        const mapped = KANBAN_COLUMN_TO_STAGE[fromApi];
+        if (mapped) return mapped;
+        if (kanbanColumns.some((col) => col.id === fromApi)) return fromApi;
+    }
+    const stage = lead.pipeline_stage || lead.status || 'xac_dinh_nhu_cau';
+    if (kanbanColumns.some((col) => col.id === stage)) return stage;
+    return 'xac_dinh_nhu_cau';
+}
+
 export interface CreateLeadFormData {
     name: string;
     phone: string;

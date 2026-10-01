@@ -25,6 +25,7 @@ import { useOrders } from '@/hooks/useOrders';
 import {
     KanbanColumn,
     kanbanColumns,
+    resolveLeadKanbanColumnId,
     LeadHenQuaShipDialog,
     LeadUpdatePhoneDialog,
     LeadFailDialog,
@@ -112,20 +113,15 @@ export function LeadsPage() {
         });
     }, [leads, searchTerm, selectedSources, selectedEmployees, onlyUnassigned]);
 
-    // Group leads by pipeline_stage (or status as fallback) for Kanban
+    // Ưu tiên kanban_column từ API; không có thì mới dùng pipeline_stage
     const leadsByStatus = useMemo(() => {
         const grouped: Record<string, Lead[]> = {};
         kanbanColumns.forEach(col => {
             grouped[col.id] = [];
         });
         filteredLeads.forEach(lead => {
-            const stage = (lead as any).pipeline_stage || lead.status || 'xac_dinh_nhu_cau';
-            if (grouped[stage]) {
-                grouped[stage].push(lead);
-            } else {
-                // Fallback to first column if status doesn't match any column
-                grouped['xac_dinh_nhu_cau'].push(lead);
-            }
+            const stage = resolveLeadKanbanColumnId(lead);
+            grouped[stage].push(lead);
         });
         return grouped;
     }, [filteredLeads]);
@@ -157,54 +153,23 @@ export function LeadsPage() {
         }
 
         const newPipelineStage = destination.droppableId;
-
-        // Optimistic update - immediately update UI
         const leadToUpdate = leads.find(l => l.id === draggableId);
         if (!leadToUpdate) return;
 
-        // Validation: Must have phone number to move to 'chot_don'
-        if (newPipelineStage === 'chot_don' && !leadToUpdate.phone) {
-            setLeadForUpdatePhone(leadToUpdate);
-            setShowUpdatePhoneDialog(true);
+        // API ghi pipeline_stage chưa mở — không tự PATCH/PUT khi kéo cột.
+        // Kéo vào Chốt đơn chỉ mở popup tạo đơn, không đổi trạng thái ngầm.
+        if (newPipelineStage === 'chot_don') {
+            if (!leadToUpdate.phone) {
+                setLeadForUpdatePhone(leadToUpdate);
+                setShowUpdatePhoneDialog(true);
+                return;
+            }
+            setLeadForOrder(leadToUpdate);
+            setShowOrderDialog(true);
             return;
         }
 
-        try {
-            // If pipeline_stage is 'hen_qua_ship', open dialog instead of immediate update
-            if (newPipelineStage === 'hen_qua_ship') {
-                setLeadForHenQuaShip(leadToUpdate);
-                setShowHenQuaShipDialog(true);
-                return;
-            }
-
-            // If pipeline_stage is 'fail', open dialog instead of immediate update
-            if (newPipelineStage === 'fail') {
-                setLeadForFail(leadToUpdate);
-                setShowFailDialog(true);
-                return;
-            }
-
-            await updateLead(draggableId, { pipeline_stage: newPipelineStage, status: newPipelineStage });
-            const statusLabel = kanbanColumns.find(c => c.id === newPipelineStage)?.label || newPipelineStage;
-            toast.success(`Đã chuyển "${leadToUpdate.name}" sang "${statusLabel}"`);
-
-            // If pipeline_stage is 'chot_don' (Chốt đơn), navigate to create order page
-            if (newPipelineStage === 'chot_don') {
-                // Navigate to create order page with lead info
-                const params = new URLSearchParams({
-                    lead_id: leadToUpdate.id,
-                    lead_name: leadToUpdate.name,
-                    lead_phone: leadToUpdate.phone,
-                    lead_email: leadToUpdate.email || '',
-                });
-                navigate(`/orders/new?${params.toString()}`);
-            }
-
-            await fetchLeads({ limit: LEADS_LIST_LIMIT }); // Refresh data
-        } catch {
-            toast.error('Lỗi khi cập nhật trạng thái');
-            await fetchLeads({ limit: LEADS_LIST_LIMIT }); // Revert by refreshing
-        }
+        toast.message('Chưa thể đổi cột bằng kéo thả');
     };
 
     const handleSubmitHenQuaShip = async (data: Partial<Lead>) => {
@@ -236,21 +201,13 @@ export function LeadsPage() {
     const handleSubmitUpdatePhone = async (data: Partial<Lead>) => {
         if (!leadForUpdatePhone) return;
         try {
-            await updateLead(leadForUpdatePhone.id, { ...data, pipeline_stage: 'chot_don', status: 'chot_don' });
+            const phone = data.phone || leadForUpdatePhone.phone || '';
+            await updateLead(leadForUpdatePhone.id, { phone });
             toast.success(`Đã cập nhật số điện thoại cho "${leadForUpdatePhone.name}"`);
             setShowUpdatePhoneDialog(false);
-            
-            // Navigate to create order page with lead info (including new phone)
-            const params = new URLSearchParams({
-                lead_id: leadForUpdatePhone.id,
-                lead_name: leadForUpdatePhone.name,
-                lead_phone: data.phone || leadForUpdatePhone.phone || '',
-                lead_email: leadForUpdatePhone.email || '',
-            });
-            navigate(`/orders/new?${params.toString()}`);
-            
+            setLeadForOrder({ ...leadForUpdatePhone, phone });
+            setShowOrderDialog(true);
             setLeadForUpdatePhone(null);
-            await fetchLeads({ limit: LEADS_LIST_LIMIT });
         } catch {
             toast.error('Lỗi khi cập nhật số điện thoại');
         }
@@ -289,50 +246,23 @@ export function LeadsPage() {
         }
     };
 
-    // Handle stage change from mobile bottom sheet (mirrors handleDragEnd logic)
-    const handleMobileStageChange = async (lead: Lead, newStageId: string) => {
-        const currentStage = (lead as any).pipeline_stage || lead.status || 'xac_dinh_nhu_cau';
+    // Đổi cột trên mobile đi cùng luật với kéo thả: không ghi pipeline_stage.
+    const handleMobileStageChange = (lead: Lead, newStageId: string) => {
+        const currentStage = resolveLeadKanbanColumnId(lead);
         if (newStageId === currentStage) return;
 
-        // Validation: Must have phone number to move to 'chot_don'
-        if (newStageId === 'chot_don' && !lead.phone) {
-            setLeadForUpdatePhone(lead);
-            setShowUpdatePhoneDialog(true);
+        if (newStageId === 'chot_don') {
+            if (!lead.phone) {
+                setLeadForUpdatePhone(lead);
+                setShowUpdatePhoneDialog(true);
+                return;
+            }
+            setLeadForOrder(lead);
+            setShowOrderDialog(true);
             return;
         }
 
-        try {
-            if (newStageId === 'hen_qua_ship') {
-                setLeadForHenQuaShip(lead);
-                setShowHenQuaShipDialog(true);
-                return;
-            }
-
-            if (newStageId === 'fail') {
-                setLeadForFail(lead);
-                setShowFailDialog(true);
-                return;
-            }
-
-            await updateLead(lead.id, { pipeline_stage: newStageId, status: newStageId });
-            const statusLabel = kanbanColumns.find(c => c.id === newStageId)?.label || newStageId;
-            toast.success(`Đã chuyển "${lead.name}" sang "${statusLabel}"`);
-
-            if (newStageId === 'chot_don') {
-                const params = new URLSearchParams({
-                    lead_id: lead.id,
-                    lead_name: lead.name,
-                    lead_phone: lead.phone,
-                    lead_email: lead.email || '',
-                });
-                navigate(`/orders/new?${params.toString()}`);
-            }
-
-            await fetchLeads({ limit: LEADS_LIST_LIMIT });
-        } catch {
-            toast.error('Lỗi khi cập nhật trạng thái');
-            await fetchLeads({ limit: LEADS_LIST_LIMIT });
-        }
+        toast.message('Chưa thể đổi cột từ đây');
     };
 
     if (loading && leads.length === 0) {

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { leadsApi } from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
 import type { Lead } from '@/hooks/useLeads';
-import { kanbanColumns, sourceLabels, getStatusLabel } from './constants';
+import { kanbanColumns, sourceLabels, getStatusLabel, resolveLeadKanbanColumnId } from './constants';
 import { LeadHenQuaShipDialog } from './LeadHenQuaShipDialog';
 import { LeadUpdatePhoneDialog } from './LeadUpdatePhoneDialog';
 
@@ -46,7 +46,7 @@ export function LeadDetailDialog({
     useEffect(() => {
         if (lead && open) {
             setNotes(lead.notes || '');
-            setSelectedStatus(lead.pipeline_stage || lead.status);
+            setSelectedStatus(resolveLeadKanbanColumnId(lead));
             setDob(lead.dob || '');
             setIsEditingNotes(false);
             setPhoneCopied(false);
@@ -70,7 +70,9 @@ export function LeadDetailDialog({
 
     if (!lead) return null;
 
-    const column = kanbanColumns.find(c => c.id === (lead.pipeline_stage || lead.status)) || kanbanColumns[0];
+    const column = kanbanColumns.find(c => c.id === resolveLeadKanbanColumnId(lead)) || kanbanColumns[0];
+    const isShopAppointment = lead.kanban_column === 'APPOINTMENT_SHOP'
+        || (lead.kanban_column !== 'APPOINTMENT_SHIP' && lead.delivery_method === 'direct');
 
     const handleCallPhone = () => {
         window.location.href = `tel:${lead.phone}`;
@@ -254,9 +256,9 @@ export function LeadDetailDialog({
                         <p className="text-sm text-muted-foreground">Ngày tạo</p>
                         <p className="font-medium">{formatDateTime(lead.created_at)}</p>
                     </div>
-                    {lead.pipeline_stage === 'hen_qua_ship' && (
+                    {resolveLeadKanbanColumnId(lead) === 'hen_qua_ship' && (
                         <>
-                            {lead.delivery_method === 'direct' ? (
+                            {isShopAppointment ? (
                                 <div>
                                     <p className="text-sm text-muted-foreground font-semibold text-orange-600">Ngày hẹn qua</p>
                                     <p className="font-bold">{lead.appointment_time ? formatDateTime(lead.appointment_time) : '-'}</p>

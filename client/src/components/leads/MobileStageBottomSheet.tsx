@@ -1,6 +1,6 @@
 import { X, ChevronRight } from 'lucide-react';
 import type { Lead } from '@/hooks/useLeads';
-import { kanbanColumns } from './constants';
+import { kanbanColumns, resolveLeadKanbanColumnId } from './constants';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 interface MobileStageBottomSheetProps {
@@ -13,7 +13,7 @@ interface MobileStageBottomSheetProps {
 export function MobileStageBottomSheet({ open, lead, onClose, onSelectStage }: MobileStageBottomSheetProps) {
     if (!open || !lead) return null;
 
-    const currentStage = (lead as any).pipeline_stage || lead.status || 'xac_dinh_nhu_cau';
+    const currentStage = resolveLeadKanbanColumnId(lead);
 
     return (
         <>

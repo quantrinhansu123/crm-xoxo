@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { formatTimeAgo, formatDateTime } from '@/lib/utils';
 import type { Lead } from '@/hooks/useLeads';
-import { sourceLabels } from './constants';
+import { resolveLeadKanbanColumnId, sourceLabels } from './constants';
 import { SLACountdown } from './SLACountdown';
 import { useAuth } from '@/contexts/AuthContext';
 import { MobileKanbanMoveBar, type MobileKanbanColumn } from '@/components/kanban/mobileKanban';
@@ -40,6 +40,9 @@ export function LeadCard({
     const source = sourceLabels[channelKey] || { label: channelKey || 'Khác', color: 'bg-gray-100 text-gray-700' };
 
     const isManagerOrAdmin = user?.role === 'admin' || user?.role === 'manager';
+    const inAppointmentColumn = resolveLeadKanbanColumnId(lead) === 'hen_qua_ship';
+    const isShopAppointment = lead.kanban_column === 'APPOINTMENT_SHOP'
+        || (lead.kanban_column !== 'APPOINTMENT_SHIP' && lead.delivery_method === 'direct');
 
     // Long press detection for mobile
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -211,13 +214,13 @@ export function LeadCard({
                                 {lead.company}
                             </span>
                         )}
-                        {lead.pipeline_stage === 'hen_qua_ship' && (
+                        {inAppointmentColumn && (
                             <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                lead.delivery_method === 'direct' 
+                                isShopAppointment
                                 ? 'bg-orange-50 text-orange-600 border-orange-100' 
                                 : 'bg-blue-50 text-blue-600 border-blue-100'
                             }`}>
-                                {lead.delivery_method === 'direct' ? (
+                                {isShopAppointment ? (
                                     <>Hẹn: {lead.appointment_time ? formatDateTime(lead.appointment_time) : '-'}</>
                                 ) : (
                                     <>Ship: {lead.tracking_code || '-'}</>

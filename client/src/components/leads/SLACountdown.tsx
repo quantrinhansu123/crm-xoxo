@@ -9,9 +9,17 @@ export type LeadSla = {
 interface SLACountdownProps {
     lead: {
         sla?: LeadSla;
+        current_deadline_at?: string | null;
+        appointment_time?: string | null;
+        appointment_scheduled_at?: string | null;
+        kanban_column?: string | null;
+        last_actor?: string | null;
+        sla_status?: string | null;
     };
     size?: 'sm' | 'md' | 'lg';
     className?: string;
+    /** Chi tiết lead: hiện "Đã phản hồi" khi không còn deadline. Thẻ Kanban giữ nguyên, không thêm nhãn. */
+    showResponded?: boolean;
 }
 
 const TEN_MINUTES = 10 * 60;
@@ -34,17 +42,57 @@ function formatRemaining(seconds: number): string {
     return `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 
-export function SLACountdown({ lead, size = 'md', className }: SLACountdownProps) {
+function deadlineAtOf(lead: SLACountdownProps['lead']): string {
+    return lead.sla?.deadline_at || lead.current_deadline_at || '';
+}
+
+function isFutureAppointment(lead: SLACountdownProps['lead']): boolean {
+    if (lead.kanban_column === 'APPOINTMENT_SHOP' || lead.kanban_column === 'APPOINTMENT_SHIP') {
+        return true;
+    }
+    const raw = lead.appointment_time || lead.appointment_scheduled_at;
+    if (!raw) return false;
+    const time = new Date(raw).getTime();
+    return !Number.isNaN(time) && time > Date.now();
+}
+
+function hasCustomerResponded(lead: SLACountdownProps['lead']): boolean {
+    if (lead.sla_status === 'COMPLETED') return true;
+    return lead.last_actor === 'lead';
+}
+
+export function SLACountdown({ lead, size = 'md', className, showResponded = false }: SLACountdownProps) {
     const [now, setNow] = useState(() => new Date());
-    const deadlineAt = lead.sla?.deadline_at || '';
+    const deadlineAt = deadlineAtOf(lead);
+    const futureAppointment = isFutureAppointment(lead);
+    const activeDeadline = !futureAppointment && !!deadlineAt && remainingSeconds(deadlineAt, now) != null;
 
     useEffect(() => {
-        if (!deadlineAt) return;
+        if (!activeDeadline) return;
         const timer = setInterval(() => setNow(new Date()), 1000);
         return () => clearInterval(timer);
-    }, [deadlineAt]);
+    }, [activeDeadline, deadlineAt]);
 
-    if (!lead.sla || !deadlineAt) return null;
+    const sizeClasses = {
+        sm: 'px-1.5 py-0.5 text-[9px] gap-1',
+        md: 'px-2 py-1 text-xs gap-1.5',
+        lg: 'px-3 py-1.5 text-[13px] gap-2',
+    };
+
+    if (futureAppointment || !deadlineAt) {
+        if (showResponded && !futureAppointment && hasCustomerResponded(lead)) {
+            return (
+                <div className={cn(
+                    'inline-flex items-center font-bold rounded-lg bg-emerald-100 text-emerald-700',
+                    sizeClasses[size],
+                    className,
+                )}>
+                    <span>Đã phản hồi</span>
+                </div>
+            );
+        }
+        return null;
+    }
 
     const remaining = remainingSeconds(deadlineAt, now);
     if (remaining == null) return null;
@@ -60,12 +108,6 @@ export function SLACountdown({ lead, size = 'md', className }: SLACountdownProps
             : warning
                 ? 'bg-amber-500 text-white'
                 : 'bg-emerald-500 text-white';
-
-    const sizeClasses = {
-        sm: 'px-1.5 py-0.5 text-[9px] gap-1',
-        md: 'px-2 py-1 text-xs gap-1.5',
-        lg: 'px-3 py-1.5 text-[13px] gap-2',
-    };
 
     return (
         <div className={cn(

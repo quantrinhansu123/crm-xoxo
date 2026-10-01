@@ -37,8 +37,10 @@ export interface Lead {
     last_message_text?: string;
     last_message_time?: string;
     last_actor?: string;
+    kanban_column?: string | null;
     current_deadline_at?: string;
     sla?: { deadline_at?: string | null } | null;
+    sla_status?: string | null;
     current_rule_index?: number;
 
     // Delivery & Appointment
@@ -46,6 +48,7 @@ export interface Lead {
     tracking_code?: string;
     shipping_fee?: number;
     appointment_time?: string;
+    appointment_scheduled_at?: string | null;
     t_due?: string;
     t_last_inbound?: string;
     t_last_outbound?: string;
@@ -113,8 +116,9 @@ export interface UseLeadsReturn {
     convertLead: (id: string) => Promise<any>;
 }
 
-/** Tải đủ leads cho Kanban — tránh kẹt thống kê ở 500 */
-export const LEADS_LIST_LIMIT = 5000;
+/** Mỗi lần chỉ lấy một trang nhỏ; tổng số vẫn nằm ở pagination.total */
+export const LEADS_LIST_LIMIT = 100;
+const LEADS_REFRESH_MS = 45_000;
 
 export function useLeads(): UseLeadsReturn {
     const [leads, setLeads] = useState<Lead[]>([]);
@@ -252,12 +256,23 @@ export function useLeads(): UseLeadsReturn {
         }
     }, []);
 
-    // Poll nền im lặng — không bật lại full-page loading
+    // Làm mới khi tab đang mở, và khi user quay lại tab. Không poll lúc tab ẩn.
     useEffect(() => {
-        const interval = setInterval(() => {
+        const refreshIfVisible = () => {
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
             fetchLeads(undefined, { silent: true });
-        }, 15000);
-        return () => clearInterval(interval);
+        };
+        const interval = setInterval(refreshIfVisible, LEADS_REFRESH_MS);
+        const onVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                fetchLeads(undefined, { silent: true });
+            }
+        };
+        document.addEventListener('visibilitychange', onVisibility);
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', onVisibility);
+        };
     }, [fetchLeads]);
 
     return {

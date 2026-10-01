@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
     ArrowLeft, Phone, MessageCircle, Copy, Check, ArrowRightLeft,
     Loader2, User, Building, Calendar, Tag, UserCheck, Mail,
-    Clock, MessageSquare, TrendingUp, Timer, Facebook, ExternalLink, CalendarClock,
+    Clock, MessageSquare, TrendingUp, Facebook, ExternalLink, CalendarClock,
     ShoppingBag, Globe, Zap, AlertTriangle, Flame,
     Image as ImageIcon,
     Smile,
@@ -29,7 +29,7 @@ import { uploadFile } from '@/lib/supabase';
 import { formatDateTime, isOverdueVN } from '@/lib/utils';
 import type { Lead } from '@/hooks/useLeads';
 import { useLeads } from '@/hooks/useLeads';
-import { kanbanColumns, sourceLabels, getStatusLabel } from '@/components/leads/constants';
+import { kanbanColumns, sourceLabels, getStatusLabel, resolveLeadKanbanColumnId } from '@/components/leads/constants';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { usersApi } from '@/lib/api';
@@ -63,13 +63,11 @@ export function LeadDetailPage() {
     const avatarInputRef = useRef<HTMLInputElement>(null);
     const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
-    const [selectedStatus, setSelectedStatus] = useState('');
     const [isSaving, setIsSaving] = useState(false);
     const [phoneCopied, setPhoneCopied] = useState(false);
     const [emailCopied, setEmailCopied] = useState(false);
     const [activities, setActivities] = useState<any[]>([]);
     const [loadingActivities, setLoadingActivities] = useState(false);
-    const [elapsedTime, setElapsedTime] = useState('');
     const [appointmentCountdown, setAppointmentCountdown] = useState('');
     const [followupCountdown, setFollowupCountdown] = useState('');
 
@@ -107,7 +105,6 @@ export function LeadDetailPage() {
             const leadData = response.data?.data?.lead || response.data?.data;
             if (leadData && leadData.id) {
                 setLead(leadData as Lead);
-                setSelectedStatus(leadData.pipeline_stage || leadData.status);
             } else {
                 setError('Không tìm thấy thông tin lead');
             }
@@ -166,34 +163,6 @@ export function LeadDetailPage() {
             console.error('Error fetching users:', err);
         }
     };
-
-    // Timer for elapsed time since lead creation
-    useEffect(() => {
-        if (!lead?.created_at) return;
-
-        const calculateElapsedTime = () => {
-            const createdDate = new Date(lead.created_at);
-            const now = new Date();
-            const diff = now.getTime() - createdDate.getTime();
-
-            const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-            const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
-            let timeStr = '';
-            if (days > 0) timeStr += `${days} ngày `;
-            if (hours > 0 || days > 0) timeStr += `${hours.toString().padStart(2, '0')}:`;
-            timeStr += `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-            setElapsedTime(timeStr);
-        };
-
-        calculateElapsedTime();
-        const interval = setInterval(calculateElapsedTime, 1000);
-
-        return () => clearInterval(interval);
-    }, [lead?.created_at]);
 
     // Timer for appointment countdown
     useEffect(() => {
@@ -296,7 +265,7 @@ export function LeadDetailPage() {
         );
     }
 
-    const column = kanbanColumns.find(c => c.id === (lead.pipeline_stage || lead.status)) || kanbanColumns[0];
+    const column = kanbanColumns.find(c => c.id === resolveLeadKanbanColumnId(lead)) || kanbanColumns[0];
 
     const handleCallPhone = () => {
         window.location.href = `tel:${lead.phone}`;
@@ -342,7 +311,6 @@ export function LeadDetailPage() {
         try {
             await updateLead(lead.id, { status: newStatus, pipeline_stage: newStatus });
             await fetchLead();
-            setSelectedStatus(newStatus);
             toast.success('Đã cập nhật trạng thái');
 
             // Refresh activities to show status change
@@ -665,16 +633,10 @@ export function LeadDetailPage() {
                         <div className="flex-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-3 mb-1">
                                 <h1 className="text-xl sm:text-2xl font-bold truncate">{lead.name}</h1>
-                                <SLACountdown lead={lead} size="lg" />
+                                <SLACountdown lead={lead} size="lg" showResponded />
                             </div>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                                 <p className="text-muted-foreground text-sm sm:text-base">{lead.phone}</p>
-                                {elapsedTime && (
-                                    <div className="flex items-center gap-1.5 px-2 py-0.5 sm:py-1 bg-orange-100 text-orange-700 rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap">
-                                        <Timer className="h-3.5 w-3.5" />
-                                        <span>{elapsedTime}</span>
-                                    </div>
-                                )}
                                 {lead.next_followup_time && (
                                     <div className={`flex items-center gap-1.5 px-2 py-0.5 sm:py-1 rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap ${
                                         isOverdueVN(lead.next_followup_time)
@@ -695,7 +657,7 @@ export function LeadDetailPage() {
 
                 {/* Quick Actions */}
                 <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto mt-1 sm:mt-0">
-                    <Select value={selectedStatus} onValueChange={handleStatusChange} disabled={isSaving}>
+                    <Select value={column.id} onValueChange={handleStatusChange} disabled={isSaving}>
                         <SelectTrigger className="h-9 w-auto min-w-[150px] bg-white border-slate-200 shadow-sm transition-all hover:border-slate-300">
                             <div className="flex items-center gap-2 pr-1">
                                 <div className={`w-2 h-2 rounded-full ${column.color} shadow-sm`} />

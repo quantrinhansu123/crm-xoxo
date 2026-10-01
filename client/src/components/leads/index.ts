@@ -3,7 +3,7 @@ export { CreateLeadDialog } from './CreateLeadDialog';
 export { LeadDetailDialog } from './LeadDetailDialog';
 export { LeadCard } from './LeadCard';
 export { KanbanColumn } from './KanbanColumn';
-export { kanbanColumns, sourceLabels, getStatusLabel } from './constants';
+export { kanbanColumns, sourceLabels, getStatusLabel, resolveLeadKanbanColumnId } from './constants';
 export { LeadHenQuaShipDialog } from './LeadHenQuaShipDialog';
 export { LeadUpdatePhoneDialog } from './LeadUpdatePhoneDialog';
 export { LeadFailDialog } from './LeadFailDialog';
