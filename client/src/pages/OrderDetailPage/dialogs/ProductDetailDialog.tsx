@@ -44,7 +44,7 @@ import {
     showAfterSaleValidationToast,
 } from '../afterSaleValidation';
 import { getWorkflowRequestLogDisplay, isWorkflowRequestLogAction } from '../workflowRequestLog';
-import { orderItemsApi, orderProductsApi, productChatsApi } from '@/lib/api';
+import { orderItemsApi, orderProductsApi, productChatsApi, ordersApi } from '@/lib/api';
 import { toast } from 'sonner';
 import { ImageUpload } from '@/components/products/ImageUpload';
 import { useUsers } from '@/hooks/useUsers';
@@ -401,6 +401,7 @@ export function ProductDetailDialog({
     const [optimisticAfterSaleStages, setOptimisticAfterSaleStages] = useState<Record<string, string>>({});
     const [debtReceiptsByProduct, setDebtReceiptsByProduct] = useState<Record<string, DebtProductReceipt>>({});
     const [debtHandoffTab, setDebtHandoffTab] = useState('handoff');
+    const [paidByProductId, setPaidByProductId] = useState<Record<string, number>>({});
     const { users, fetchUsers, fetchSales, fetchTechnicians, fetchMentionable } = useUsers();
     const { user } = useAuth();
 
@@ -440,6 +441,37 @@ export function ProductDetailDialog({
             };
         }
     }, [open, fetchMentionable, fetchUsers, fetchSales, fetchTechnicians, roomId, pinFormScrollTop, highlightMessageId]);
+
+    useEffect(() => {
+        if (!open || !order?.id) {
+            setPaidByProductId({});
+            return;
+        }
+        if (!roomId.startsWith('after1_debt') && roomId !== 'after4') return;
+
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await ordersApi.getPayments(order.id);
+                const payments = res.data?.data?.payments ?? [];
+                if (cancelled) return;
+                const paid: Record<string, number> = {};
+                for (const pay of payments) {
+                    const status = String(pay.transaction_status || 'approved').toLowerCase();
+                    if (status === 'cancelled' || status === 'rejected') continue;
+                    const productId = pay.order_product_id;
+                    if (!productId) continue;
+                    paid[productId] = (paid[productId] || 0) + (Number(pay.amount) || 0);
+                }
+                setPaidByProductId(paid);
+            } catch {
+                if (!cancelled) setPaidByProductId({});
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [open, order?.id, roomId, order?.paid_amount]);
 
     // Local form state
     const [formData, setFormData] = useState<Partial<Order>>({});
@@ -1096,7 +1128,6 @@ export function ProductDetailDialog({
                     ([, receipt]) => Number(receipt.amount) > 0
                 );
                 if (receiptEntries.length > 0) {
-                    const { ordersApi } = await import('@/lib/api');
                     try {
                         const nameLookup = new Map<string, string>();
                         for (const item of [
@@ -1108,12 +1139,18 @@ export function ProductDetailDialog({
                                 nameLookup.set(item.id, item.name || item.item_name || item.id);
                             }
                         }
+                        let createdCount = 0;
                         for (const [productId, receipt] of receiptEntries) {
                             const productLabel = nameLookup.get(productId);
+                            const detail = invoiceProductDetails.find((d) => d.id === productId);
+                            const due = Math.max(0, Number(detail?.collectDue) || 0);
+                            const requested = Number(receipt.amount) || 0;
+                            if (requested <= 0 || due <= 0) continue;
+                            const chargeAmount = Math.min(requested, due);
                             const paymentPhotos = resolveReceiptPhotos(receipt, productId);
                             await ordersApi.createPayment(order.id, {
                                 content: 'Thanh toán đơn hàng',
-                                amount: Number(receipt.amount),
+                                amount: chargeAmount,
                                 notes: [
                                     `Thu nợ cho đơn ${order.order_code || order.id}`,
                                     productLabel ? `SP: ${productLabel}` : null,
@@ -1125,12 +1162,15 @@ export function ProductDetailDialog({
                                 image_url: paymentPhotos[0] || undefined,
                                 order_product_id: productId,
                             });
+                            createdCount += 1;
                         }
-                        toast.success(
-                            receiptEntries.length === 1
-                                ? 'Đã tạo phiếu thu nợ và cập nhật công nợ'
-                                : `Đã tạo ${receiptEntries.length} phiếu thu nợ và cập nhật công nợ`
-                        );
+                        if (createdCount > 0) {
+                            toast.success(
+                                createdCount === 1
+                                    ? 'Đã tạo phiếu thu nợ và cập nhật công nợ'
+                                    : `Đã tạo ${createdCount} phiếu thu nợ và cập nhật công nợ`
+                            );
+                        }
                         setDebtReceiptsByProduct({});
                     } catch (error) {
                         console.error('Lỗi tạo phiếu thu nợ:', error);
@@ -1649,6 +1689,8 @@ export function ProductDetailDialog({
             const depositTotal = serviceLines.reduce((sum, s) => sum + s.deposit, 0);
             const productSurchargeTotal = resolveProductSurcharge(item, serviceTotal);
             const total = serviceTotal + productSurchargeTotal;
+            const paidFromRecords = Math.max(0, Number(paidByProductId[item.id]) || 0);
+            const collected = Math.max(depositTotal, paidFromRecords);
 
             return {
                 id: item.id,
@@ -1662,8 +1704,9 @@ export function ProductDetailDialog({
                 surchargeTotal: productSurchargeTotal, // sẽ cộng thêm phần phụ thu cấp đơn bên dưới
                 orderSurchargeShare: 0,
                 depositTotal,
+                paidFromRecords,
                 total,
-                collectDue: isWarranty ? 0 : Math.max(0, total - depositTotal),
+                collectDue: isWarranty ? 0 : Math.max(0, total - collected),
             };
         };
 
@@ -1705,12 +1748,39 @@ export function ProductDetailDialog({
                 d.orderSurchargeShare = share;
                 d.surchargeTotal = d.productSurchargeTotal + share;
                 d.total = d.serviceTotal + d.surchargeTotal;
-                d.collectDue = Math.max(0, d.total - d.depositTotal);
+                d.collectDue = Math.max(0, d.total - Math.max(d.depositTotal, d.paidFromRecords));
             });
         }
 
+        // Đồng bộ với công nợ cấp đơn: đã thu đủ thì không còn "Cần thu" từng SP (vd. phụ thu 560 sau khi trả hết 3360)
+        const totalAmount = Number(order.total_amount || 0);
+        const paidAmount = Number(order.paid_amount || 0);
+        const explicitRemaining = Number((order as any).remaining_debt);
+        const orderRemainingDebt = Number.isFinite(explicitRemaining)
+            ? Math.max(0, explicitRemaining)
+            : Math.max(0, totalAmount - paidAmount);
+
+        if (orderRemainingDebt <= 0) {
+            for (const d of details) {
+                if (!d.isWarranty) d.collectDue = 0;
+            }
+        } else {
+            const chargeable = details.filter((d) => !d.isWarranty && d.collectDue > 0);
+            const sumDue = chargeable.reduce((s, d) => s + d.collectDue, 0);
+            if (sumDue > orderRemainingDebt) {
+                let allocated = 0;
+                chargeable.forEach((d, idx) => {
+                    const share = idx === chargeable.length - 1
+                        ? Math.max(0, orderRemainingDebt - allocated)
+                        : (sumDue > 0 ? Math.round(orderRemainingDebt * d.collectDue / sumDue) : 0);
+                    allocated += share;
+                    d.collectDue = share;
+                });
+            }
+        }
+
         return details;
-    }, [order, uniqueItems, optimisticAfterSaleStages, product, group?.product, group?.services]);
+    }, [order, uniqueItems, optimisticAfterSaleStages, product, group?.product, group?.services, paidByProductId]);
 
     // SP cần bàn giao đợt này: còn tiền phải thu (bill > 0) HOẶC HD bảo hành (thu 0đ nhưng vẫn phải trả khách).
     const billableProductDetails = useMemo(
@@ -2358,7 +2428,7 @@ export function ProductDetailDialog({
                                                                                     )}
                                                                                 </div>
                                                                             ))}
-                                                                            {(item.depositTotal > 0 || item.isWarranty) && (
+                                                                            {(item.depositTotal > 0 || item.isWarranty) && item.collectDue > 0 && (
                                                                                 <div className="flex justify-between gap-2 border-t border-purple-100 pt-1 text-[10px] font-bold text-purple-800">
                                                                                     <span>{item.isWarranty ? 'Cần thu SP này (bảo hành)' : 'Cần thu SP này'}</span>
                                                                                     <span className="tabular-nums">{formatCurrency(item.collectDue)}</span>
@@ -2376,7 +2446,7 @@ export function ProductDetailDialog({
                                                                                     <span className="font-bold text-gray-800 tabular-nums whitespace-nowrap">{formatCurrency(item.surchargeTotal)}</span>
                                                                                 </div>
                                                                             )}
-                                                                            {item.surchargeTotal > 0 && item.depositTotal <= 0 && !item.isWarranty && (
+                                                                            {item.surchargeTotal > 0 && item.depositTotal <= 0 && !item.isWarranty && item.collectDue > 0 && (
                                                                                 <div className="flex justify-between gap-2 border-t border-purple-100 pt-1 text-[10px] font-bold text-purple-800">
                                                                                     <span>Cần thu SP này</span>
                                                                                     <span className="tabular-nums">{formatCurrency(item.collectDue)}</span>

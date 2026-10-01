@@ -60,6 +60,7 @@ const menuItems: MenuItem[] = [
         roles: ['admin', 'manager', 'sale'], // Only Sale and Manager can access CRM
         children: [
             { id: 'leads', label: 'Leads', roles: ['admin', 'manager', 'sale'] },
+            { id: 'lead-check', label: 'Kiểm tra Leads', roles: ['admin', 'manager'] },
             { id: 'customers', label: 'Khách hàng', roles: ['admin', 'manager', 'sale'] }
         ]
     },

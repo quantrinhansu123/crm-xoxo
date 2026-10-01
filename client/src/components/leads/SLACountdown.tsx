@@ -1,202 +1,82 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Clock, Zap, AlertCircle } from 'lucide-react';
-import { SLA_CYCLES } from './constants';
+import { useEffect, useState } from 'react';
+import { Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+export type LeadSla = {
+    deadline_at?: string | null;
+} | null;
 
 interface SLACountdownProps {
     lead: {
-        id: string;
-        pipeline_stage?: string;
-        assigned_to?: string | null;
-        current_deadline_at?: string;
-        current_rule_index?: number;
-        sla_state?: string;
-        sla_paused_at?: string | null;
-        sla_remaining_seconds?: number | null;
-        created_at?: string;
+        sla?: LeadSla;
     };
     size?: 'sm' | 'md' | 'lg';
     className?: string;
 }
 
+const TEN_MINUTES = 10 * 60;
+const FIVE_MINUTES = 5 * 60;
+
+function remainingSeconds(deadlineAt: string, now: Date): number | null {
+    const deadline = new Date(deadlineAt);
+    if (Number.isNaN(deadline.getTime())) return null;
+    return Math.floor((deadline.getTime() - now.getTime()) / 1000);
+}
+
+function formatRemaining(seconds: number): string {
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (minutes >= 60) {
+        const hours = Math.floor(minutes / 60);
+        const remMinutes = minutes % 60;
+        return `${hours}h${String(remMinutes).padStart(2, '0')}p`;
+    }
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
 export function SLACountdown({ lead, size = 'md', className }: SLACountdownProps) {
-    const [now, setNow] = useState(new Date());
+    const [now, setNow] = useState(() => new Date());
+    const deadlineAt = lead.sla?.deadline_at || '';
 
     useEffect(() => {
+        if (!deadlineAt) return;
         const timer = setInterval(() => setNow(new Date()), 1000);
         return () => clearInterval(timer);
-    }, []);
+    }, [deadlineAt]);
 
-    const slaData = useMemo(() => {
-        const endStages = ['chot_don', 'huy', 'fail'];
-        const endStates = [
-            'FINISHED', 'RECLAIMED', 'STOPPED',
-            'STOPPED_WON', 'STOPPED_FAILED',
-        ];
-        
-        if (
-            endStages.includes(lead.pipeline_stage || '') || 
-            endStates.includes(lead.sla_state || '')
-        ) {
-            return null;
-        }
+    if (!lead.sla || !deadlineAt) return null;
 
-        // Shared pool without active deadline — no countdown
-        if (
-            (lead.sla_state === 'SHARED_WAITING_SALE' || lead.sla_state === 'UNASSIGNED_IDLE') &&
-            !lead.current_deadline_at
-        ) {
-            return null;
-        }
+    const remaining = remainingSeconds(deadlineAt, now);
+    if (remaining == null) return null;
 
-        if (lead.sla_paused_at || lead.sla_state === 'PAUSED_FOLLOWUP') {
-            const rem = Number((lead as any).sla_remaining_seconds || 0);
-            const m = Math.floor(rem / 60);
-            const s = rem % 60;
-            return {
-                remainingTime: `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`,
-                label: 'Tạm dừng',
-                colorClass: 'bg-slate-500 text-white',
-                isBlinking: false,
-                isSpeedRule: false,
-            };
-        }
+    const overdue = remaining < 0;
+    const urgent = !overdue && remaining <= FIVE_MINUTES;
+    const warning = !overdue && remaining <= TEN_MINUTES && remaining > FIVE_MINUTES;
 
-        if (lead.sla_state === 'PAUSED_APPOINTMENT') {
-            return {
-                remainingTime: '--:--',
-                label: 'Lịch hẹn',
-                colorClass: 'bg-blue-500 text-white',
-                isBlinking: false,
-                isSpeedRule: false
-            };
-        }
-
-        if (!lead.current_deadline_at) return null;
-
-        const deadline = new Date(lead.current_deadline_at);
-        const ruleIndex = lead.current_rule_index || 0;
-        const currentMilestone = SLA_CYCLES[ruleIndex] || 3;
-        const isSpeedRule = ruleIndex === 0;
-
-        // Customer age: < 24h = new customer (no night pause)
-        const isNew = lead.created_at 
-            ? (now.getTime() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000 
-            : true;
-
-        const getVirtualSecsLeft = (nowTime: Date, deadTime: Date, isCustomerNew: boolean) => {
-            if (nowTime.getTime() >= deadTime.getTime()) {
-                return Math.floor((deadTime.getTime() - nowTime.getTime()) / 1000);
-            }
-            if (isCustomerNew) {
-                return Math.floor((deadTime.getTime() - nowTime.getTime()) / 1000);
-            }
-
-            const tStart = nowTime.getTime();
-            const tEnd = deadTime.getTime();
-            let totalPausedMs = 0;
-
-            // Tìm t 00:00 VN gần nhất trước đó
-            let currentMidnight = new Date(nowTime);
-            currentMidnight.setUTCHours(17, 0, 0, 0); // 17:00 UTC = 00:00 VN hôm sau
-            if (currentMidnight.getTime() > tStart) {
-                currentMidnight.setUTCDate(currentMidnight.getUTCDate() - 1);
-            }
-
-            while (currentMidnight.getTime() < tEnd) {
-                const pauseStart = currentMidnight.getTime(); // 00:00 VN
-                const pauseEnd = pauseStart + 390 * 60000; // 06:30 VN
-
-                const overlapStart = Math.max(tStart, pauseStart);
-                const overlapEnd = Math.min(tEnd, pauseEnd);
-
-                if (overlapStart < overlapEnd) {
-                    totalPausedMs += (overlapEnd - overlapStart);
-                }
-
-                currentMidnight.setUTCDate(currentMidnight.getUTCDate() + 1); // Quét ngày tiếp theo
-            }
-
-            return Math.floor((tEnd - tStart - totalPausedMs) / 1000);
-        };
-
-        const remainingSec = getVirtualSecsLeft(now, deadline, isNew);
-        const totalSec = currentMilestone * 60;
-        
-        let label = isSpeedRule ? 'Sale cần rep' : 'Đợi khách';
-
-        let colorClass = 'bg-emerald-500 text-white';
-        let isBlinking = false;
-
-        if (remainingSec <= 0) {
-            colorClass = 'bg-red-600 text-white';
-            isBlinking = true;
-        } else {
-            // Đỏ chớp: 90s cuối (mốc 3p) hoặc 45p cuối (mốc dài) — ưu tiên trước ngưỡng 50%
-            let warnThresholdSec = 45 * 60;
-            if (currentMilestone <= 3) warnThresholdSec = 90;
-
-            const ratio = remainingSec / totalSec;
-            if (remainingSec <= warnThresholdSec) {
-                colorClass = 'bg-red-500 text-white';
-                isBlinking = true;
-            } else if (ratio <= 0.5) {
-                colorClass = 'bg-amber-500 text-white';
-            } else {
-                colorClass = 'bg-emerald-500 text-white';
-            }
-        }
-
-        const formatTime = (seconds: number) => {
-            const absSec = Math.abs(seconds);
-            const h = Math.floor(absSec / 3600);
-            const m = Math.floor((absSec % 3600) / 60);
-            const s = Math.floor(absSec % 60);
-            
-            const prefix = seconds < 0 ? '-' : '';
-            if (h > 0) return `${prefix}${h}h${m}p`;
-            return `${prefix}${m}:${s.toString().padStart(2, '0')}`;
-        };
-
-        return {
-            remainingTime: formatTime(remainingSec),
-            label,
-            colorClass,
-            isBlinking,
-            isOverdue: remainingSec <= 0,
-            isSpeedRule
-        };
-    }, [lead, now]);
-
-    if (!slaData) return null;
+    const colorClass = overdue
+        ? 'bg-red-800 text-white'
+        : urgent
+            ? 'bg-red-500 text-white'
+            : warning
+                ? 'bg-amber-500 text-white'
+                : 'bg-emerald-500 text-white';
 
     const sizeClasses = {
         sm: 'px-1.5 py-0.5 text-[9px] gap-1',
         md: 'px-2 py-1 text-xs gap-1.5',
-        lg: 'px-3 py-1.5 text-[13px] gap-2'
+        lg: 'px-3 py-1.5 text-[13px] gap-2',
     };
 
     return (
         <div className={cn(
-            "inline-flex items-center font-bold rounded-lg shadow-sm transition-all duration-300",
-            slaData.colorClass,
-            slaData.isBlinking && "animate-pulse ring-2 ring-red-300 ring-offset-1",
+            'inline-flex items-center font-bold rounded-lg shadow-sm',
+            colorClass,
+            urgent && 'animate-pulse',
             sizeClasses[size],
-            className
+            className,
         )}>
-            {slaData.isSpeedRule ? (
-                <Zap className={cn("shrink-0", size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
-            ) : (
-                <Clock className={cn("shrink-0", size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
-            )}
-            
-            <span className="tabular-nums">
-                {slaData.remainingTime}
-            </span>
-            
-            <span className="opacity-90 font-medium border-l border-white/30 pl-1.5 ml-0.5 uppercase tracking-tighter">
-                {slaData.label}
-            </span>
+            <Clock className={cn('shrink-0', size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
+            <span className="tabular-nums">{overdue ? 'Quá hạn' : formatRemaining(remaining)}</span>
         </div>
     );
 }

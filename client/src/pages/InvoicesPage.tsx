@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { invoicesApi, ordersApi } from '@/lib/api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { formatCurrency, formatDate, formatDateTime, cn } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, cn, normalizeSearchText } from '@/lib/utils';
 import { PaymentRecordDialog } from '@/components/orders/PaymentRecordDialog';
 import { InvoiceDetailDialog, MobileInvoicesList } from '@/components/invoices';
 import type { User } from '@/types';
@@ -525,11 +525,12 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
 
     const filteredInvoices = useMemo(() => {
         if (!searchQuery) return invoices;
-        const query = searchQuery.toLowerCase();
+        const query = normalizeSearchText(searchQuery);
         return invoices.filter(inv =>
-            inv.invoice_code.toLowerCase().includes(query) ||
-            inv.customer?.name?.toLowerCase().includes(query) ||
-            inv.customer?.phone?.includes(query)
+            normalizeSearchText(inv.invoice_code).includes(query) ||
+            normalizeSearchText(inv.order?.order_code || '').includes(query) ||
+            normalizeSearchText(inv.customer?.name || '').includes(query) ||
+            normalizeSearchText(inv.customer?.phone || '').includes(query)
         );
     }, [invoices, searchQuery]);
 
@@ -658,7 +659,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                         <div className="relative min-w-0 flex-1">
                             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                             <Input
-                                placeholder="Tìm HĐ, khách..."
+                                placeholder="Tìm mã HĐ, đơn hàng, khách..."
                                 className="h-8 rounded-lg border-slate-200 pl-8 text-xs"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -694,7 +695,7 @@ export function InvoicesPage({ currentUser }: InvoicesPageProps) {
                                 <div className="relative flex-1">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                     <Input
-                                        placeholder="Tìm kiếm mã hóa đơn, khách hàng..."
+                                        placeholder="Tìm mã hóa đơn, đơn hàng, khách hàng..."
                                         className="pl-9"
                                         value={searchQuery}
                                         onChange={(e) => setSearchQuery(e.target.value)}

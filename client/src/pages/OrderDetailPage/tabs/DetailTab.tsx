@@ -64,6 +64,10 @@ export function DetailTab({
     const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
     const [noteDraft, setNoteDraft] = useState('');
     const [savingNote, setSavingNote] = useState(false);
+    const displayRemainingDebt = Math.max(
+        0,
+        order.remaining_debt ?? ((order.total_amount || 0) - (order.paid_amount || 0)),
+    );
 
     const openNoteEditor = (item: OrderItem) => {
         setEditingNoteId(item.id);
@@ -673,8 +677,8 @@ export function DetailTab({
                                 </div>
                                 <div className="flex justify-between text-sm">
                                     <span>Còn nợ:</span>
-                                    <span className={`font-medium ${(order.remaining_debt || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                        {formatCurrency(order.remaining_debt || (order.total_amount - (order.paid_amount || 0)))}
+                                    <span className={`font-medium ${displayRemainingDebt > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                        {formatCurrency(displayRemainingDebt)}
                                     </span>
                                 </div>
                                 <div className="flex justify-between items-center text-sm">

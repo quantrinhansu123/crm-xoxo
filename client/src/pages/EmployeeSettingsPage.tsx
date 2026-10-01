@@ -173,6 +173,7 @@ function InitTab() {
               className="flex-shrink-0 h-[36px] px-4 text-[13px] font-medium text-gray-700 border-gray-300 rounded-lg hover:bg-gray-50 shadow-sm"
               onClick={() => {
                 if (step.id === 'add-employee') navigate('/employees');
+                if (step.id === 'create-shift') navigate('/work-schedule');
                 if (step.id === 'schedule') navigate('/work-schedule');
                 if (step.id === 'salary-setup') navigate('/salary');
                 if (step.id === 'payroll-setup') navigate('/salary');

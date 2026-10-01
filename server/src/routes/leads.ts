@@ -29,6 +29,9 @@ function enrichCutiProjection(lead: any) {
         sla_type,
         sla_status: deriveSlaStatus(lead),
         sla_deadline_at: lead.current_deadline_at || null,
+        sla: lead.current_deadline_at && deriveSlaStatus(lead)
+            ? { deadline_at: lead.current_deadline_at }
+            : null,
         sla_warning_at: lead.warning_at || null,
         followup_milestone_index: milestoneIndex1Based(lead),
         next_followup_at:

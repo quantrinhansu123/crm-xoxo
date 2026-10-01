@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { LoginPage } from '@/pages/LoginPage';
+import { LeadCheckPage } from '@/pages/LeadCheckPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { LeadsPage } from '@/pages/LeadsPage';
 import { LeadDetailPage } from '@/pages/LeadDetailPage';
@@ -251,7 +252,7 @@ function AppContent() {
   }
 
   // Redirect to login if not authenticated
-  if (!isAuthenticated && location.pathname !== '/login') {
+  if (!isAuthenticated && location.pathname !== '/login' && location.pathname !== '/lead-check') {
     return <Navigate to="/login" replace />;
   }
 
@@ -264,6 +265,7 @@ function AppContent() {
     <Routes>
       {/* Public Route */}
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/lead-check" element={<LeadCheckPage />} />
 
       {/* QR Code Route - Accessible by technicians */}
       <Route path="/task/:code" element={

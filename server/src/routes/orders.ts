@@ -823,6 +823,9 @@ router.get('/:id', authenticate, async (req: AuthenticatedRequest, res, next) =>
             .order('created_at', { ascending: false });
         (order as any).pending_tickets = pendingTickets || [];
 
+        const { data: payments } = await fetchOrderPaymentRecords(order.id);
+        (order as any).payments = payments || [];
+
         res.json({
             status: 'success',
             data: { order },
@@ -2430,6 +2433,55 @@ router.post('/:id/payments', authenticate, async (req: AuthenticatedRequest, res
 
         if (orderError || !order) {
             throw new ApiError('Không tìm thấy đơn hàng', 404);
+        }
+
+        const isShippingFee = String(content || '').trim() === 'Phí giao hàng';
+        const orderRemaining = order.remaining_debt != null
+            ? Math.max(0, Number(order.remaining_debt) || 0)
+            : Math.max(0, (Number(order.total_amount) || 0) - (Number(order.paid_amount) || 0));
+
+        if (!isShippingFee && orderRemaining <= 0) {
+            throw new ApiError('Đơn hàng đã thanh toán đủ, không tạo thêm phiếu thu nợ', 400);
+        }
+
+        if (!isShippingFee && amountNum > orderRemaining) {
+            throw new ApiError(`Đơn chỉ còn nợ ${orderRemaining}, không thể thu ${amountNum}`, 400);
+        }
+
+        if (order_product_id && !isShippingFee) {
+            const [{ data: productRow }, { data: services }, { data: existingPays }] = await Promise.all([
+                supabaseAdmin
+                    .from('order_products')
+                    .select('id, surcharge_amount, surcharges')
+                    .eq('id', order_product_id)
+                    .maybeSingle(),
+                supabaseAdmin
+                    .from('order_product_services')
+                    .select('unit_price')
+                    .eq('order_product_id', order_product_id),
+                supabaseAdmin
+                    .from('payment_records')
+                    .select('amount, transaction_status')
+                    .eq('order_id', order.id)
+                    .eq('order_product_id', order_product_id),
+            ]);
+
+            const serviceTotal = (services || []).reduce((sum, s) => sum + (Number(s.unit_price) || 0), 0);
+            const storedSurcharge = Number(productRow?.surcharge_amount || 0);
+            const productDue = Math.max(0, serviceTotal + storedSurcharge);
+            const alreadyPaid = (existingPays || []).reduce((sum, p) => {
+                const status = String(p.transaction_status || 'approved').toLowerCase();
+                if (status === 'cancelled' || status === 'rejected') return sum;
+                return sum + (Number(p.amount) || 0);
+            }, 0);
+            const productRemaining = Math.max(0, productDue - alreadyPaid);
+
+            if (productDue > 0 && productRemaining <= 0) {
+                throw new ApiError('Sản phẩm này đã thu đủ, không tạo phiếu thu trùng', 400);
+            }
+            if (productDue > 0 && amountNum > productRemaining) {
+                throw new ApiError(`Sản phẩm chỉ còn phải thu ${productRemaining}, không thể thu ${amountNum}`, 400);
+            }
         }
 
         // Create payment record (no direct payment_records → customers FK in schema)

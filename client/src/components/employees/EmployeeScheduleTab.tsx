@@ -203,14 +203,13 @@ export function EmployeeScheduleTab({ employeeId }: Props) {
                     <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
                 </div>
             ) : (() => {
-                // Chỉ hiển thị ca mà nhân viên được phân trong tuần này
-                const assignedShiftIds = new Set(schedules.map(s => s.shift_id));
-                const visibleShifts = shifts.filter(s => assignedShiftIds.has(s.id));
+                // Hiển thị tất cả ca đang hoạt động để có thể phân ca mới cho nhân viên
+                const visibleShifts = shifts;
 
                 if (visibleShifts.length === 0) {
                     return (
                         <div className="text-center py-10 text-gray-400 text-[13px]">
-                            Nhân viên chưa được phân ca trong tuần này.
+                            Chưa có ca làm việc nào được tạo trong hệ thống.
                         </div>
                     );
                 }

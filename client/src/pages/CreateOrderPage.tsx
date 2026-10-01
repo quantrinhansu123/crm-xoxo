@@ -405,6 +405,7 @@ export function CreateOrderPage() {
     const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
     const [surcharges, setSurcharges] = useState<Surcharge[]>([]);
     const [paidAmount, setPaidAmount] = useState(0);
+    const orderTotalRef = useRef(0);
     const [paymentMethod, setPaymentMethod] = useState<'cash' | 'transfer' | 'zalopay'>('cash');
 
     const [loading, setLoading] = useState(true);
@@ -1097,10 +1098,6 @@ export function CreateOrderPage() {
         }));
     };
 
-    const maxServiceDeposit = products.reduce(
-        (sum, p) => sum + p.services.reduce((ss, s) => ss + (s.price || 0), 0),
-        0
-    );
     const hasServices = products.some(p => p.services.length > 0);
 
     const handleSetProductDeposit = (productIndex: number, totalDeposit: number) => {
@@ -1134,29 +1131,39 @@ export function CreateOrderPage() {
         product.services.reduce((ss, s) => ss + (s.deposit_amount || 0), 0);
 
     const handleSetTotalServiceDeposit = (totalDeposit: number) => {
-        const amount = Math.min(Math.max(0, totalDeposit), maxServiceDeposit);
+        // Trần là tổng đơn (dịch vụ + phụ phí + bán kèm − giảm giá), không chỉ giá dịch vụ.
+        const amount = Math.min(Math.max(0, totalDeposit), Math.max(0, orderTotalRef.current));
         setProducts(prev => {
             const entries = prev.flatMap(p =>
-                p.services.map(s => ({ price: s.price || 0 }))
+                p.services.map(s => ({ price: Math.max(0, s.price || 0) }))
             );
             if (entries.length === 0) return prev;
 
             const totalPrice = entries.reduce((a, e) => a + e.price, 0);
-            const capped = Math.min(amount, totalPrice);
-            let remaining = capped;
-            const shares = entries.map((e, idx) => {
-                if (idx === entries.length - 1) return remaining;
-                const share = totalPrice > 0 ? Math.floor((capped * e.price) / totalPrice) : 0;
-                remaining -= share;
-                return share;
-            });
+            const servicePart = Math.min(amount, totalPrice);
+            const extraPart = amount - servicePart;
+            const weights = totalPrice > 0 ? entries.map(e => e.price) : entries.map(() => 1);
+
+            const shareByWeight = (pool: number) => {
+                let remaining = pool;
+                const weightSum = weights.reduce((a, w) => a + w, 0);
+                return weights.map((w, idx) => {
+                    if (idx === weights.length - 1) return remaining;
+                    const share = weightSum > 0 ? Math.floor((pool * w) / weightSum) : 0;
+                    remaining -= share;
+                    return share;
+                });
+            };
+
+            const serviceShares = shareByWeight(servicePart);
+            const extraShares = extraPart > 0 ? shareByWeight(extraPart) : entries.map(() => 0);
 
             let shareIdx = 0;
             return prev.map(p => ({
                 ...p,
                 services: p.services.map(s => ({
                     ...s,
-                    deposit_amount: shares[shareIdx++],
+                    deposit_amount: (serviceShares[shareIdx] || 0) + (extraShares[shareIdx++] || 0),
                 })),
             }));
         });
@@ -1450,6 +1457,7 @@ export function CreateOrderPage() {
     }, 0);
 
     const total = Math.max(0, subtotal - discountAmount + totalSurcharges);
+    orderTotalRef.current = total;
     const totalServiceDeposits = products.reduce(
         (sum, p) => sum + p.services.reduce((ss, s) => ss + (s.deposit_amount || 0), 0),
         0
@@ -1487,7 +1495,7 @@ export function CreateOrderPage() {
             />
             {totalServiceDeposits > 0 && (
                 <p className="text-[10px] text-muted-foreground">
-                    Còn lại khi trả đồ (dịch vụ): {formatCurrency(Math.max(0, maxServiceDeposit - totalServiceDeposits))}
+                    Còn lại khi trả đồ: {formatCurrency(Math.max(0, total - totalServiceDeposits))}
                 </p>
             )}
         </div>
