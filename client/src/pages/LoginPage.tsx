@@ -49,9 +49,11 @@ export function LoginPage() {
         try {
             await login(email, password);
         } catch (err: unknown) {
-            const message =
-                (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-                'Đăng nhập thất bại. Vui lòng thử lại.';
+            const loginError = err as { code?: string; message?: string; response?: { data?: { message?: string } } };
+            const message = loginError.response?.data?.message ||
+                (loginError.code === 'ERR_NETWORK' ? 'Không kết nối được máy chủ. Vui lòng thử lại sau.' :
+                    loginError.code === 'ECONNABORTED' ? 'Máy chủ phản hồi quá lâu. Vui lòng thử lại.' :
+                        loginError.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
             setError(message);
         } finally {
             setIsLoading(false);

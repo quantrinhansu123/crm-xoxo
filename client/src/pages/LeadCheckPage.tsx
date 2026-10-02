@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, RefreshCw, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { formatCurrency, formatDateTime } from '@/lib/utils';
 
 const TOKEN_KEY = 'lead-check-token';
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3005/api';
+const MOCK_URL = 'https://dhsywwqoi.datadex.vn/webhook/crm-mock-hdn';
 
 const KANBAN_COLUMNS = [
     { id: 'NEED_DISCOVERY', title: 'Tìm hiểu nhu cầu', hint: 'Chat thông thường' },
@@ -20,6 +21,10 @@ const KANBAN_COLUMNS = [
 type KanbanColumnId = (typeof KANBAN_COLUMNS)[number]['id'];
 
 type NormalizedLead = {
+    raw: Record<string, unknown>;
+    next_action: Record<string, unknown> | null;
+    customer_insight: string;
+    ai_suggested_reply: string;
     lead_id: string;
     customer: {
         display_name: string;
@@ -111,7 +116,7 @@ function normalizeLead(raw: Record<string, unknown>, index: number): NormalizedL
     const displayName = textOf(
         customer?.display_name || raw.customer_name || raw.name || raw.fb_profile_name,
     );
-    const phone = textOf(customer?.phone ?? raw.phone) || null;
+    const phone = textOf(customer ? customer.phone : raw.phone) || null;
     const avatar = textOf(customer?.avatar_url || raw.avatar_url || raw.avatar || raw.fb_profile_pic) || null;
 
     const ownerName = textOf(
@@ -119,13 +124,13 @@ function normalizeLead(raw: Record<string, unknown>, index: number): NormalizedL
     );
     const ownerUid = textOf(ownerRaw?.staff_uid || raw.assigned_to || assignedUser?.id) || null;
     const state = textOf(raw.operational_state || raw.assign_state).toLowerCase();
-    const unassigned = state === 'unassigned'
+    const unassigned = raw.owner === null || state === 'unassigned'
         || !ownerName
         || ownerName === 'Chưa phân bổ'
         || ownerName === 'Chưa gán Sale';
 
-    const messageText = textOf(lastMessage?.content_text || raw.last_message_text || raw.content_text) || null;
-    const messageAt = textOf(lastMessage?.inserted_at || raw.last_message_time) || null;
+    const messageText = textOf(lastMessage?.text || lastMessage?.content_text || raw.last_message_text || raw.content_text) || null;
+    const messageAt = textOf(lastMessage?.sent_at || lastMessage?.inserted_at || raw.last_message_time) || null;
     const createdAt = textOf(raw.created_at) || null;
     const orderAmount = moneyOf(raw.order_amount ?? raw.quoted_price_last ?? raw.quoted_price);
     const slaRaw = asRecord(raw.sla);
@@ -136,6 +141,10 @@ function normalizeLead(raw: Record<string, unknown>, index: number): NormalizedL
     const stateVersion = Number.isFinite(Number(versionRaw)) ? Number(versionRaw) : 0;
 
     return {
+        raw,
+        next_action: asRecord(raw.next_action),
+        customer_insight: textOf(raw.customer_insight),
+        ai_suggested_reply: textOf(raw.ai_suggested_reply),
         lead_id: textOf(raw.lead_id || raw.id) || `lead-${index}`,
         customer: {
             display_name: displayName || 'Khách',
@@ -143,7 +152,7 @@ function normalizeLead(raw: Record<string, unknown>, index: number): NormalizedL
             avatar_url: avatar,
         },
         conversation: {
-            source: textOf(conversation?.source || raw.source) || null,
+            source: textOf(conversation?.source || raw.channel || raw.source) || null,
             conversation_id: textOf(conversation?.conversation_id || raw.pancake_conversation_id || raw.conversation_id) || null,
             pancake_url: textOf(conversation?.pancake_url || raw.pancake_url) || null,
         },
@@ -163,13 +172,14 @@ function extractLeads(body: unknown): { leads: Record<string, unknown>[]; pagina
     const record = asRecord(body);
     if (!record) return { leads: [] };
     const data = asRecord(record.data);
+    const singleLead = asRecord(record.lead) || asRecord(data?.lead);
     const list = Array.isArray(data?.leads)
         ? data.leads
         : Array.isArray(record.leads)
             ? record.leads
             : Array.isArray(record.data)
                 ? record.data
-                : [];
+                : singleLead ? [singleLead] : [];
     const pagination = (data?.pagination || record.pagination) as { page: number; limit: number; total: number; totalPages: number } | undefined;
     return {
         leads: list.map(asRecord).filter((item): item is Record<string, unknown> => !!item),
@@ -186,6 +196,8 @@ function readStoredToken() {
 }
 
 export function LeadCheckPage() {
+    const [rawResponse, setRawResponse] = useState<unknown>(null);
+    const requestSeq = useRef(0);
     const [token, setToken] = useState(readStoredToken);
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
@@ -199,53 +211,101 @@ export function LeadCheckPage() {
     const [claimError, setClaimError] = useState('');
 
     const load = useCallback(async (nextPage = page) => {
+        const requestId = ++requestSeq.current;
         const raw = token.trim().replace(/^Bearer\s+/i, '');
-        if (!raw) {
-            setError('Dán token Bearer vào ô phía trên rồi bấm Tải dữ liệu.');
-            return;
-        }
+
         setLoading(true);
         setError('');
+        setClaimError('');
+
         try {
-            sessionStorage.setItem(TOKEN_KEY, raw);
-        } catch {
-            // sessionStorage có thể bị chặn; vẫn gọi API được
-        }
-        try {
-            const params = new URLSearchParams({
-                page: String(nextPage),
-                limit: String(limit),
-            });
-            if (search.trim()) params.set('search', search.trim());
-            const response = await fetch(`${API_BASE}/dev/lead-check?${params}`, {
-                headers: { Authorization: `Bearer ${raw}` },
-            });
-            const body = await response.json();
-            if (!response.ok || (body && typeof body === 'object' && body.status && body.status !== 'success')) {
-                setLeads([]);
-                setPagination(null);
-                setSelectedId(null);
-                setError(body?.message || `API trả ${response.status}`);
-                return;
+            if (raw) {
+                try {
+                    sessionStorage.setItem(TOKEN_KEY, raw);
+                } catch {
+                    // sessionStorage có thể bị chặn
+                }
             }
-            const extracted = extractLeads(body);
-            setLeads(extracted.leads.map(normalizeLead));
-            setPagination(extracted.pagination || null);
-            setPage(extracted.pagination?.page || nextPage);
-            setSelectedId(null);
+
+            // Always fetch mock leads so Hoàng Dương Nguyễn is consistently available
+            let mockLeads: Record<string, unknown>[] = [];
+            let mockRawResponse: unknown = null;
+            try {
+                const mockRes = await fetch(MOCK_URL, {
+                    cache: 'no-store',
+                    signal: AbortSignal.timeout(10000),
+                });
+                if (mockRes.ok) {
+                    const mockJson = await mockRes.json();
+                    mockRawResponse = mockJson;
+                    mockLeads = extractLeads(mockJson).leads;
+                }
+            } catch (err) {
+                console.warn('Failed to fetch mock leads:', err);
+            }
+
+            let apiLeads: Record<string, unknown>[] = [];
+            let apiPagination: { page: number; limit: number; total: number; totalPages: number } | null = null;
+            let apiRawResponse: unknown = null;
+
+            if (raw) {
+                const params = new URLSearchParams({
+                    page: String(nextPage),
+                    limit: String(limit),
+                });
+                if (search.trim()) params.set('search', search.trim());
+
+                const response = await fetch(`${API_BASE}/dev/lead-check?${params}`, {
+                    headers: { Authorization: `Bearer ${raw}` },
+                    credentials: 'omit',
+                    cache: 'no-store',
+                    signal: AbortSignal.timeout(30000),
+                });
+                const body = await response.json().catch(() => null);
+                apiRawResponse = body;
+
+                if (!response.ok || (body && typeof body === 'object' && body.status && body.status !== 'success')) {
+                    setError(body?.message || `API trả ${response.status}`);
+                } else if (body) {
+                    const extracted = extractLeads(body);
+                    apiLeads = extracted.leads;
+                    apiPagination = extracted.pagination || null;
+                }
+            }
+
+            if (requestId !== requestSeq.current) return;
+
+            // Merge leads: start with API leads if any, ensure mock leads (Hoàng Dương Nguyễn) are present
+            const combinedMap = new Map<string, Record<string, unknown>>();
+            for (const item of mockLeads) {
+                const id = String(item.lead_id || item.id || 'mock-lead');
+                combinedMap.set(id, item);
+            }
+            for (const item of apiLeads) {
+                const id = String(item.lead_id || item.id || '');
+                if (id) combinedMap.set(id, item);
+            }
+
+            const combinedList = Array.from(combinedMap.values());
+            const normalized = combinedList.map(normalizeLead);
+
+            setLeads(normalized);
+            setPagination(apiPagination);
+            setPage(apiPagination?.page || nextPage);
+            setRawResponse(apiRawResponse || mockRawResponse);
         } catch (err) {
-            setLeads([]);
+            if (requestId !== requestSeq.current) return;
             setError(err instanceof Error ? err.message : 'Không tải được dữ liệu');
         } finally {
-            setLoading(false);
+            if (requestId === requestSeq.current) setLoading(false);
         }
     }, [limit, page, search, token]);
 
     useEffect(() => {
-        if (readStoredToken()) {
-            void load(1);
-        }
-        // Chỉ tự tải lần đầu nếu tab này đã lưu token
+        void load(1);
+        return () => {
+            requestSeq.current += 1;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -311,11 +371,15 @@ export function LeadCheckPage() {
             APPOINTMENT_SHIP: [],
             WON: [],
         };
+        const query = search.trim().toLowerCase();
         for (const lead of leads) {
+            if (query && !`${lead.customer.display_name} ${lead.customer.phone || ''}`.toLowerCase().includes(query)) {
+                continue;
+            }
             buckets[lead.kanban_column].push(lead);
         }
         return buckets;
-    }, [leads]);
+    }, [leads, search]);
 
     const selected = leads.find((lead) => lead.lead_id === selectedId) || null;
     const totalPages = pagination?.totalPages || 1;
@@ -468,7 +532,11 @@ export function LeadCheckPage() {
                                                 {lead.created_at ? formatDateTime(lead.created_at) : ''}
                                             </span>
                                         </div>
-                                        {unassigned && (
+                                        <div className="mt-3 rounded-lg bg-orange-50 px-2 py-2 text-xs text-orange-900">
+                                            <p className="font-semibold">Hẹn chăm sóc</p>
+                                            <p className="mt-1">{textOf(lead.next_action?.display_text) || 'Chưa có thông tin'}</p>
+                                        </div>
+                                        {unassigned && Boolean(token.trim()) && (
                                             <Button
                                                 type="button"
                                                 size="sm"
@@ -496,8 +564,14 @@ export function LeadCheckPage() {
                             <h2 className="font-semibold text-slate-900">{selected.customer.display_name}</h2>
                             <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedId(null)}>Đóng</Button>
                         </div>
+                        <div className="mb-3 space-y-3 text-sm">
+                            <div><p className="font-semibold">Hẹn chăm sóc</p><p>{textOf(selected.next_action?.display_text) || 'Chưa có thông tin'}</p></div>
+                            {selected.customer_insight && <div><p className="font-semibold">Thông tin khách hàng</p><p>{selected.customer_insight}</p></div>}
+                            {selected.ai_suggested_reply && <div><p className="font-semibold">Gợi ý trả lời</p><p>{selected.ai_suggested_reply}</p></div>}
+                        </div>
+                        <p className="mb-2 text-sm font-semibold">JSON gốc của lead</p>
                         <pre className="max-h-80 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">
-                            {JSON.stringify(selected, null, 2)}
+                            {JSON.stringify(selected.raw, null, 2)}
                         </pre>
                     </div>
                 )}

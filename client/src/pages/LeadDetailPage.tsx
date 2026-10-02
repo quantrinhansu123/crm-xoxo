@@ -34,6 +34,7 @@ import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { usersApi } from '@/lib/api';
 import { SLACountdown } from '@/components/leads/SLACountdown';
+import { externalLeadsEnabled, getLeadNextActionText, getLeadOwnerName } from '@/lib/leadReadSource';
 
 interface MentionUser {
     id: string;
@@ -110,7 +111,7 @@ export function LeadDetailPage() {
             }
         } catch (err: any) {
             console.error('Error fetching lead:', err);
-            setError(err.response?.data?.message || 'Lỗi khi tải thông tin lead');
+            setError(err.response?.data?.message || err.message || 'Lỗi khi tải thông tin lead');
         } finally {
             setLoading(false);
         }
@@ -152,7 +153,7 @@ export function LeadDetailPage() {
 
     useEffect(() => {
         fetchActivities();
-        fetchUsers();
+        if (!externalLeadsEnabled) fetchUsers();
     }, [id]);
 
     const fetchUsers = async () => {
@@ -166,7 +167,7 @@ export function LeadDetailPage() {
 
     // Timer for appointment countdown
     useEffect(() => {
-        if (!lead?.appointment_time) {
+        if (externalLeadsEnabled || !lead?.appointment_time) {
             setAppointmentCountdown('');
             return;
         }
@@ -201,7 +202,7 @@ export function LeadDetailPage() {
 
     // Timer for follow-up countdown
     useEffect(() => {
-        if (!lead?.next_followup_time) {
+        if (externalLeadsEnabled || !lead?.next_followup_time) {
             setFollowupCountdown('');
             return;
         }
@@ -599,7 +600,7 @@ export function LeadDetailPage() {
                         <ArrowLeft className="h-5 w-5" />
                     </Button>
                     <div className="flex items-center gap-3 sm:gap-4 flex-1">
-                        <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
+                        <div className="relative group cursor-pointer" onClick={() => { avatarInputRef.current?.click(); }}>
                             <Avatar className="h-12 w-12 sm:h-14 sm:w-14 shrink-0 border-2 border-slate-100 overflow-hidden ring-2 ring-transparent group-hover:ring-primary/20 transition-all">
                                 {lead.avatar_url || lead.fb_profile_pic ? (
                                     <AvatarImage src={lead.avatar_url || lead.fb_profile_pic || ''} alt={lead.name} className="object-cover" />
@@ -633,11 +634,11 @@ export function LeadDetailPage() {
                         <div className="flex-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-3 mb-1">
                                 <h1 className="text-xl sm:text-2xl font-bold truncate">{lead.name}</h1>
-                                <SLACountdown lead={lead} size="lg" showResponded />
+                                {!externalLeadsEnabled && <SLACountdown lead={lead} size="lg" showResponded />}
                             </div>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                <p className="text-muted-foreground text-sm sm:text-base">{lead.phone}</p>
-                                {lead.next_followup_time && (
+                                <p className="text-muted-foreground text-sm sm:text-base">{lead.phone || 'Chưa có SĐT'}</p>
+                                {!externalLeadsEnabled && lead.next_followup_time && (
                                     <div className={`flex items-center gap-1.5 px-2 py-0.5 sm:py-1 rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap ${
                                         isOverdueVN(lead.next_followup_time)
                                         ? 'bg-red-100 text-red-700 animate-pulse border border-red-200'
@@ -675,11 +676,11 @@ export function LeadDetailPage() {
                             ))}
                         </SelectContent>
                     </Select>
-                    <Button variant="outline" size="sm" onClick={handleCallPhone} className="flex-1 sm:flex-none">
+                    <Button variant="outline" size="sm" onClick={handleCallPhone} disabled={!lead.phone} className="flex-1 sm:flex-none">
                         <Phone className="h-4 w-4 mr-2" />
                         Gọi điện
                     </Button>
-                    <Button variant="outline" size="sm" onClick={handleZaloClick} className="flex-1 sm:flex-none">
+                    <Button variant="outline" size="sm" onClick={handleZaloClick} disabled={!lead.phone} className="flex-1 sm:flex-none">
                         <MessageCircle className="h-4 w-4 mr-2" />
                         Zalo
                     </Button>
@@ -753,7 +754,7 @@ export function LeadDetailPage() {
                                         />
                                     ) : (
                                         <div className="flex flex-1 justify-between items-center pl-3 pr-1">
-                                            {lead.phone}
+                                            {lead.phone || 'Chưa có SĐT'}
                                             <Button variant="ghost" size="icon" className="h-6 w-6 opacity-40 hover:opacity-100" onClick={handleCopyPhone}>
                                                 {phoneCopied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
                                             </Button>
@@ -827,7 +828,7 @@ export function LeadDetailPage() {
                                     Người phụ trách
                                 </div>
                                 <div className="flex-1 bg-slate-50/80 px-3 py-1.5 rounded-lg text-sm font-bold text-slate-900 border border-transparent group-hover:border-slate-200 transition-all min-h-[36px] flex items-center">
-                                    <span className="truncate">{lead.assigned_user?.name || '-'}</span>
+                                    <span className="truncate">{getLeadOwnerName(lead)}</span>
                                 </div>
                             </div>
 
@@ -934,7 +935,9 @@ export function LeadDetailPage() {
                                     Hẹn chăm sóc
                                 </div>
                                 <div className="flex-1 bg-slate-50/80 rounded-lg border border-transparent group-hover:border-slate-200 transition-all min-h-[36px] flex items-center px-0 overflow-hidden">
-                                    {isEditingContact ? (
+                                    {externalLeadsEnabled ? (
+                                        <div className="px-3 py-1.5 text-sm font-bold">{getLeadNextActionText(lead) || '-'}</div>
+                                    ) : isEditingContact ? (
                                         <Input
                                             type="datetime-local"
                                             value={editNextFollowup}
@@ -961,7 +964,7 @@ export function LeadDetailPage() {
                             </div>
 
                             {/* Appointment Time */}
-                            <div className="flex items-center gap-3 group">
+                            {!externalLeadsEnabled && <div className="flex items-center gap-3 group">
                                 <div className="w-[110px] sm:w-[130px] flex items-center gap-2 text-[11px] text-slate-500 font-bold uppercase tracking-tight shrink-0">
                                     <Clock className="h-3.5 w-3.5 text-pink-500" />
                                     Hẹn lịch họp
@@ -989,7 +992,7 @@ export function LeadDetailPage() {
                                         </div>
                                     )}
                                 </div>
-                            </div>
+                            </div>}
 
                             {/* Save Button */}
                             {isEditingContact && (
@@ -1095,7 +1098,7 @@ export function LeadDetailPage() {
                     )}
  
                     {/* AI Analysis Card */}
-                    {(lead.lead_score !== undefined || lead.loss_risk || lead.next_action || lead.customer_insight) && (
+                    {(lead.lead_score !== undefined || lead.loss_risk || lead.next_action || lead.customer_insight || lead.ai_suggested_reply) && (
                         <Card className="border-indigo-100 bg-gradient-to-br from-indigo-50/50 to-white overflow-hidden shadow-sm">
                             <CardHeader className="pb-3 border-b border-indigo-50 bg-indigo-50/30">
                                 <CardTitle className="text-xs font-extrabold flex items-center justify-between text-indigo-800 uppercase tracking-wider">
@@ -1109,7 +1112,7 @@ export function LeadDetailPage() {
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="p-4 space-y-5">
-                                <div className="grid grid-cols-2 gap-4">
+                                {!externalLeadsEnabled && <div className="grid grid-cols-2 gap-4">
                                     {/* Lead Heat Score */}
                                     <div className="space-y-2">
                                         <p className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
@@ -1170,7 +1173,7 @@ export function LeadDetailPage() {
                                             )}
                                         </div>
                                     </div>
-                                </div>
+                                </div>}
 
                                 {/* Next Best Action */}
                                 {lead.next_action && (
@@ -1183,7 +1186,7 @@ export function LeadDetailPage() {
                                             Gợi ý hành động:
                                         </p>
                                         <p className="text-sm font-bold text-slate-800 leading-relaxed pl-1">
-                                            {lead.next_action}
+                                            {getLeadNextActionText(lead)}
                                         </p>
                                     </div>
                                 )}
@@ -1200,6 +1203,12 @@ export function LeadDetailPage() {
                                                 {lead.customer_insight}
                                             </p>
                                         </div>
+                                    </div>
+                                )}
+                                {lead.ai_suggested_reply && (
+                                    <div className="space-y-2 pt-1 border-t border-indigo-50">
+                                        <p className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1"><MessageSquare className="h-3 w-3 text-indigo-500" />Gợi ý trả lời</p>
+                                        <div className="bg-indigo-50/50 p-3 rounded-lg border border-indigo-100/50"><p className="text-xs text-slate-800 leading-relaxed whitespace-pre-wrap font-medium">{lead.ai_suggested_reply}</p></div>
                                     </div>
                                 )}
                             </CardContent>
@@ -1287,7 +1296,9 @@ export function LeadDetailPage() {
                                     Hẹn liên hệ
                                 </div>
                                 <div className="flex-1 bg-slate-50/80 rounded-lg border border-transparent group-hover:border-slate-200 transition-all min-h-[36px] flex items-center px-0 overflow-hidden">
-                                    {isEditingInfo ? (
+                                    {externalLeadsEnabled ? (
+                                        <div className="px-3 py-1.5 text-sm font-bold">{getLeadNextActionText(lead) || '-'}</div>
+                                    ) : isEditingInfo ? (
                                         <Input
                                             type="datetime-local"
                                             value={editNextFollowup}
@@ -1308,7 +1319,7 @@ export function LeadDetailPage() {
                             </div>
 
                             {/* Appointment Time */}
-                            <div className="flex items-center gap-3 group">
+                            {!externalLeadsEnabled && <div className="flex items-center gap-3 group">
                                 <div className="w-[110px] sm:w-[130px] flex items-center gap-2 text-[11px] text-slate-500 font-bold uppercase tracking-tight shrink-0">
                                     <Clock className="h-3.5 w-3.5 text-pink-500" />
                                     Hẹn lịch họp
@@ -1327,7 +1338,7 @@ export function LeadDetailPage() {
                                         </div>
                                     )}
                                 </div>
-                            </div>
+                            </div>}
 
                             {/* Save Button */}
                             {isEditingInfo && (
@@ -1477,7 +1488,7 @@ export function LeadDetailPage() {
                                                 {pickerTab === 'emoji' ? (
                                                     <div className="grid grid-cols-6 gap-1">
                                                         {['😊', '👍', '❤️', '🔥', '👏', '🙌', '⭐', '📍', '📞', '💬', '💼', '💰', '✅', '❌', '⏰', '🚀', '🎁', '🎉'].map(emoji => (
-                                                            <button
+                                                             <button
                                                                 key={emoji}
                                                                 onClick={() => {
                                                                     setNewNote(prev => prev + emoji);
@@ -1628,7 +1639,7 @@ export function LeadDetailPage() {
                                                                                 </div>
                                                                                 <p className="text-xs font-bold text-slate-800">
                                                                                     <span className="text-purple-700 uppercase tracking-tighter mr-1">Gợi ý hành động:</span> 
-                                                                                    {lead.next_action}
+                                                                                    {getLeadNextActionText(lead)}
                                                                                 </p>
                                                                             </div>
                                                                         )}

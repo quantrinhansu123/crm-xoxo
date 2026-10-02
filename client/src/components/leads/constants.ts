@@ -1,5 +1,6 @@
 import { Phone, Check, ArrowRightLeft, Users, TrendingUp, UserPlus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { canonicalLeadColumnToStage } from '@/lib/leadReadSource';
 
 // Kanban column configuration with colors based on pipeline_stage
 export interface KanbanColumnConfig {
@@ -92,17 +93,14 @@ export const legacyStatusLabels: Record<string, string> = {
 
 // Helper to get status label (checks both new kanban columns and legacy labels)
 export function getStatusLabel(statusId: string): string {
-    const column = kanbanColumns.find(c => c.id === statusId);
+    const column = kanbanColumns.find(c => c.id === (canonicalLeadColumnToStage[statusId] || statusId));
     if (column) return column.label;
     if (legacyStatusLabels[statusId]) return legacyStatusLabels[statusId];
     return statusId;
 }
 
-/** API kanban_column → id cột giao diện hiện tại (không thêm cột mới). */
-const KANBAN_COLUMN_TO_STAGE: Record<string, string> = {
-    APPOINTMENT_SHOP: 'hen_qua_ship',
-    APPOINTMENT_SHIP: 'hen_qua_ship',
-};
+/** Canonical columns take precedence over legacy pipeline stages. */
+const KANBAN_COLUMN_TO_STAGE = canonicalLeadColumnToStage;
 
 export function resolveLeadKanbanColumnId(lead: {
     kanban_column?: string | null;
@@ -111,9 +109,9 @@ export function resolveLeadKanbanColumnId(lead: {
 }): string {
     const fromApi = (lead.kanban_column || '').trim();
     if (fromApi) {
+        if (kanbanColumns.some((col) => col.id === fromApi)) return fromApi;
         const mapped = KANBAN_COLUMN_TO_STAGE[fromApi];
         if (mapped) return mapped;
-        if (kanbanColumns.some((col) => col.id === fromApi)) return fromApi;
     }
     const stage = lead.pipeline_stage || lead.status || 'xac_dinh_nhu_cau';
     if (kanbanColumns.some((col) => col.id === stage)) return stage;

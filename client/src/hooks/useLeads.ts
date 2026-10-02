@@ -1,6 +1,21 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { leadsApi } from '@/lib/api';
 
+export interface LeadNextAction {
+    display_text: string;
+    type?: string;
+    source?: string;
+    status?: string;
+    deadline_at?: string | null;
+    appointment_id?: string | number | null;
+    time_precision?: string;
+}
+
+export interface LeadOwner {
+    staff_uid?: string | null;
+    display_name?: string | null;
+}
+
 export interface Lead {
     id: string;
     name: string;
@@ -27,10 +42,12 @@ export interface Lead {
     assigned_user?: { id: string; name: string; email: string };
     sale_token?: string;
     owner_sale?: string;
+    owner?: LeadOwner | null;
 
     // FB Messenger Integration
     fb_thread_id?: string;
     link_message?: string;
+    pancake_url?: string;
 
     // Last Message Info
     last_message_mid?: string;
@@ -69,8 +86,9 @@ export interface Lead {
     // AI Analysis
     lead_score?: number;
     loss_risk?: string;
-    next_action?: string;
+    next_action?: LeadNextAction | string | null;
     customer_insight?: string;
+    ai_suggested_reply?: string;
 
     // Follow-up
     next_followup_time?: string;
@@ -163,7 +181,7 @@ export function useLeads(): UseLeadsReturn {
             }
         } catch (err: any) {
             if (seq !== fetchSeqRef.current) return;
-            const message = err.response?.data?.message || 'Lỗi khi tải danh sách leads';
+            const message = err.response?.data?.message || err.message || 'Lỗi khi tải danh sách leads';
             setError(message);
         } finally {
             if (seq === fetchSeqRef.current && !silent) {

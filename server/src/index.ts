@@ -168,11 +168,15 @@ app.listen(port, host, () => {
     console.log(`🕒 Last Reload: ${new Date().toLocaleString()} (CUTI v1.0.0)`);
     
     // Start SLA Manager + CUTI outbox publisher
-    console.log(`⏱️ Starting SLA Manager cron job`);
-    setInterval(checkAllSLA, 60000); // Check every minute
-    setInterval(() => {
-        publishPendingOutbox(40).catch((err) => console.error('[CUTI] outbox tick:', err));
-    }, 15000);
+    if (config.backgroundJobsEnabled) {
+        console.log(`⏱️ Starting SLA Manager cron job`);
+        setInterval(checkAllSLA, 60000); // Check every minute
+        setInterval(() => {
+            publishPendingOutbox(40).catch((err) => console.error('[CUTI] outbox tick:', err));
+        }, 15000);
+    } else {
+        console.log('⏸️ Background jobs disabled for local preview');
+    }
 });
 
 export default app;

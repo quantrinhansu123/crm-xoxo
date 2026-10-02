@@ -9,6 +9,7 @@ import type { Lead } from '@/hooks/useLeads';
 import { resolveLeadKanbanColumnId, sourceLabels } from './constants';
 import { SLACountdown } from './SLACountdown';
 import { useAuth } from '@/contexts/AuthContext';
+import { externalLeadsEnabled, getLeadNextActionText, getLeadOwnerName } from '@/lib/leadReadSource';
 import { MobileKanbanMoveBar, type MobileKanbanColumn } from '@/components/kanban/mobileKanban';
 
 interface LeadCardProps {
@@ -40,7 +41,9 @@ export function LeadCard({
     const source = sourceLabels[channelKey] || { label: channelKey || 'Khác', color: 'bg-gray-100 text-gray-700' };
 
     const isManagerOrAdmin = user?.role === 'admin' || user?.role === 'manager';
-    const inAppointmentColumn = resolveLeadKanbanColumnId(lead) === 'hen_qua_ship';
+    const inAppointmentColumn = !externalLeadsEnabled && resolveLeadKanbanColumnId(lead) === 'hen_qua_ship';
+    const nextActionText = getLeadNextActionText(lead);
+    const ownerName = getLeadOwnerName(lead);
     const isShopAppointment = lead.kanban_column === 'APPOINTMENT_SHOP'
         || (lead.kanban_column !== 'APPOINTMENT_SHIP' && lead.delivery_method === 'direct');
 
@@ -139,11 +142,11 @@ export function LeadCard({
                                         {lead.name}
                                     </h3>
                                     <p className="text-[11px] text-muted-foreground font-medium mt-0.5">
-                                        {lead.phone}
+                                        {lead.phone || 'Chưa có SĐT'}
                                     </p>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-1.5">
-                                    <SLACountdown lead={lead} size="sm" className="shadow-none" />
+                                    {!externalLeadsEnabled && <SLACountdown lead={lead} size="sm" className="shadow-none" />}
                                     {lead.loss_risk?.toLowerCase() === 'high' && (
                                         <div className="inline-flex items-center gap-1 bg-red-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-sm shadow-sm animate-bounce">
                                             <AlertTriangle className="h-2.5 w-2.5" />
@@ -196,7 +199,7 @@ export function LeadCard({
                                 </span>
                             </div>
                         )}
-                        {lead.next_followup_time && (
+                        {!externalLeadsEnabled && lead.next_followup_time && (
                             <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border ${
                                 new Date(lead.next_followup_time) < new Date() 
                                 ? 'bg-red-50 text-red-600 border-red-100 animate-pulse' 
@@ -230,6 +233,12 @@ export function LeadCard({
                     </div>
 
                     {/* Footer */}
+                    {nextActionText && (
+                        <div className="rounded-lg border border-orange-200 bg-orange-50 px-2 py-1.5 text-xs font-medium text-orange-900">
+                            <CalendarClock className="mr-1 inline h-3.5 w-3.5" />
+                            {nextActionText}
+                        </div>
+                    )}
                     <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t">
                         <div className="flex items-center gap-1.5">
                             {lead.assigned_user ? (
@@ -239,13 +248,13 @@ export function LeadCard({
                                             {lead.assigned_user.name.charAt(0)}
                                         </AvatarFallback>
                                     </Avatar>
-                                    <span className="truncate max-w-[80px]">{lead.assigned_user.name}</span>
+                                    <span className="truncate max-w-[120px]" title={ownerName}>{ownerName}</span>
                                 </>
                             ) : (
-                                <span className="text-muted-foreground/60">Chưa gán</span>
+                                <span className="text-muted-foreground/60">{ownerName}</span>
                             )}
                         </div>
-                        <span>{formatTimeAgo(lead.created_at)}</span>
+                        <span>{lead.created_at ? formatTimeAgo(lead.created_at) : ''}</span>
                     </div>
                     {isPhoneView && onStageChange && stageColumns.length > 0 && (
                         <MobileKanbanMoveBar

@@ -52,6 +52,7 @@ import { useAuth } from '@/contexts/useAuth';
 import type { UserRole, User } from '@/types';
 import { Toaster } from 'sonner';
 import { canAccessView, getDefaultHomePath, resolveViewKeyFromPath } from '@/lib/viewPermissions';
+import { localLeadPreviewEnabled } from '@/lib/leadReadSource';
 
 
 // Permission configuration
@@ -240,7 +241,7 @@ function AppContent() {
   const location = useLocation();
 
   // Show loading state
-  if (isLoading) {
+  if (isLoading && location.pathname !== '/login') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center">
@@ -252,6 +253,16 @@ function AppContent() {
   }
 
   // Redirect to login if not authenticated
+  // Anonymous local preview only; signed-in users use their normal layout and permissions.
+  if (!isAuthenticated && localLeadPreviewEnabled && (location.pathname === '/leads' || /^\/leads\/[^/]+$/.test(location.pathname))) {
+    return <main className="min-h-screen bg-background p-4 md:p-8">
+      <Routes>
+        <Route path="/leads" element={<LeadsPage />} />
+        <Route path="/leads/:id" element={<LeadDetailPage />} />
+      </Routes>
+    </main>;
+  }
+
   if (!isAuthenticated && location.pathname !== '/login' && location.pathname !== '/lead-check') {
     return <Navigate to="/login" replace />;
   }

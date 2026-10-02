@@ -9,7 +9,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useLeads, LEADS_LIST_LIMIT } from '@/hooks/useLeads';
+import { externalLeadsEnabled, localLeadPreviewEnabled } from '@/lib/leadReadSource';
 import { useViewActionForRoles } from '@/hooks/useViewAction';
+import { useAuth } from '@/contexts/useAuth';
 import type { Lead } from '@/hooks/useLeads';
 import { useEmployees } from '@/hooks/useEmployees';
 import { useUsers } from '@/hooks/useUsers';
@@ -37,7 +39,11 @@ import { MobileKanbanColumnTabs } from '@/components/kanban/mobileKanban';
 
 export function LeadsPage() {
     const navigate = useNavigate();
-    const { canRead, canEdit, canDelete } = useViewActionForRoles('leads', ['admin', 'manager', 'sale']);
+    const { isAuthenticated } = useAuth();
+    const permissions = useViewActionForRoles('leads', ['admin', 'manager', 'sale']);
+    const canRead = permissions.canRead || localLeadPreviewEnabled;
+    const canEdit = permissions.canEdit;
+    const canDelete = permissions.canDelete;
     const { leads, loading, error, pagination, fetchLeads, createLead, updateLead, deleteLead, convertLead } = useLeads();
     const { employees, fetchEmployees } = useEmployees();
     const { users: technicians, fetchTechnicians } = useUsers();
@@ -87,15 +93,17 @@ export function LeadsPage() {
     // Fetch data on mount (một lần — tránh loop khi identity hook đổi)
     useEffect(() => {
         fetchLeads({ limit: LEADS_LIST_LIMIT });
-        fetchEmployees({ role: 'sale' });
-        fetchCustomers();
-        fetchProducts();
-        fetchServices();
-        fetchPackages();
-        fetchVouchers();
-        fetchTechnicians();
+        if (isAuthenticated) {
+            fetchEmployees({ role: 'sale' });
+            fetchCustomers();
+            fetchProducts();
+            fetchServices();
+            fetchPackages();
+            fetchVouchers();
+            fetchTechnicians();
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only bootstrap
-    }, []);
+    }, [isAuthenticated]);
 
     // Filter leads
     const filteredLeads = useMemo(() => {
@@ -107,7 +115,7 @@ export function LeadsPage() {
             const matchesEmployee = selectedEmployees.length === 0 || selectedEmployees.includes(lead.assigned_to || '');
             
             // Unassigned leads filter (leads that haven't been assigned to anyone)
-            const matchesUnassigned = !onlyUnassigned || !lead.assigned_to;
+            const matchesUnassigned = !onlyUnassigned || (lead.owner !== undefined ? lead.owner === null : !lead.assigned_to);
             
             return matchesSearch && matchesSource && matchesEmployee && matchesUnassigned;
         });
@@ -138,9 +146,9 @@ export function LeadsPage() {
     // Calculate stats — Tổng leads lấy từ DB (pagination.total), không kẹt 500 bản ghi tải về
     const stats = useMemo(() => {
         const total = hasClientFilters ? filteredLeads.length : (pagination.total || filteredLeads.length);
-        const newLeads = leadsByStatus['xac_dinh_nhu_cau']?.length || 0;
-        const qualified = (leadsByStatus['hen_qua_ship']?.length || 0) + (leadsByStatus['chot_don']?.length || 0);
-        const nurturing = (leadsByStatus['hen_gui_anh']?.length || 0) + (leadsByStatus['dam_phan_gia']?.length || 0);
+        const newLeads = leadsByStatus.xac_dinh_nhu_cau?.length || 0;
+        const qualified = (leadsByStatus.hen_qua_ship?.length || 0) + (leadsByStatus.chot_don?.length || 0);
+        const nurturing = (leadsByStatus.hen_gui_anh?.length || 0) + (leadsByStatus.dam_phan_gia?.length || 0);
         return { total, newLeads, qualified, nurturing };
     }, [filteredLeads, leadsByStatus, pagination.total, hasClientFilters]);
 
@@ -302,7 +310,7 @@ export function LeadsPage() {
                             <h1 className="text-2xl font-bold text-foreground">Quản lý Leads</h1>
                             <p className="text-muted-foreground">Theo dõi và chăm sóc khách hàng tiềm năng</p>
                         </div>
-                        {canEdit && (
+                        {permissions.canEdit && (
                             <Button onClick={() => navigate('/leads/new')} className="shadow-md w-full sm:w-auto">
                                 <Plus className="h-4 w-4 mr-2" />
                                 Thêm Lead
@@ -489,7 +497,7 @@ export function LeadsPage() {
                                     column={column}
                                     leads={leadsByStatus[column.id] || []}
                                     onCardClick={(lead) => navigate(`/leads/${lead.id}`)}
-                                    onDeleteLead={handleDeleteLead}
+                                    onDeleteLead={canDelete ? handleDeleteLead : undefined}
                                     onLongPressLead={(lead) => {
                                         setLeadForMobileSheet(lead);
                                         setShowMobileSheet(true);
@@ -512,7 +520,7 @@ export function LeadsPage() {
                                         column={column}
                                         leads={leadsByStatus[column.id] || []}
                                         onCardClick={(lead) => navigate(`/leads/${lead.id}`)}
-                                        onDeleteLead={handleDeleteLead}
+                                        onDeleteLead={canDelete ? handleDeleteLead : undefined}
                                         onLongPressLead={(lead) => {
                                             setLeadForMobileSheet(lead);
                                             setShowMobileSheet(true);

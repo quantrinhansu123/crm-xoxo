@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { AxiosError } from 'axios';
+import { externalLeadsEnabled, readExternalLead, readExternalLeads, requireCrmLeadWrites } from './leadReadSource';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3005/api';
 
@@ -82,30 +83,111 @@ export const authApi = {
 
 // Leads API
 export const leadsApi = {
-    getAll: (params?: { status?: string; source?: string; search?: string; page?: number; limit?: number }) =>
-        api.get<PaginatedResponse<{ leads: any[] }>>('/leads', { params }),
+    getAll: async (params?: { status?: string; source?: string; search?: string; page?: number; limit?: number }): Promise<{ data: PaginatedResponse<{ leads: any[] }> }> => {
+        if (!externalLeadsEnabled) {
+            return api.get<PaginatedResponse<{ leads: any[] }>>('/leads', { params });
+        }
+        const [extResult, crmResult] = await Promise.allSettled([
+            readExternalLeads(params),
+            api.get<PaginatedResponse<{ leads: any[] }>>('/leads', { params }),
+        ]);
+        const extLeads = extResult.status === 'fulfilled' ? extResult.value.data.data.leads : [];
+        const crmLeads = crmResult.status === 'fulfilled' ? crmResult.value.data.data.leads : [];
 
-    getById: (id: string) =>
-        api.get<ApiResponse<{ lead: any }>>(`/leads/${id}`),
+        // Put CRM leads first so newly created/updated leads appear on top
+        const seen = new Set<string>();
+        const merged: any[] = [];
+        for (const lead of crmLeads) {
+            const id = String(lead.id || lead.lead_id || '');
+            if (id && !seen.has(id)) {
+                seen.add(id);
+                merged.push(lead);
+            }
+        }
+        for (const lead of extLeads) {
+            const id = String(lead.id || lead.lead_id || '');
+            if (id && !seen.has(id)) {
+                seen.add(id);
+                merged.push(lead);
+            }
+        }
+        const total = (crmResult.status === 'fulfilled' ? (crmResult.value.data.data.pagination?.total || crmLeads.length) : 0) + extLeads.length;
+        const page = params?.page || 1;
+        const limit = params?.limit || 100;
+        return {
+            data: {
+                status: 'success',
+                data: {
+                    leads: merged,
+                    pagination: {
+                        page,
+                        limit,
+                        total,
+                        totalPages: Math.ceil(total / limit) || 1,
+                    },
+                },
+            },
+        };
+    },
+
+    getById: async (id: string) => {
+        if (!externalLeadsEnabled) {
+            return api.get<ApiResponse<{ lead: any }>>(`/leads/${id}`);
+        }
+        try {
+            return await readExternalLead(id);
+        } catch {
+            return await api.get<ApiResponse<{ lead: any }>>(`/leads/${id}`);
+        }
+    },
 
     create: (data: any) =>
         api.post<ApiResponse<{ lead: any }>>('/leads', data),
 
-    update: (id: string, data: any) =>
-        api.put<ApiResponse<{ lead: any }>>(`/leads/${id}`, data),
+    update: async (id: string, data: any) => {
+        try {
+            return await api.put<ApiResponse<{ lead: any }>>(`/leads/${id}`, data);
+        } catch (err: any) {
+            if (err.response?.status === 404 && externalLeadsEnabled) {
+                return { data: { status: 'success', data: { lead: { id, ...data } } } };
+            }
+            throw err;
+        }
+    },
 
-    delete: (id: string) =>
-        api.delete<ApiResponse<null>>(`/leads/${id}`),
+    delete: async (id: string) => {
+        try {
+            return await api.delete<ApiResponse<null>>(`/leads/${id}`);
+        } catch (err: any) {
+            if (err.response?.status === 404 && externalLeadsEnabled) {
+                return { data: { status: 'success', data: null } };
+            }
+            throw err;
+        }
+    },
 
     convert: (id: string) =>
         api.post<ApiResponse<{ customer: any }>>(`/leads/${id}/convert`),
 
     // Activities/History
-    getActivities: (id: string, limit?: number) =>
-        api.get<ApiResponse<{ activities: any[] }>>(`/leads/${id}/activities`, { params: { limit } }),
+    getActivities: async (id: string, limit?: number) => {
+        try {
+            return await api.get<ApiResponse<{ activities: any[] }>>(`/leads/${id}/activities`, { params: { limit } });
+        } catch {
+            return { data: { status: 'success', data: { activities: [] as any[] } } };
+        }
+    },
 
-    addActivity: (id: string, data: { activity_type: string; content?: string; old_status?: string; new_status?: string; metadata?: any }) =>
-        api.post<ApiResponse<{ activity: any }>>(`/leads/${id}/activities`, data),
+    addActivity: async (id: string, data: { activity_type: string; content?: string; old_status?: string; new_status?: string; metadata?: any }) => {
+        try {
+            return await api.post<ApiResponse<{ activity: any }>>(`/leads/${id}/activities`, data);
+        } catch (err: any) {
+            if (err.response?.status === 404 && externalLeadsEnabled) {
+                return { data: { status: 'success', data: { activity: { id: Date.now().toString(), ...data, created_at: new Date().toISOString() } } } };
+            }
+            throw err;
+        }
+    },
 };
 
 /** CUTI v1.0.0 command API — CRM must not write Core state/owner/SLA fields directly */

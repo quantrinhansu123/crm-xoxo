@@ -7,6 +7,7 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 export const config = {
     port: parseInt(process.env.PORT || '3005', 10),
     nodeEnv: process.env.NODE_ENV || 'development',
+    backgroundJobsEnabled: process.env.BACKGROUND_JOBS_ENABLED !== 'false',
 
     frontendUrl: (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, ''),
 
@@ -24,7 +25,7 @@ export const config = {
     cors: {
         origin: process.env.CORS_ORIGIN
             ? process.env.CORS_ORIGIN.split(',')
-            : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176'],
+            : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176'],
     },
 };
 
